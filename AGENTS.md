@@ -21,7 +21,7 @@
 
 ## What this is
 
-Office control plane for the ZaPOS fleet (house pattern per
+Office control plane for the Vula fleet (house pattern per
 `~/apps/common-files/CONTROL-PLANE-SPEC.md`, reference impl
 `~/apps/optimed-control-plane`). One store = one za-pos Coolify container
 with its own SQLite DB; this app keeps the store registry (incl. terminal

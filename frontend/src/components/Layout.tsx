@@ -16,7 +16,7 @@ export default function Layout({ title, children }: LayoutProps) {
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
           <div className="flex items-baseline gap-3">
-            <h1 className="font-semibold tracking-tight text-slate-900">ZaPOS Control Plane</h1>
+            <h1 className="font-semibold tracking-tight text-slate-900">Vula Control Plane</h1>
             <span className="text-sm text-slate-500">{title}</span>
           </div>
           <button

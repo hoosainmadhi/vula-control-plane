@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# ZaPOS Control Plane — 2-stage build (house pattern, node:22-alpine)
+# Vula Control Plane — 2-stage build (house pattern, node:22-alpine)
 
 FROM node:22-alpine AS build
 WORKDIR /app

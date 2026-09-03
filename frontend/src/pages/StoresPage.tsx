@@ -181,7 +181,7 @@ function StoreFormModal({ modal, saving, error, onClose, onSubmit }: FormModalPr
             value={form.baseUrl}
             onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
             className={inputCls}
-            placeholder="https://gardens-mall.za-pos.example"
+            placeholder="https://gardens-mall.vula-app.co.za"
           />
         </div>
         <div>
@@ -482,7 +482,7 @@ export default function StoresPage() {
         <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-14 text-center">
           <p className="font-medium text-slate-700">No stores yet</p>
           <p className="mt-1 text-sm text-slate-500">
-            Deploy a ZaPOS store with its CONTROL_PLANE_TOKEN, then add it here to push terminal
+            Deploy a Vula store with its CONTROL_PLANE_TOKEN, then add it here to push terminal
             config.
           </p>
         </div>

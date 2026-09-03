@@ -46,3 +46,17 @@ Till 1..N}` to `POST /api/internal/configure`), ping (`GET
 Tenant internal API implementation (za-pos side), audit table, DELETE store,
 health sweep, Coolify auto-provisioning, live store insight, central
 catalogue, IBT, GitHub push of this repo.
+
+## 2026-09-03 (late) — Rebrand to Vula (branding-only pass)
+
+- Product renamed **ZaPOS → Vula** ("vula" = open). Both repos: za-pos had
+  already been rebranded (commit 008cb15); this repo now matches — UI
+  strings, docs, comments, /health app name `vula-control-plane`.
+- Domain decision: owner is registering **vula-app.co.za**; docs/runbooks
+  standardize on stores at `https://<slug>.vula-app.co.za` (wildcard
+  `*.vula-app.co.za`) and the panel at `https://cp.vula-app.co.za`
+  (CONTEXT §3 + prompts runbook).
+- Internal identifiers intentionally untouched (branding-only): repo/folder
+  names `za-pos*`, package names, `zapos_cp_token`, env defaults
+  (`admin@za-pos.local`), DB paths. Registry/PortPilot/Dashy labels now say
+  Vula; za-pos demo credentials moved to `@vula-app.co.za`.

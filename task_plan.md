@@ -1,4 +1,4 @@
-# Task Plan: ZaPOS Control Plane (CP v1)
+# Task Plan: Vula Control Plane (CP v1)
 
 > Source of truth for scope, phases and locked decisions. Read `findings.md`
 > and `progress.md` for how we got here. Statuses: pending → in_progress →
@@ -6,10 +6,10 @@
 
 ## Goal
 
-A control plane for the ZaPOS fleet (house control-plane pattern, cf.
+A control plane for the Vula fleet (house control-plane pattern, cf.
 `~/apps/common-files/CONTROL-PLANE-SPEC.md`): one office panel that registers
-per-store ZaPOS Coolify deployments and provisions their terminals. CP v1 =
-**stores CRUD + terminal provisioning only**. Each store runs its own ZaPOS
+per-store Vula Coolify deployments and provisions their terminals. CP v1 =
+**stores CRUD + terminal provisioning only**. Each store runs its own Vula
 container and exposes `/api/internal/*` guarded by a per-store
 `CONTROL_PLANE_TOKEN` (tenant-side workstream; contract authored here in
 CONTEXT.md "Internal API contract").

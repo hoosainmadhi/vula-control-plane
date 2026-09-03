@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Boot smoke for the ZaPOS control plane (house style).
+# Boot smoke for the Vula control plane (house style).
 #
 # Requires: API on :3240 (npm run dev / npm run dev:api / node dist/server.js)
 # and the dev store stub on :3299 (npm run stub, token below).

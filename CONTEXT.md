@@ -1,11 +1,11 @@
-# CONTEXT.md — ZaPOS Control Plane domain reference
+# CONTEXT.md — Vula Control Plane domain reference
 
 Read before changing any domain concept. The authoritative rule-set for the
 fleet registry, terminal provisioning and the tenant internal-API contract.
 
 ## 1. What this is
 
-The office control plane for the ZaPOS fleet. One ZaPOS **deployment = one
+The office control plane for the Vula fleet. One Vula **deployment = one
 store** (its own SQLite DB, its own Coolify container on the za-pos codebase).
 This app manages the fleet: it keeps the **store registry**, including the
 **terminal count** per store, pushes generated terminal configuration
@@ -21,7 +21,7 @@ implementation `~/apps/optimed-control-plane`. Vocabulary here is _store_
 
 | Term                | Meaning                                                                                                                                                                                                                                                                                                                             |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| store               | One fleet member: a deployed ZaPOS instance with its own DB, reachable at its `base_url`                                                                                                                                                                                                                                            |
+| store               | One fleet member: a deployed Vula instance with its own DB, reachable at its `base_url`                                                                                                                                                                                                                                             |
 | slug                | URL-safe unique store id: `^[a-z0-9][a-z0-9-]*$`, ≤ 40 chars, lowercase. Immutable after creation (it names the deployment, so renaming would orphan the store's identity)                                                                                                                                                          |
 | terminal / Till N   | A register device at a store. Terminal N is configured by a successful push that covers `till N`. V1 terminals are generated `Till 1..N` (names may later become custom)                                                                                                                                                            |
 | terminal_count      | Desired terminal count, 1–99. Owned by the control plane; pushed to the store via `/api/internal/configure`                                                                                                                                                                                                                         |
@@ -44,7 +44,7 @@ Office SPA (3241) ──JWT kind office──► CP API (3240)
                     ┌─────────────────────┼─────────────────────┐
                     ▼                     ▼                     ▼
               store A (base_url)    store B (base_url)    store C …
-              ZaPOS container       ZaPOS container
+              Vula container       Vula container
               /api/internal/*       /api/internal/*
 ```
 
@@ -55,12 +55,19 @@ one, in which case the store's env must be updated to match before the first
 push succeeds) — and its terminals are pushed. There is no Coolify API
 integration in v1.
 
-## 4. Internal API contract (CP-authored — tenant workstream implements this)
+**Deployment naming (once vula-app.co.za is live):** every store answers at
+`https://<slug>.vula-app.co.za` (wildcard `*.vula-app.co.za` → the Coolify
+server; slug = the store's registry slug) and the control plane panel sits at
+`https://cp.vula-app.co.za`. The store's `base_url` in the registry is the
+`https://<slug>.vula-app.co.za` form.
 
-The za-pos tenant side does not implement `/api/internal/*` yet (za-pos
-CONTEXT.md §14). This section is the authoritative wire contract; the tenant
-workstream builds `terminals` storage + an internal router that matches it.
-Until then `scripts/dev-store-stub.ts` stands in for a store.
+## 4. Internal API contract (CP-authored)
+
+This section is the authoritative wire contract. The tenant side shipped
+2026-09-03 (za-pos: `terminals` table + `src/routes/internal.ts`, enabled by
+its `CONTROL_PLANE_TOKEN` env) and matches the shapes below exactly —
+`scripts/dev-store-stub.ts` in this repo remains a dev stand-in for CP
+development when no store is running.
 
 Base: `{base_url}/api/internal` (the registry keeps `base_url` with any
 trailing slash stripped). All endpoints require header

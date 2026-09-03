@@ -1,4 +1,4 @@
--- ZaPOS Control Plane registry schema.
+-- Vula Control Plane registry schema.
 -- Source of truth: src/config/registryDb.ts (embedded DDL). Keep both in sync.
 
 CREATE TABLE IF NOT EXISTS stores (

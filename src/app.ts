@@ -4,7 +4,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { apiRouter } from './routes/index.js';
 import { errorHandler, notFoundHandler } from './middleware/error.js';
 
-const APP_NAME = 'za-pos-control-plane';
+const APP_NAME = 'vula-control-plane';
 const APP_VERSION = '1.0.0';
 
 const securityHeaders = (_req: Request, res: Response, next: NextFunction): void => {

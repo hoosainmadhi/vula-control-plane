@@ -7,6 +7,6 @@ getRegistryDb();
 const app = createApp();
 app.listen(env.port, () => {
   logger.info(
-    `ZaPOS Control Plane listening on :${env.port} (${env.isProduction ? 'production' : 'development'})`,
+    `Vula Control Plane listening on :${env.port} (${env.isProduction ? 'production' : 'development'})`,
   );
 });

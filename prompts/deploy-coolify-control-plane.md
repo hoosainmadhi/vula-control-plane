@@ -1,9 +1,9 @@
-# Deploy ZaPOS stores + the Control Plane on Coolify (OCI)
+# Deploy Vula stores + the Control Plane on Coolify (OCI)
 
 Two kinds of workload, both private-GitHub-repo Dockerfile builds on the same
 Coolify (OCI) server:
 
-- **Store apps** — the per-store ZaPOS deployment (`~/apps/za-pos` repo, one
+- **Store apps** — the per-store Vula deployment (`~/apps/za-pos` repo, one
   container per store, one SQLite DB per store in its own volume).
 - **This control plane** — `~/apps/za-pos-control-plane` repo, one container,
   registry DB in its own volume.
@@ -15,10 +15,11 @@ integration) — deploying a store is manual, then you onboard it here.
 
 - Coolify resource creation rights; a GitHub App covering both repos
   (`za-pos` and `za-pos-control-plane`), or public repos.
-- A wildcard or per-store domain for the stores (e.g. `gardens-mall.…co.za`),
-  plus a domain for the control plane UI.
+- DNS once **vula-app.co.za** is registered: wildcard `*.vula-app.co.za` →
+  the Coolify server so every store answers at `<slug>.vula-app.co.za`, plus
+  `cp.vula-app.co.za` for this panel (store slug = the store's registry slug).
 
-## Part A — deploy a ZaPOS store (repeat per store)
+## Part A — deploy a Vula store (repeat per store)
 
 1. Generate the store's control-plane token (the store and this registry must
    agree on it):
@@ -35,13 +36,13 @@ integration) — deploying a store is manual, then you onboard it here.
    DB_PATH=/data/za-pos.db    # persistent volume below
    JWT_SECRET=<64-char random>
    CONTROL_PLANE_TOKEN=<token from step 1>   # enables /api/internal/*
-   APP_URL=https://<store domain>
+   APP_URL=https://<slug>.vula-app.co.za
    ```
 4. **Persistent Storage:** named volume mounted at `/data` (this is the
    store's SQLite DB — never share it between stores).
-5. **Domains:** `https://<store domain>` (Let's Encrypt via Caddy). Health
+5. **Domains:** `https://<slug>.vula-app.co.za` (Let's Encrypt via Caddy). Health
    check hits the app's `/health`.
-6. **Deploy.** The store is now reachable at `https://<store domain>` and
+6. **Deploy.** The store is now reachable at `https://<slug>.vula-app.co.za` and
    serves `/api/internal/*` when `CONTROL_PLANE_TOKEN` is set (bad/absent
    token → 401/404).
 
@@ -50,7 +51,7 @@ integration) — deploying a store is manual, then you onboard it here.
 1. Control plane → **New store**:
    - name (display), slug (lowercase, dashes; fixed after creation),
    - VAT registration no. (optional),
-   - base URL `https://<store domain>` (no trailing slash needed),
+   - base URL `https://<slug>.vula-app.co.za` (no trailing slash needed),
    - terminal count (1–99),
    - control plane token: **paste the token from Part A step 1** — it must
      equal the store's `CONTROL_PLANE_TOKEN` env. Leave blank only if you
@@ -80,7 +81,7 @@ integration) — deploying a store is manual, then you onboard it here.
    LOG_LEVEL=info
    ```
 3. **Persistent Storage:** volume mounted at `/data` (registry DB + WAL).
-4. **Domains:** `https://cp.<your domain>` → **Deploy**. Healthcheck hits
+4. **Domains:** `https://cp.vula-app.co.za` → **Deploy**. Healthcheck hits
    `/health` (`{ status: 'ok' }`).
 
 ## Day-2 operations
@@ -99,9 +100,10 @@ integration) — deploying a store is manual, then you onboard it here.
   1. the store's `CONTROL_PLANE_TOKEN` env equals the token the control plane
      generated at store creation (the registry never displays it — if it was
      lost, delete and recreate the store row; v1 has no token-rotation UI);
-  2. `https://<store domain>/health` responds and the domain resolves;
-  3. the store image actually ships `/api/internal/*` (tenant workstream —
-     until then the stub contract in CONTEXT.md §4 is the reference);
+  2. `https://<slug>.vula-app.co.za/health` responds and the domain resolves;
+  3. the store image ships `/api/internal/*` (shipped in za-pos 2026-09-03 —
+     CONTEXT.md §4 is the contract reference; `npm run stub` in the CP repo
+     is a dev stand-in);
   4. the store isn't behind a firewall that blocks the control plane's egress.
 - **Health shows Down but the store works in a browser** — the ping uses
   `GET /api/internal/status` with the token header; check the store logs for

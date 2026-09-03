@@ -1,6 +1,6 @@
-# ZaPOS Control Plane
+# Vula Control Plane
 
-Office panel for the ZaPOS fleet: one store = one ZaPOS Coolify deployment
+Office panel for the Vula fleet: one store = one Vula Coolify deployment
 (own SQLite DB). This app keeps the store registry, pushes terminal
 configuration (`Till 1..N`) to each store's internal API, checks store health
 and can reset a store's admin password. House control-plane pattern (see
@@ -9,8 +9,8 @@ and can reset a store's admin password. House control-plane pattern (see
 
 **Scope (v1):** stores CRUD + terminal provisioning. The store side of the
 internal API (`/api/internal/*`, guarded by a per-store `CONTROL_PLANE_TOKEN`)
-is a CP-authored contract — see `CONTEXT.md` §4 — and is not built in za-pos
-yet; `scripts/dev-store-stub.ts` stands in for local development.
+follows the CP-authored contract — see `CONTEXT.md` §4 — and shipped in
+za-pos 2026-09-03; `scripts/dev-store-stub.ts` remains a dev stand-in.
 
 ## Stack
 

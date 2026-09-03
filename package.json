@@ -2,7 +2,7 @@
   "name": "za-pos-control-plane",
   "version": "1.0.0",
   "private": true,
-  "description": "ZaPOS Control Plane — office panel for the fleet of per-store ZaPOS deployments",
+  "description": "Vula Control Plane — office panel for the fleet of per-store Vula deployments",
   "type": "module",
   "scripts": {
     "dev": "concurrently -n api,ui \"npm run dev:api\" \"npm run dev:ui\"",

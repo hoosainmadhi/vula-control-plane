@@ -26,3 +26,9 @@
 - `scripts/dev-store-stub.ts` compiles into the Docker image via tsc (src of
   truth tsconfig includes scripts/) — acceptable; exclude scripts/ from the
   prod tsc pass if size ever matters.
+- **vula-app.co.za not registered yet** — docs assume the wildcard scheme
+  (`<slug>.vula-app.co.za` + `cp.vula-app.co.za`); DNS must be added when the
+  domain goes live.
+- Dev-office email default is still `admin@za-pos.local` (env default +
+  docs). A later pass could move to `@vula.local`-style defaults; branding
+  pass deliberately left config defaults alone.

@@ -3,7 +3,7 @@ import express from 'express';
 import { logger } from '../src/utils/logger.js';
 
 /**
- * Dev stub of a ZaPOS store's tenant-side internal API (/api/internal/*).
+ * Dev stub of a Vula store's tenant-side internal API (/api/internal/*).
  *
  * The real tenant routes don't exist in za-pos yet (CONTEXT.md §14 contract
  * only). Until they land, point CP stores at this stub to exercise push /
