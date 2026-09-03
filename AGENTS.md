@@ -1,0 +1,134 @@
+# AGENTS.md — working instructions for AI agents in this repo
+
+## Agent instructions
+
+- Respond in English only. Do not commit, merge or push unless instructed.
+- Read the planning files before starting work: `task_plan.md`,
+  `findings.md`, `progress.md`, `CONTEXT.md` (in that order), then run
+  `git status`.
+- This project uses planning-with-files conventions: after each phase,
+  update `task_plan.md` statuses; append to `progress.md` throughout;
+  write findings into `findings.md`; keep small deferred items in
+  `tidbits.md`.
+- `CONTEXT.md` is the authoritative domain reference — including the
+  **Internal API contract**, which the za-pos tenant workstream implements
+  to match. Never change the wire contract without updating CONTEXT.md and
+  flagging it for the tenant side.
+- Never invent business rules: if the docs and the code disagree, flag it in
+  `findings.md` before coding around it.
+- No `console.log` in server code paths — use `logger` from
+  `src/utils/logger.ts` (level-gated).
+
+## What this is
+
+Office control plane for the ZaPOS fleet (house pattern per
+`~/apps/common-files/CONTROL-PLANE-SPEC.md`, reference impl
+`~/apps/optimed-control-plane`). One store = one za-pos Coolify container
+with its own SQLite DB; this app keeps the store registry (incl. terminal
+count) and pushes terminal configuration to each store's internal API.
+
+## Commands
+
+```bash
+npm run dev          # concurrently: API on :3240 (tsx watch) + Vite on :3241
+npm run dev:api      # API only
+npm run dev:ui       # frontend only
+npm run stub         # dev store stub (tenant internal API) on :3299
+npm test             # jest+supertest (in-memory registry, mocked fetch)
+npm run typecheck    # backend tsc --noEmit
+npm run build        # backend tsc + frontend production build
+npm start            # run compiled dist/server.js (production)
+npm run smoke        # boot smoke vs the dev store stub (API must be running)
+npm run format       # prettier
+```
+
+Ports registered in the house registry: **3240 API / 3241 frontend dev**
+(block 3240–3249; store stub dev port 3299 is unregistered — local only).
+
+## Layout
+
+```
+za-pos-control-plane/
+├── server.ts              # entry: env gate, registry open, listen
+├── schema.sql             # mirror of the stores DDL in src/config/registryDb.ts
+├── src/
+│   ├── config/
+│   │   ├── env.ts         # typed env (PORT, CP_DB_PATH, OFFICE_ADMIN_*, JWT_*)
+│   │   └── registryDb.ts  # stores DDL, lazy singleton (WAL), CRUD + record helpers
+│   ├── app.ts             # createApp(): headers, /health, /api, SPA, errors
+│   ├── middleware/
+│   │   ├── auth.ts        # signOfficeToken, verify, requireOffice (kind 'office')
+│   │   └── error.ts       # notFound + one { error } handler (err.status)
+│   ├── routes/            # auth.ts (login), stores.ts (fleet), index.ts barrel
+│   ├── services/
+│   │   └── storeClient.ts # pushTerminals/ping/resetAdmin vs /api/internal/*
+│   ├── utils/             # logger, asyncHandler, validate, errors (HttpError),
+│   │                      # rateLimiter
+│   └── __tests__/         # env-setup.ts, helpers.ts + suites (*.test.ts)
+├── scripts/
+│   ├── dev-store-stub.ts  # stand-in tenant internal API until za-pos ships it
+│   └── smoke-test.sh      # curl boot smoke against :3240 + stub :3299
+├── frontend/              # React 19 + Vite + Tailwind v4 (own package)
+│   └── src/
+│       ├── api.ts         # fetch wrapper + token (localStorage 'zapos_cp_token')
+│       ├── components/    # Layout, Modal, StatusBadge, Spinner, ErrorBox
+│       ├── pages/         # LoginPage, StoresPage (table + modals)
+│       └── types.ts       # camelCase mirrors of the API types
+└── prompts/
+    └── deploy-coolify-control-plane.md  # runbook: deploy stores + this CP
+```
+
+## Code style
+
+- TypeScript strict; ESM (`"type": "module"`); relative imports carry
+  `.js` suffixes. No unused locals/params.
+- Express 4; route handlers wrapped in `asyncHandler`; typed errors via
+  `HttpError` (utils/errors.ts) / `ValidationError` (utils/validate.ts) /
+  `StoreClientError` (status 502); one global `{ error }` error handler.
+- Hand-rolled validation in `src/utils/validate.ts` (no zod/joi).
+- DB access: `getRegistryDb()` prepared statements only, parameterised with
+  `?`. Multi-step writes go through `db.transaction(...)`. Schema changes:
+  edit the DDL in `src/config/registryDb.ts`, mirror in `schema.sql`, and add
+  any needed column to the ensureColumns migrations. SQLite can't ALTER CHECK
+  constraints — changing an enum requires the optimed rebuild choreography
+  (see findings.md).
+- DB columns snake_case; API wire types camelCase (StoreOut etc. defined in
+  src/routes/stores.ts, mirrored 1:1 in frontend/src/types.ts).
+- Frontend: fetch via `api.*` only; Tailwind utilities; `@theme` brand colors
+  in index.css (no tailwind.config).
+- Money: none in this app (no prices stored here).
+
+## API surface (`/api` prefix, `{ error }` on failure)
+
+| Method & path                         | Access                          | Purpose                                                                                                                            |
+| ------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| POST `/auth/login`                    | public (rate-limited 20/15 min) | office session → `{ token, user }`                                                                                                 |
+| GET `/stores`                         | office                          | fleet list (never returns the control_plane_token)                                                                                 |
+| POST `/stores`                        | office                          | create store (optional `controlPlaneToken` matching the store env — blank generates) + **first push** (failure never fails create) |
+| GET `/stores/:id`                     | office                          | detail: terminal preview Till 1..N + config snapshot                                                                               |
+| PUT `/stores/:id`                     | office                          | name/vatRegNo/terminalCount/baseUrl (slug immutable; **no auto-push**)                                                             |
+| PATCH `/stores/:id/pause` · `/resume` | office                          | paused stores 409 push/reset-admin                                                                                                 |
+| POST `/stores/:id/push`               | office                          | push `{terminalCount, terminals: Till 1..N}` to the store                                                                          |
+| POST `/stores/:id/health`             | office                          | ping `GET /api/internal/status`, record up/down                                                                                    |
+| POST `/stores/:id/reset-admin`        | office                          | store resets its admin pw; temp password shown once, never stored                                                                  |
+| GET `/health`                         | public                          | liveness (Coolify healthcheck)                                                                                                     |
+
+## Testing conventions
+
+- jest + ts-jest + supertest against `:memory:` SQLite. `src/__tests__/
+env-setup.ts` sets `CP_DB_PATH=':memory:'` + office env; `beforeEach`
+  calls `resetRegistryDb()`; login helper in `helpers.ts`.
+- Store calls are mocked via `jest.spyOn(globalThis, 'fetch')` (jest.mocked
+  only casts types — it does not create mocks) returning canned `Response`s
+  or network errors; `mockRestore()` per test.
+- Add a regression test with every bug fix.
+
+## Branch strategy & house notes
+
+- `main` (production) · `dev` (integration) · `feat/*`; hotfixes from `main`.
+  Commit style `type(scope): description` (`feat(platform)`, `feat(ui)`,
+  `fix(platform)`, `docs`, `chore`).
+- Deploy: Coolify build pack "Dockerfile", `PORT` injected by Coolify,
+  `CP_DB_PATH=/data/control-plane.db` (persistent volume), `OFFICE_ADMIN_*`,
+  `JWT_SECRET` (≥32 chars). Full playbook in `prompts/`.
+- Seeded/dev credentials are demo-only; change before going live.
