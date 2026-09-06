@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import {
+  HeartPulse,
+  KeyRound,
+  Loader2,
+  Pencil,
+  Rocket,
+  ToggleLeft,
+  ToggleRight,
+} from 'lucide-react';
 import { api, ApiError } from '../api';
 import ErrorBox from '../components/ErrorBox';
+import IconButton from '../components/IconButton';
 import Modal from '../components/Modal';
 import Spinner from '../components/Spinner';
-import StatusBadge from '../components/StatusBadge';
+import StatusBadge, { HealthDot, STORE_COLORS, VERTICAL_COLORS } from '../components/StatusBadge';
 import type {
-  ConfigStatus,
   CreateStoreResponse,
   HealthOutcome,
   HealthStatus,
@@ -14,12 +23,14 @@ import type {
   Store,
   StoreFormValues,
   StoreStatus,
+  StoreVertical,
 } from '../types';
 
 const EMPTY_FORM: StoreFormValues = {
   name: '',
   slug: '',
   vatRegNo: '',
+  vertical: 'general',
   baseUrl: '',
   terminalCount: '1',
   controlPlaneToken: '',
@@ -40,33 +51,33 @@ const fmtTime = (value: string | null): string => {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 };
 
-const configBadge = (status: ConfigStatus, at: string | null) => {
-  const tone = status === 'ok' ? 'green' : status === 'failed' ? 'red' : 'amber';
-  const label = status === 'ok' ? 'Configured' : status === 'failed' ? 'Push failed' : 'Not pushed';
-  return (
-    <div className="flex items-center gap-2">
-      <StatusBadge tone={tone}>{label}</StatusBadge>
-      <span className="text-xs text-slate-400">{status === 'pending' ? '' : fmtTime(at)}</span>
-    </div>
-  );
+const HEALTH_LABELS: Record<HealthStatus, string> = {
+  up: 'Up',
+  down: 'Down',
+  unknown: 'Unknown',
 };
 
-const healthBadge = (status: HealthStatus, at: string | null) => {
-  const tone = status === 'up' ? 'green' : status === 'down' ? 'red' : 'slate';
-  const label = status === 'up' ? 'Up' : status === 'down' ? 'Down' : 'Unknown';
-  return (
-    <div className="flex items-center gap-2">
-      <StatusBadge tone={tone}>{label}</StatusBadge>
-      <span className="text-xs text-slate-400">{status === 'unknown' ? '' : fmtTime(at)}</span>
-    </div>
-  );
+const STATUS_LABELS: Record<StoreStatus, string> = {
+  active: 'Active',
+  paused: 'Paused',
 };
 
-const statusBadge = (status: StoreStatus) => (
-  <StatusBadge tone={status === 'active' ? 'teal' : 'amber'}>
-    {status === 'active' ? 'Active' : 'Paused'}
-  </StatusBadge>
-);
+/** Store-type labels: short for chips, fuller for the form select (title = full). */
+const VERTICAL_LABELS: Record<StoreVertical, string> = {
+  general: 'General',
+  clothing: 'Clothing',
+  spares: 'Spares',
+  hardware: 'Hardware',
+  pharmacy: 'Pharmacy',
+};
+
+const VERTICAL_OPTIONS: Array<{ value: StoreVertical; label: string }> = [
+  { value: 'general', label: 'General retail, convenience & spaza' },
+  { value: 'clothing', label: 'Clothing & footwear' },
+  { value: 'spares', label: 'Motor spares & parts' },
+  { value: 'hardware', label: 'Hardware & building supplies' },
+  { value: 'pharmacy', label: 'Pharmacy & wellness' },
+];
 
 const MAX_CHIPS = 12;
 
@@ -80,17 +91,15 @@ function TerminalChips({ store }: { store: Store }) {
         <span
           key={till}
           title={configured ? `Till ${till} — configured` : `Till ${till} — pending`}
-          className={`rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${
-            configured
-              ? 'bg-brand-50 text-brand-700 ring-brand-600/20'
-              : 'bg-slate-100 text-slate-500 ring-slate-400/20'
+          className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+            configured ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
           }`}
         >
           {till}
         </span>
       ))}
       {store.terminalCount > MAX_CHIPS && (
-        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500 ring-1 ring-inset ring-slate-400/20">
+        <span className="inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
           +{store.terminalCount - MAX_CHIPS}
         </span>
       )}
@@ -108,6 +117,11 @@ interface FormModalProps {
   onSubmit: (values: StoreFormValues) => void;
 }
 
+const inputCls =
+  'w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-brand-500 focus:outline-none';
+
+const labelCls = 'mb-1 block text-sm font-semibold text-slate-700';
+
 function StoreFormModal({ modal, saving, error, onClose, onSubmit }: FormModalProps) {
   const editing = modal.mode === 'edit' ? modal.store : null;
   const [form, setForm] = useState<StoreFormValues>(() =>
@@ -116,6 +130,7 @@ function StoreFormModal({ modal, saving, error, onClose, onSubmit }: FormModalPr
           name: editing.name,
           slug: editing.slug,
           vatRegNo: editing.vatRegNo ?? '',
+          vertical: editing.vertical,
           baseUrl: editing.baseUrl,
           terminalCount: String(editing.terminalCount),
           controlPlaneToken: '',
@@ -129,15 +144,12 @@ function StoreFormModal({ modal, saving, error, onClose, onSubmit }: FormModalPr
     onSubmit(form);
   };
 
-  const inputCls =
-    'w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500';
-
   return (
     <Modal title={editing ? `Edit ${editing.name}` : 'New store'} onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
         {error && <ErrorBox message={error} />}
         <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700">Store name</label>
+          <label className={labelCls}>Store name</label>
           <input
             required
             value={form.name}
@@ -147,7 +159,7 @@ function StoreFormModal({ modal, saving, error, onClose, onSubmit }: FormModalPr
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700">Slug</label>
+          <label className={labelCls}>Slug</label>
           <input
             required
             disabled={editing !== null}
@@ -164,9 +176,26 @@ function StoreFormModal({ modal, saving, error, onClose, onSubmit }: FormModalPr
           {editing && <p className="mt-1 text-xs text-slate-400">Slug is fixed after creation</p>}
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700">
-            VAT registration no.
-          </label>
+          <label className={labelCls}>Store type</label>
+          <select
+            value={form.vertical}
+            onChange={(e) => setForm({ ...form, vertical: e.target.value as StoreVertical })}
+            className={inputCls}
+          >
+            {VERTICAL_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          {editing && (
+            <p className="mt-1 text-xs text-slate-400">
+              Type changes reach the store on the next push
+            </p>
+          )}
+        </div>
+        <div>
+          <label className={labelCls}>VAT registration no.</label>
           <input
             value={form.vatRegNo}
             onChange={(e) => setForm({ ...form, vatRegNo: e.target.value })}
@@ -175,7 +204,7 @@ function StoreFormModal({ modal, saving, error, onClose, onSubmit }: FormModalPr
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700">Store base URL</label>
+          <label className={labelCls}>Store base URL</label>
           <input
             required
             value={form.baseUrl}
@@ -185,9 +214,7 @@ function StoreFormModal({ modal, saving, error, onClose, onSubmit }: FormModalPr
           />
         </div>
         <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700">
-            Terminal count (1–99)
-          </label>
+          <label className={labelCls}>Terminal count (1–99)</label>
           <input
             required
             type="number"
@@ -200,7 +227,7 @@ function StoreFormModal({ modal, saving, error, onClose, onSubmit }: FormModalPr
         </div>
         {!editing && (
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">
+            <label className={labelCls}>
               Control plane token <span className="font-normal text-slate-400">(optional)</span>
             </label>
             <input
@@ -221,14 +248,14 @@ function StoreFormModal({ modal, saving, error, onClose, onSubmit }: FormModalPr
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+            className="rounded-lg px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-100"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={saving || slugInvalid}
-            className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-60"
+            className="rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-brand-700 disabled:opacity-50"
           >
             {saving ? 'Saving…' : editing ? 'Save changes' : 'Create store'}
           </button>
@@ -262,20 +289,20 @@ function AdminPasswordModal({ storeName, tempPassword, note, onClose }: AdminPas
           The store reset its admin password. The temporary password below is shown once and is not
           stored by the control plane — save it somewhere safe, then close this box.
         </p>
-        <div className="rounded-md bg-slate-900 px-4 py-3 text-center font-mono text-lg tracking-widest text-emerald-300">
+        <div className="rounded-lg bg-slate-900 px-4 py-3 text-center font-mono text-lg tracking-widest text-emerald-300">
           {tempPassword}
         </div>
         <p className="text-xs text-amber-700">{note}</p>
         <div className="flex justify-end gap-2">
           <button
             onClick={copy}
-            className="rounded-md px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+            className="rounded-lg px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-100"
           >
             Copy
           </button>
           <button
             onClick={onClose}
-            className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
+            className="rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-brand-700"
           >
             Done
           </button>
@@ -327,12 +354,13 @@ export default function StoresPage() {
       const body = {
         name: values.name.trim(),
         vatRegNo: values.vatRegNo.trim() || null,
+        vertical: values.vertical,
         baseUrl: values.baseUrl.trim(),
         terminalCount: Number(values.terminalCount),
       };
       if (modal?.mode === 'edit') {
         await api<Store>(`/stores/${modal.store.id}`, { method: 'PUT', body });
-        notify('ok', `${values.name.trim()} updated — terminal changes apply on the next push`);
+        notify('ok', `${values.name.trim()} updated — changes apply on the next push`);
       } else {
         const res = await api<CreateStoreResponse>('/stores', {
           method: 'POST',
@@ -414,11 +442,7 @@ export default function StoresPage() {
     });
 
   if (loading) {
-    return (
-      <div className="py-12 text-center">
-        <Spinner label="Loading stores…" />
-      </div>
-    );
+    return <Spinner label="Loading stores…" />;
   }
 
   if (loadError) {
@@ -427,7 +451,7 @@ export default function StoresPage() {
         <ErrorBox message={loadError} />
         <button
           onClick={() => void load()}
-          className="text-sm font-medium text-brand-700 hover:underline"
+          className="text-sm font-semibold text-brand-600 hover:underline"
         >
           Retry
         </button>
@@ -435,36 +459,29 @@ export default function StoresPage() {
     );
   }
 
-  const actionBtn =
-    'rounded border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-600 hover:border-brand-300 hover:text-brand-700 disabled:opacity-50';
-
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-slate-900">Store fleet</h2>
-          <p className="text-sm text-slate-500">
-            {stores.length} store{stores.length === 1 ? '' : 's'} — each row is one Coolify
-            deployment
-          </p>
-        </div>
+    <div className="space-y-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-sm text-slate-400">
+          {stores.length} store{stores.length === 1 ? '' : 's'} — each row is one Vula deployment
+        </p>
         <button
           onClick={() => {
             setFormError(null);
             setModal({ mode: 'create' });
           }}
-          className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700"
+          className="rounded-lg bg-brand-600 px-4 py-2.5 text-center text-sm font-bold text-white hover:bg-brand-700"
         >
-          New store
+          + New store
         </button>
       </div>
 
       {notice && (
         <div
-          className={`flex items-center justify-between rounded-md px-4 py-2.5 text-sm ring-1 ring-inset ${
+          className={`flex items-center justify-between rounded-lg px-4 py-2.5 text-sm ${
             notice.kind === 'ok'
-              ? 'bg-emerald-50 text-emerald-800 ring-emerald-600/20'
-              : 'bg-red-50 text-red-800 ring-red-600/20'
+              ? 'border border-green-200 bg-green-50 text-green-800'
+              : 'border border-red-200 bg-red-50 text-red-700'
           }`}
         >
           <span>{notice.text}</span>
@@ -479,22 +496,29 @@ export default function StoresPage() {
       )}
 
       {stores.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-14 text-center">
-          <p className="font-medium text-slate-700">No stores yet</p>
-          <p className="mt-1 text-sm text-slate-500">
-            Deploy a Vula store with its CONTROL_PLANE_TOKEN, then add it here to push terminal
-            config.
-          </p>
+        <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+          No stores registered yet.
+          <div className="mt-4">
+            <button
+              onClick={() => {
+                setFormError(null);
+                setModal({ mode: 'create' });
+              }}
+              className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-bold text-white hover:bg-brand-700"
+            >
+              Register your first store
+            </button>
+          </div>
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg bg-white shadow-sm ring-1 ring-slate-200">
-          <table className="min-w-full divide-y divide-slate-200 text-sm">
-            <thead className="bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+          <table className="w-full text-sm">
+            <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-400">
               <tr>
                 <th className="px-4 py-3">Store</th>
+                <th className="px-4 py-3">Type</th>
+                <th className="px-4 py-3">Domain</th>
                 <th className="px-4 py-3">Terminals</th>
-                <th className="px-4 py-3">VAT no.</th>
-                <th className="px-4 py-3">Terminal config</th>
                 <th className="px-4 py-3">Health</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3 text-right">Actions</th>
@@ -502,54 +526,100 @@ export default function StoresPage() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {stores.map((store) => (
-                <tr key={store.id} className="align-top hover:bg-slate-50/60">
+                <tr key={store.id} className="align-top hover:bg-slate-50">
                   <td className="px-4 py-3">
-                    <div className="font-medium text-slate-900">{store.name}</div>
-                    <div className="text-xs text-slate-400">
-                      {store.slug} ·{' '}
-                      <span className="break-all">{store.baseUrl.replace(/^https?:\/\//, '')}</span>
-                    </div>
+                    <div className="font-bold text-slate-900">{store.name}</div>
+                    <p className="font-mono text-xs text-slate-400">{store.slug}</p>
+                  </td>
+                  <td className="px-4 py-3">
+                    <StatusBadge
+                      status={store.vertical}
+                      colors={VERTICAL_COLORS}
+                      label={VERTICAL_LABELS[store.vertical]}
+                    />
+                  </td>
+                  <td className="px-4 py-3">
+                    <a
+                      href={store.baseUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      title={store.baseUrl}
+                      className="break-all font-mono text-xs text-brand-600 hover:underline"
+                    >
+                      {store.baseUrl.replace(/^https?:\/\//, '')}
+                    </a>
                   </td>
                   <td className="px-4 py-3">
                     <TerminalChips store={store} />
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs text-slate-500">
-                    {store.vatRegNo ?? '—'}
+                  <td className="px-4 py-3">
+                    <span className="flex items-center gap-2">
+                      <HealthDot status={store.lastHealthStatus} />
+                      <span className="text-xs font-semibold text-slate-600">
+                        {HEALTH_LABELS[store.lastHealthStatus]}
+                      </span>
+                    </span>
+                    {store.lastHealthStatus !== 'unknown' && (
+                      <p className="mt-1 text-xs text-slate-400">{fmtTime(store.lastHealthAt)}</p>
+                    )}
                   </td>
                   <td className="px-4 py-3">
-                    {configBadge(store.lastConfigStatus, store.lastConfigAt)}
+                    <StatusBadge
+                      status={store.status}
+                      colors={STORE_COLORS}
+                      label={STATUS_LABELS[store.status]}
+                    />
                   </td>
-                  <td className="px-4 py-3">
-                    {healthBadge(store.lastHealthStatus, store.lastHealthAt)}
-                  </td>
-                  <td className="px-4 py-3">{statusBadge(store.status)}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 text-right">
                     {busyId === store.id ? (
-                      <Spinner label="" />
+                      <span className="inline-flex justify-end">
+                        <IconButton
+                          icon={Loader2}
+                          title="Working…"
+                          onClick={() => undefined}
+                          busy
+                        />
+                      </span>
                     ) : (
-                      <div className="flex flex-wrap justify-end gap-1.5">
-                        <button
-                          className={actionBtn}
+                      <span className="inline-flex gap-1.5">
+                        <IconButton
+                          icon={Pencil}
+                          title="Edit store"
                           onClick={() => {
                             setFormError(null);
                             setModal({ mode: 'edit', store });
                           }}
-                        >
-                          Edit
-                        </button>
-                        <button className={actionBtn} onClick={() => void pushNow(store)}>
-                          Push now
-                        </button>
-                        <button className={actionBtn} onClick={() => void healthCheck(store)}>
-                          Health
-                        </button>
-                        <button className={actionBtn} onClick={() => void getAdminPassword(store)}>
-                          Admin password
-                        </button>
-                        <button className={actionBtn} onClick={() => void togglePause(store)}>
-                          {store.status === 'active' ? 'Pause' : 'Resume'}
-                        </button>
-                      </div>
+                          className="bg-slate-100 text-slate-700 hover:bg-slate-200"
+                        />
+                        <IconButton
+                          icon={Rocket}
+                          title="Push terminals now"
+                          onClick={() => void pushNow(store)}
+                          className="bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        />
+                        <IconButton
+                          icon={HeartPulse}
+                          title="Check health"
+                          onClick={() => void healthCheck(store)}
+                          className="bg-sky-50 text-sky-700 hover:bg-sky-100"
+                        />
+                        <IconButton
+                          icon={KeyRound}
+                          title="Get store admin password"
+                          onClick={() => void getAdminPassword(store)}
+                          className="bg-violet-50 text-violet-700 hover:bg-violet-100"
+                        />
+                        <IconButton
+                          icon={store.status === 'active' ? ToggleRight : ToggleLeft}
+                          title={store.status === 'active' ? 'Pause store' : 'Resume store'}
+                          onClick={() => void togglePause(store)}
+                          className={
+                            store.status === 'active'
+                              ? 'bg-green-50 text-green-700 hover:bg-green-100'
+                              : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                          }
+                        />
+                      </span>
                     )}
                   </td>
                 </tr>

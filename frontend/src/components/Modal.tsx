@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { X } from 'lucide-react';
 
 interface ModalProps {
   title: string;
@@ -16,21 +17,21 @@ export default function Modal({ title, onClose, children, wide }: ModalProps) {
       }}
     >
       <div
-        className={`mt-8 w-full rounded-lg bg-white shadow-xl ring-1 ring-slate-200 ${
+        className={`mt-8 w-full rounded-2xl bg-white shadow-lg ring-1 ring-slate-200 ${
           wide ? 'max-w-2xl' : 'max-w-md'
         }`}
       >
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3">
-          <h2 className="font-semibold text-slate-900">{title}</h2>
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+          <h2 className="font-bold text-slate-900">{title}</h2>
           <button
             onClick={onClose}
             aria-label="Close"
-            className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
           >
-            ✕
+            <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="px-5 py-4">{children}</div>
+        <div className="px-5 py-5">{children}</div>
       </div>
     </div>
   );

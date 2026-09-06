@@ -1,7 +1,13 @@
 import { Router } from 'express';
 import crypto from 'crypto';
-import type { ConfigStatus, HealthStatus, StoreRecord } from '../config/registryDb.js';
+import type {
+  ConfigStatus,
+  HealthStatus,
+  StoreRecord,
+  StoreVertical,
+} from '../config/registryDb.js';
 import {
+  STORE_VERTICALS,
   createStore,
   getStoreById,
   getStoreBySlug,
@@ -36,6 +42,7 @@ export interface StoreOut {
   slug: string;
   name: string;
   vatRegNo: string | null;
+  vertical: StoreVertical;
   terminalCount: number;
   baseUrl: string;
   status: StoreRecord['status'];
@@ -80,6 +87,7 @@ const storeToOut = (store: StoreRecord): StoreOut => ({
   slug: store.slug,
   name: store.name,
   vatRegNo: store.vat_reg_no,
+  vertical: store.vertical,
   terminalCount: store.terminal_count,
   baseUrl: store.base_url,
   status: store.status,
@@ -124,6 +132,17 @@ const requireStore = (id: number): StoreRecord => {
   return store;
 };
 
+/** Parses an optional vertical (absent = keep the current one / default on create). */
+const optionalVertical = (body: Record<string, unknown>): StoreVertical | undefined => {
+  const raw = body['vertical'];
+  if (raw === undefined) return undefined;
+  const value = String(raw);
+  if (!(STORE_VERTICALS as readonly string[]).includes(value)) {
+    throw new ValidationError(`vertical must be one of: ${STORE_VERTICALS.join(', ')}`);
+  }
+  return value as StoreVertical;
+};
+
 /** Parses and validates the :id param, loading the store or 404ing. */
 const storeFromParams = (raw: string): StoreRecord => requireStore(parseIdParam(raw));
 
@@ -166,6 +185,7 @@ storesRouter.post(
     const name = requireString(req.body, 'name');
     const slug = requireSlug(req.body);
     const vatRegNo = optionalString(req.body, 'vatRegNo', 20) ?? null;
+    const vertical = optionalVertical(req.body);
     const terminalCount = requireTerminalCount(req.body);
     const baseUrl = requireBaseUrl(req.body);
     if (getStoreBySlug(slug)) {
@@ -185,7 +205,10 @@ storesRouter.post(
         'controlPlaneToken must be 64 lowercase hex characters when supplied',
       );
     }
-    const store = createStore({ name, slug, vatRegNo, terminalCount, baseUrl }, controlPlaneToken);
+    const store = createStore(
+      { name, slug, vatRegNo, vertical, terminalCount, baseUrl },
+      controlPlaneToken,
+    );
     // Attempt the first push right away; a failed attempt never fails creation.
     const firstPush = await attemptPush(store);
     const updated = getStoreById(store.id)!;
@@ -213,6 +236,7 @@ storesRouter.put(
     const input: {
       name?: string;
       vatRegNo?: string | null;
+      vertical?: StoreVertical;
       terminalCount?: number;
       baseUrl?: string;
     } = {};
@@ -220,6 +244,7 @@ storesRouter.put(
     if (body['name'] !== undefined) input.name = requireString(body, 'name');
     if (body['vatRegNo'] !== undefined)
       input.vatRegNo = optionalString(body, 'vatRegNo', 20) ?? null;
+    if (body['vertical'] !== undefined) input.vertical = optionalVertical(body);
     if (body['terminalCount'] !== undefined) input.terminalCount = requireTerminalCount(body);
     if (body['baseUrl'] !== undefined) input.baseUrl = requireBaseUrl(body);
     const updated = updateStore(store.id, input) ?? store;

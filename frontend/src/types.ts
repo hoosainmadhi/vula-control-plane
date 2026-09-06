@@ -3,12 +3,14 @@
 export type StoreStatus = 'active' | 'paused';
 export type ConfigStatus = 'pending' | 'ok' | 'failed';
 export type HealthStatus = 'up' | 'down' | 'unknown';
+export type StoreVertical = 'general' | 'clothing' | 'spares' | 'hardware' | 'pharmacy';
 
 export interface Store {
   id: number;
   slug: string;
   name: string;
   vatRegNo: string | null;
+  vertical: StoreVertical;
   terminalCount: number;
   baseUrl: string;
   status: StoreStatus;
@@ -67,6 +69,7 @@ export interface StoreFormValues {
   name: string;
   slug: string;
   vatRegNo: string;
+  vertical: StoreVertical;
   baseUrl: string;
   terminalCount: string;
   controlPlaneToken: string;

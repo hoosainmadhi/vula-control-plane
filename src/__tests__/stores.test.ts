@@ -43,10 +43,15 @@ const mockConfigureOk = (): void => {
 let fetchMock: jest.SpyInstance;
 let token = '';
 
-beforeEach(async () => {
+// One office login for the whole suite: the login route is rate-limited to
+// 20 attempts per 15 min per app instance, and the token is stateless.
+beforeAll(async () => {
+  token = await loginAsOffice(app);
+});
+
+beforeEach(() => {
   resetRegistryDb();
   fetchMock = jest.spyOn(globalThis, 'fetch');
-  token = await loginAsOffice(app);
 });
 
 afterEach(() => {
@@ -65,6 +70,7 @@ describe('POST /api/stores — create + first push', () => {
       slug: 'gardens-mall',
       name: 'Gardens Mall',
       vatRegNo: '4530211828',
+      vertical: 'general',
       terminalCount: 3,
       baseUrl: 'http://localhost:3299',
       status: 'active',
@@ -81,12 +87,26 @@ describe('POST /api/stores — create + first push', () => {
     expect(init?.headers?.['X-Control-Plane-Token']).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.parse(init?.body as string)).toEqual({
       terminalCount: 3,
+      vertical: 'general',
       terminals: [
         { till: 1, name: 'Till 1' },
         { till: 2, name: 'Till 2' },
         { till: 3, name: 'Till 3' },
       ],
     });
+  });
+
+  it('pushes an explicit vertical with the store and surfaces it on the store', async () => {
+    mockConfigureOk();
+    const res = await request(app)
+      .post('/api/stores')
+      .set(auth())
+      .send(createPayload({ vertical: 'hardware' }));
+    expect(res.status).toBe(201);
+    expect((res.body as { store: StoreBody }).store.vertical).toBe('hardware');
+
+    const [, init] = lastFetch();
+    expect(JSON.parse(init?.body as string)).toMatchObject({ vertical: 'hardware' });
   });
 
   it('uses a supplied controlPlaneToken for pushes and rejects malformed ones', async () => {
@@ -192,6 +212,21 @@ describe('POST /api/stores — validation', () => {
     expect(noName.status).toBe(400);
   });
 
+  it('rejects unknown verticals and never calls the store', async () => {
+    mockConfigureOk();
+    for (const vertical of ['bakery', '', null, 3]) {
+      const res = await request(app)
+        .post('/api/stores')
+        .set(auth())
+        .send(createPayload({ slug: `store-${String(vertical).length}`, vertical }));
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(
+        /vertical must be one of: general, clothing, spares, hardware, pharmacy/,
+      );
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('409s on a duplicate slug without calling the store', async () => {
     mockConfigureOk();
     await request(app).post('/api/stores').set(auth()).send(createPayload());
@@ -214,16 +249,29 @@ describe('PUT /api/stores/:id — edit', () => {
     const res = await request(app)
       .put(`/api/stores/${id}`)
       .set(auth())
-      .send({ name: 'Gardens Mall East', vatRegNo: '', terminalCount: 4 });
+      .send({ name: 'Gardens Mall East', vatRegNo: '', vertical: 'clothing', terminalCount: 4 });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       name: 'Gardens Mall East',
       vatRegNo: null,
+      vertical: 'clothing',
       terminalCount: 4,
       slug: 'gardens-mall',
     });
     // Edits alone never hit the store: only the create-time push happened.
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects an unknown vertical on edit', async () => {
+    mockConfigureOk();
+    const created = await request(app).post('/api/stores').set(auth()).send(createPayload());
+    const id = (created.body as { store: { id: number } }).store.id;
+    const bad = await request(app)
+      .put(`/api/stores/${id}`)
+      .set(auth())
+      .send({ vertical: 'bakery' });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toMatch(/vertical must be one of/);
   });
 
   it('ignores slug changes and validates edited fields', async () => {

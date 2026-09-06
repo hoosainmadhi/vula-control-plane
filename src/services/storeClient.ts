@@ -93,16 +93,23 @@ const request = async (
   return { ok: true, status: res.status, body: parsed };
 };
 
-/** Pushes the terminal configuration (Till 1..N) to POST /api/internal/configure. */
+/**
+ * Pushes the store configuration (vertical + terminal count, Till 1..N) to
+ * POST /api/internal/configure.
+ */
 export const pushTerminals = async (
-  store: Pick<StoreRecord, 'base_url' | 'control_plane_token' | 'terminal_count'>,
+  store: Pick<StoreRecord, 'base_url' | 'control_plane_token' | 'terminal_count' | 'vertical'>,
   options: CallOptions = {},
 ): Promise<unknown> => {
   const { body } = await request(
     store,
     'POST',
     '/api/internal/configure',
-    { terminalCount: store.terminal_count, terminals: terminalNames(store.terminal_count) },
+    {
+      terminalCount: store.terminal_count,
+      vertical: store.vertical,
+      terminals: terminalNames(store.terminal_count),
+    },
     options,
   );
   return body;

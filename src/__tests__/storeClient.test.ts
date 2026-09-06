@@ -12,7 +12,8 @@ const store = {
   base_url: 'http://store.example.com/',
   control_plane_token: 'tok-123',
   terminal_count: 2,
-};
+  vertical: 'general',
+} as const;
 
 interface FetchInit {
   method?: string;
@@ -67,6 +68,7 @@ describe('pushTerminals', () => {
     expect(init?.headers?.['Content-Type']).toBe('application/json');
     expect(JSON.parse(init?.body as string)).toEqual({
       terminalCount: 2,
+      vertical: 'general',
       terminals: [
         { till: 1, name: 'Till 1' },
         { till: 2, name: 'Till 2' },

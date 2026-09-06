@@ -6,16 +6,25 @@ import { env } from './env.js';
 export type StoreStatus = 'active' | 'paused';
 export type ConfigStatus = 'pending' | 'ok' | 'failed';
 export type HealthStatus = 'up' | 'down' | 'unknown';
+export type StoreVertical = 'general' | 'clothing' | 'spares' | 'hardware' | 'pharmacy';
 
 export const STORE_STATUSES: readonly StoreStatus[] = ['active', 'paused'];
 export const CONFIG_STATUSES: readonly ConfigStatus[] = ['pending', 'ok', 'failed'];
 export const HEALTH_STATUSES: readonly HealthStatus[] = ['up', 'down', 'unknown'];
+export const STORE_VERTICALS: readonly StoreVertical[] = [
+  'general',
+  'clothing',
+  'spares',
+  'hardware',
+  'pharmacy',
+];
 
 export interface StoreRecord {
   id: number;
   slug: string;
   name: string;
   vat_reg_no: string | null;
+  vertical: StoreVertical;
   terminal_count: number;
   base_url: string;
   control_plane_token: string;
@@ -35,6 +44,7 @@ const STORES_DDL = `
     slug                   TEXT    NOT NULL UNIQUE,
     name                   TEXT    NOT NULL,
     vat_reg_no             TEXT,
+    vertical               TEXT    NOT NULL DEFAULT 'general',
     terminal_count         INTEGER NOT NULL DEFAULT 1
       CHECK (terminal_count BETWEEN 1 AND 99),
     base_url               TEXT    NOT NULL
@@ -73,6 +83,7 @@ export const getRegistryDb = (): Database.Database => {
     if (!storeCols.some((c) => c.name === name)) db.exec(`ALTER TABLE stores ADD COLUMN ${ddl}`);
   };
   addColumn('vat_reg_no', 'vat_reg_no TEXT');
+  addColumn('vertical', "vertical TEXT NOT NULL DEFAULT 'general'");
   addColumn('control_plane_token', `control_plane_token TEXT NOT NULL DEFAULT ''`);
   return registry;
 };
@@ -107,6 +118,7 @@ export interface CreateStoreInput {
   name: string;
   slug: string;
   vatRegNo?: string | null;
+  vertical?: StoreVertical;
   terminalCount: number;
   baseUrl: string;
 }
@@ -116,13 +128,14 @@ export const createStore = (input: CreateStoreInput, controlPlaneToken: string):
   const insert = db.transaction(() => {
     const info = db
       .prepare(
-        `INSERT INTO stores (name, slug, vat_reg_no, terminal_count, base_url, control_plane_token)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO stores (name, slug, vat_reg_no, vertical, terminal_count, base_url, control_plane_token)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.name,
         input.slug,
         input.vatRegNo ?? null,
+        input.vertical ?? 'general',
         input.terminalCount,
         input.baseUrl,
         controlPlaneToken,
@@ -136,6 +149,7 @@ export const createStore = (input: CreateStoreInput, controlPlaneToken: string):
 export interface UpdateStoreInput {
   name?: string;
   vatRegNo?: string | null;
+  vertical?: StoreVertical;
   terminalCount?: number;
   baseUrl?: string;
 }
@@ -149,6 +163,7 @@ export const updateStore = (id: number, input: UpdateStoreInput): StoreRecord | 
     `UPDATE stores SET
        name = COALESCE(?, name),
        vat_reg_no = ?,
+       vertical = COALESCE(?, vertical),
        terminal_count = COALESCE(?, terminal_count),
        base_url = COALESCE(?, base_url),
        updated_at = datetime('now')
@@ -156,6 +171,7 @@ export const updateStore = (id: number, input: UpdateStoreInput): StoreRecord | 
   ).run(
     input.name ?? null,
     input.vatRegNo === undefined ? current.vat_reg_no : input.vatRegNo,
+    input.vertical ?? null,
     input.terminalCount ?? null,
     input.baseUrl ?? null,
     id,

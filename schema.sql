@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS stores (
   slug                   TEXT    NOT NULL UNIQUE,
   name                   TEXT    NOT NULL,
   vat_reg_no             TEXT,
+  vertical               TEXT    NOT NULL DEFAULT 'general',
   terminal_count         INTEGER NOT NULL DEFAULT 1
     CHECK (terminal_count BETWEEN 1 AND 99),
   base_url               TEXT    NOT NULL
