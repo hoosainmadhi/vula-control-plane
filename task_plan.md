@@ -16,7 +16,8 @@ CONTEXT.md "Internal API contract").
 
 ## Current Phase
 
-Complete (CP v1 delivered 2026-09-03)
+CP v1 complete (delivered 2026-09-03). **Planned, not started:** fleet
+phase set F1–F3 (2026-09-06) — see below.
 
 ## Phases
 
@@ -94,3 +95,90 @@ Complete (CP v1 delivered 2026-09-03)
 - [x] Boot smoke (`scripts/smoke-test.sh`) against the dev store stub
 - [x] Ports 3240/3241 registered (PORT-REGISTRY.md, PortPilot, Dashy)
 - [x] Committed per house style on `main`
+
+## Phase 5 (post-v1): Store type moved to the control plane — 2026-09-03
+
+- [x] `stores.vertical` TEXT NOT NULL DEFAULT 'general' (`STORES_DDL` +
+      `schema.sql` mirror + `ensureColumns` auto-migration; no CHECK —
+      SQLite can't ALTER one in, enum enforced at the API layer)
+- [x] Wire: `StoreOut` + POST/PUT accept `vertical`
+      (`general|clothing|spares|supermarket`); configure push body is now
+      `{ terminalCount, vertical, terminals }`
+- [x] Tenant (`~/apps/za-pos`) `/api/internal/configure` applies
+      `vertical` to `settings.vertical` + seeds the starter pack
+      (idempotent); `/status` reports it; internal API v0.2.0
+- [x] UI: Store type select in the create/edit modal + Type column on the
+      dashboard (no new page)
+- [x] Dev stub parity (STUB_VERTICAL) + CONTEXT.md updated in both repos
+- [x] CP `npm test` 42/42, typecheck clean, frontend build green; za-pos
+      internal + verticals suites green
+- **Status:** complete
+
+### Decisions added (see progress.md 2026-09-03 late entry)
+
+| #   | Decision                                                                                                   | Rationale                                                                                        |
+| --- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| D11 | Store type field is `vertical` everywhere (UI label "Store type"), values `general` · `clothing` · `spares` · `supermarket`, default `general` | Mirrors za-pos `settings.vertical` 1:1 so the push maps directly; tenant docs always called it "store type (vertical)" |
+| D12 | Every configure push carries `vertical`; tenant applies it + seeds the pack idempotently; an absent `vertical` leaves the store's type untouched | Same trust model as terminal replacement; older CP builds stay compatible (tenant-side leniency) |
+
+## Phase 6 (post-v1): verticals — supermarket merged into general, hardware added (2026-09-03)
+
+- [x] Tenant `vertical.ts`: type set now `general | clothing | spares | hardware`
+- [x] Merge rationale: identical starter packs; only diff was weighed toggle → general carries it
+- [x] Hardware pack (7 categories, unique names across packs); no new product fields (deferred)
+- [x] CP + tenant UI/docs/tests/stub mirrored; suites green (42/42 CP, 98/98 tenant)
+- [x] Fleet: supermarket demo store replaced by builders-hardware on :3248; all 4 instances on new build
+- **Status:** complete
+
+## Phase set (planned 2026-09-06): fleet operations F1–F3
+
+Owner decisions (2026-09-06): build the full fleet roadmap in three
+phases — CP ops hardening first, then Coolify auto-provisioning, then
+central-office-over-the-fleet. Implementation happens in this repo (F1,
+F2) and across both repos (F3); each phase ships with the test suite
+green, docs updated and one commit. Settle the uncommitted working tree
+before F1 starts. Fleet verified from the registry: all 5 stores active,
+health up, config ok.
+
+- [ ] **F1 CP ops hardening** (this repo)
+  - Automated health sweep (env-gated interval, default 10 min): ping
+    every active store, update `last_health_status`/`_at`.
+  - Persist last errors: `last_config_error`/`last_health_error`
+    columns (ensureColumns) recorded by storeClient; badges and the
+    detail view show the message so failures survive refresh.
+  - `store_audit` table (house spec, deferred from v1): create/edit/
+    push/health/reset/pause/resume rows with the acting office admin;
+    `GET /api/stores/:id/audit` + a detail UI panel.
+  - Store delete/teardown: pause-first policy, confirm by slug, hard
+    delete + token revoked; blocked while status is active.
+  - Custom terminal names per till (configure payload already carries
+    a `name` per terminal — surface it in the edit modal).
+  - Fleet header strip on the dashboard: total stores, up/down, config
+    drift count.
+- [ ] **F2 Coolify auto-provisioning** (this repo; prerequisite: the
+      vula-app.co.za DNS wildcard live + a Coolify instance)
+  - Env-gated Coolify API client (`COOLIFY_API_URL`/`COOLIFY_API_TOKEN`):
+    create store → deploy the Vula image with env (PORT, DB_PATH,
+    generated per-store JWT_SECRET + the registry CONTROL_PLANE_TOKEN,
+    APP_URL `https://<slug>.vula-app.co.za`) and a /data volume.
+  - `coolify_uuid`/`deploy_status` columns; "Provision" step in the
+    create flow + "Redeploy" row action + deploy badge; without Coolify
+    config the manual runbook path is unchanged.
+  - The CP stores only its own token — the JWT secret lives in Coolify.
+  - Tests against a mocked Coolify API; deploy runbook updated.
+- [ ] **F3 central office over the fleet** (both repos; tenant internal
+      API v0.3.0 in ~/apps/za-pos)
+  - F3a fleet summary: `GET /api/internal/fleet/summary` (token-
+    guarded) per store — app version, vertical, product count, today's
+    orders/revenue, open tills, low-stock count; CP dashboard tab.
+  - F3b catalogue push: a central catalogue in the CP, pushed to chosen
+    stores via an internal upsert (SKU as the key) — same trust model
+    as the verticals push.
+  - F3c inter-store transfers (IBT): the CP orchestrates source
+    decrement + destination increment over the internal API; both ends
+    write audited stock_movements (reuse `kind 'adjustment'` with
+    `IBT-…` reasons, or add kinds — decide at build; the CHECK rebuild
+    pattern exists).
+- Interplay: tenant P4 (restaurant vertical) adds `restaurant` to this
+  repo's vertical vocabulary when it lands; tenant P2/P3 (returns) run
+  on the za-pos track independently.

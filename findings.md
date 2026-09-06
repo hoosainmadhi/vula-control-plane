@@ -86,3 +86,23 @@ the runtime entry works.
 `last_health_status` was added to the DDL from day one, so no table rebuild
 is needed (optimed had to rebuild `practices` for a CHECK change). If a
 future column needs a CHECK change, mirror optimed's rebuild choreography.
+
+## 2026-09-06 — fleet planning session (F1–F3 planned, no code)
+
+- **Fleet state verified from the registry** (`data/control-plane.db`,
+  read-only): 5 stores, all `active` / health `up` / config `ok` —
+  brake-bolt-spares (spares, 3 tills), builders-hardware (hardware, 3),
+  everyday-retail (general, 25), medisave-pharmacy (pharmacy, 5),
+  urban-threads (clothing, 2). No gaps to register.
+- **Owner decisions:** full fleet roadmap phased — F1 CP ops hardening,
+  F2 Coolify auto-provisioning, F3 central office over the fleet —
+  planned into the planning files now, implemented later (same pattern
+  as the tenant's P1–P7 set).
+- **F2 prerequisite:** vula-app.co.za is not registered yet (see
+  tidbits) — the wildcard DNS must exist before auto-provisioning can
+  go live; the phase is env-gated so the panel works without it.
+- **F3 pulls tenant work:** internal-API v0.3.0 in ~/apps/za-pos (fleet
+  summary, catalogue upsert, IBT stock in/out). The tenant repo carries
+  a cross-reference in its task_plan.md so the workstream isn't lost.
+- **Uncommitted tree:** frontend components + CONTEXT.md batch in this
+  repo — settle before F1 starts.
