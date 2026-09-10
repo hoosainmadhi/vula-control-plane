@@ -2,6 +2,37 @@
 
 > Prioritised for the next workspace. ~~Struck~~ items are done.
 
+## Deferred from the licensing work (2026-09-10)
+
+- **Billing recording (L3)** — invoices, payments, mark-paid. `paid_through` is a
+  hand-typed date today, so there is no payment history or dunning trail. This is
+  the next functional gap.
+- **Feature enforcement (L4)** — a plan's feature set is *informational* right now:
+  nothing is gated, so a Starter company can use every Enterprise feature. Needs
+  `requireFeature(key)` (402), the sales gate after grace, and the register states.
+- **Head Office entitlement (L5)** — the panel should gate `multi_store`.
+- **Store telemetry** — app/schema/config version, heartbeat, per-terminal
+  last-seen, sync events. Without it the SPOG's Version / Sync / terminal-online /
+  Diagnostics fields have no data and would be designed twice.
+- **Plan deactivation UI** — `plans.is_active` exists with no toggle.
+- **Audit trail (§38)** — every privileged action (push, pause, licence, rotate,
+  support session) is currently unattributed.
+- **Lease key rotation** — `keyId` is in the claims and the store records it, but
+  there is no rotation flow or key set.
+- **Enforcement against a customer-hosted container** — asymmetric signing binds
+  only where the vendor hosts the container; a customer with root can swap the
+  public key. Recorded as an accepted limitation in `za-pos` `findings.md`.
+
+## Struck / reassigned from the fleet set (2026-09-10)
+
+- ~~F3a fleet summary on the CP~~ **STRUCK** — it planned a control-plane dashboard
+  carrying product count, orders/revenue, open tills and low-stock. The developer
+  control plane must not carry business metrics (§1, §8, §40); that dashboard is the
+  merchant's Head Office, and it already exists there.
+- **F3b catalogue push / F3c IBT** — flagged as **belonging to Head Office**, not the
+  CP. Both are business functions on business data, and `za-pos/head-office` already
+  implements them. Revisit before building a second copy here.
+
 ## Next workspace — fleet phase set F1–F3 (planned 2026-09-06)
 
 Full roadmap in `task_plan.md` → "Phase set (planned 2026-09-06):

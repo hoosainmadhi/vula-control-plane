@@ -1,20 +1,28 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   HeartPulse,
   KeyRound,
   Loader2,
   Pencil,
   Rocket,
+  Trash2,
+  X,
+  Search,
   ToggleLeft,
   ToggleRight,
 } from 'lucide-react';
 import { api, ApiError } from '../api';
 import ErrorBox from '../components/ErrorBox';
-import IconButton from '../components/IconButton';
 import Modal from '../components/Modal';
 import Spinner from '../components/Spinner';
-import StatusBadge, { HealthDot, STORE_COLORS, VERTICAL_COLORS } from '../components/StatusBadge';
+import StatusBadge, {
+  CONFIG_COLORS,
+  HealthDot,
+  STORE_COLORS,
+  VERTICAL_COLORS,
+} from '../components/StatusBadge';
 import type {
+  ConfigStatus,
   CreateStoreResponse,
   HealthOutcome,
   HealthStatus,
@@ -24,6 +32,7 @@ import type {
   StoreFormValues,
   StoreStatus,
   StoreVertical,
+  Company,
 } from '../types';
 
 const EMPTY_FORM: StoreFormValues = {
@@ -34,6 +43,7 @@ const EMPTY_FORM: StoreFormValues = {
   baseUrl: '',
   terminalCount: '1',
   controlPlaneToken: '',
+  companyId: '',
 };
 
 type NoticeKind = 'ok' | 'error';
@@ -62,6 +72,12 @@ const STATUS_LABELS: Record<StoreStatus, string> = {
   paused: 'Paused',
 };
 
+const CONFIG_LABELS: Record<ConfigStatus, string> = {
+  ok: 'Config pushed',
+  failed: 'Push failed',
+  pending: 'Never pushed',
+};
+
 /** Store-type labels: short for chips, fuller for the form select (title = full). */
 const VERTICAL_LABELS: Record<StoreVertical, string> = {
   general: 'General',
@@ -79,30 +95,82 @@ const VERTICAL_OPTIONS: Array<{ value: StoreVertical; label: string }> = [
   { value: 'pharmacy', label: 'Pharmacy & wellness' },
 ];
 
-const MAX_CHIPS = 12;
+// --- Terminal roster ---------------------------------------------------------
 
-function TerminalChips({ store }: { store: Store }) {
-  const chips = Array.from({ length: store.terminalCount }, (_, i) => i + 1);
-  const visible = chips.slice(0, MAX_CHIPS);
+/**
+ * Every configured till, laid out in a wrapping grid. Deliberately unbounded:
+ * a store with 25 tills must show all 25, not a truncated chip row.
+ */
+function TerminalRoster({ store }: { store: Store }) {
   const configured = store.lastConfigStatus === 'ok';
+  const tills = Array.from({ length: store.terminalCount }, (_, i) => i + 1);
   return (
-    <div className="flex max-w-[240px] flex-wrap gap-1">
-      {visible.map((till) => (
+    <div className="flex flex-wrap gap-1">
+      {tills.map((till) => (
         <span
           key={till}
-          title={configured ? `Till ${till} — configured` : `Till ${till} — pending`}
-          className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+          title={`Till ${till} — ${configured ? 'configured' : 'pending'}`}
+          className={`flex h-7 w-9 items-center justify-center rounded-md text-[11px] font-bold tabular-nums ${
             configured ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
           }`}
         >
           {till}
         </span>
       ))}
-      {store.terminalCount > MAX_CHIPS && (
-        <span className="inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
-          +{store.terminalCount - MAX_CHIPS}
-        </span>
-      )}
+    </div>
+  );
+}
+
+// --- Small building blocks ---------------------------------------------------
+
+function ActionButton({
+  icon: Icon,
+  label,
+  onClick,
+  className = 'border-slate-200 text-slate-600 hover:bg-slate-50',
+  title,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  onClick: () => void;
+  className?: string;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title ?? label}
+      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${className}`}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </button>
+  );
+}
+
+function SummaryTile({
+  label,
+  value,
+  tone = 'slate',
+}: {
+  label: string;
+  value: string | number;
+  tone?: 'slate' | 'green' | 'amber' | 'red' | 'brand';
+}) {
+  const tones: Record<string, string> = {
+    slate: 'text-slate-900',
+    green: 'text-green-600',
+    amber: 'text-amber-600',
+    red: 'text-red-600',
+    brand: 'text-brand-600',
+  };
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5">
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+        {label}
+      </div>
+      <div className={`mt-0.5 text-lg font-black tabular-nums ${tones[tone]}`}>{value}</div>
     </div>
   );
 }
@@ -113,6 +181,8 @@ interface FormModalProps {
   modal: Exclude<ModalState, null>;
   saving: boolean;
   error: string | null;
+  /** Merchants available to attach this store to. */
+  companies: Company[];
   onClose: () => void;
   onSubmit: (values: StoreFormValues) => void;
 }
@@ -122,7 +192,7 @@ const inputCls =
 
 const labelCls = 'mb-1 block text-sm font-semibold text-slate-700';
 
-function StoreFormModal({ modal, saving, error, onClose, onSubmit }: FormModalProps) {
+function StoreFormModal({ modal, saving, error, companies, onClose, onSubmit }: FormModalProps) {
   const editing = modal.mode === 'edit' ? modal.store : null;
   const [form, setForm] = useState<StoreFormValues>(() =>
     editing
@@ -134,6 +204,7 @@ function StoreFormModal({ modal, saving, error, onClose, onSubmit }: FormModalPr
           baseUrl: editing.baseUrl,
           terminalCount: String(editing.terminalCount),
           controlPlaneToken: '',
+          companyId: editing.companyId === null ? '' : String(editing.companyId),
         }
       : EMPTY_FORM,
   );
@@ -193,6 +264,25 @@ function StoreFormModal({ modal, saving, error, onClose, onSubmit }: FormModalPr
               Type changes reach the store on the next push
             </p>
           )}
+        </div>
+        <div>
+          <label className={labelCls}>Company</label>
+          <select
+            value={form.companyId}
+            onChange={(e) => setForm({ ...form, companyId: e.target.value })}
+            className={inputCls}
+          >
+            <option value="">Unassigned</option>
+            {companies.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name} — {c.planName} ({c.storesUsed}/{c.maxStores} stores)
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-slate-400">
+            The merchant this store belongs to. Its plan caps how many stores you can add and how many tills
+            each may run.
+          </p>
         </div>
         <div>
           <label className={labelCls}>VAT registration no.</label>
@@ -323,6 +413,11 @@ export default function StoresPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [query, setQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | StoreStatus>('all');
+  const [newToken, setNewToken] = useState<{ storeName: string; token: string } | null>(null);
   const [adminPassword, setAdminPassword] = useState<{
     storeName: string;
     tempPassword: string;
@@ -331,8 +426,12 @@ export default function StoresPage() {
 
   const load = useCallback(async (): Promise<void> => {
     try {
-      const data = await api<Store[]>('/stores');
+      const [data, companyList] = await Promise.all([
+        api<Store[]>('/stores'),
+        api<Company[]>('/companies'),
+      ]);
       setStores(data);
+      setCompanies(companyList);
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof ApiError ? err.message : 'Failed to load stores');
@@ -357,6 +456,7 @@ export default function StoresPage() {
         vertical: values.vertical,
         baseUrl: values.baseUrl.trim(),
         terminalCount: Number(values.terminalCount),
+        companyId: values.companyId === '' ? null : Number(values.companyId),
       };
       if (modal?.mode === 'edit') {
         await api<Store>(`/stores/${modal.store.id}`, { method: 'PUT', body });
@@ -377,6 +477,11 @@ export default function StoresPage() {
             ? `Store ${store.slug} created; Till 1..${store.terminalCount} pushed`
             : `Store ${store.slug} created but the first push failed: ${res.firstPush?.error ?? 'unknown error'}`,
         );
+        // Reveal a generated token exactly once — otherwise the operator has no
+        // way to put it into the deployment, and every push fails on mismatch.
+        if (res.generatedControlPlaneToken) {
+          setNewToken({ storeName: store.name, token: res.generatedControlPlaneToken });
+        }
       }
       setModal(null);
       await load();
@@ -393,7 +498,15 @@ export default function StoresPage() {
       await action();
       await load();
     } catch (err) {
-      notify('error', err instanceof ApiError ? err.message : 'Action failed');
+      // Always show the underlying reason: a bare 'Action failed' tells the
+      // operator nothing about what to do next.
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Action failed';
+      notify('error', message);
     } finally {
       setBusyId(null);
     }
@@ -433,6 +546,21 @@ export default function StoresPage() {
     }
   };
 
+  const removeStore = async (store: Store): Promise<void> => {
+    setNotice(null);
+    try {
+      const res = await api<{ ok: boolean; message: string }>(`/stores/${store.id}`, {
+        method: 'DELETE',
+      });
+      setConfirmDeleteId(null);
+      notify('ok', res.message);
+      await load();
+    } catch (err) {
+      setConfirmDeleteId(null);
+      notify('error', err instanceof ApiError ? err.message : 'Remove failed');
+    }
+  };
+
   const togglePause = (store: Store): Promise<void> =>
     runAction(store, async () => {
       await api<Store>(`/stores/${store.id}/${store.status === 'active' ? 'pause' : 'resume'}`, {
@@ -440,6 +568,33 @@ export default function StoresPage() {
       });
       notify('ok', store.status === 'active' ? `${store.name} paused` : `${store.name} resumed`);
     });
+
+  // Fleet totals — the vendor's at-a-glance view of everything they operate.
+  const summary = useMemo(
+    () => ({
+      total: stores.length,
+      active: stores.filter((s) => s.status === 'active').length,
+      paused: stores.filter((s) => s.status === 'paused').length,
+      up: stores.filter((s) => s.lastHealthStatus === 'up').length,
+      down: stores.filter((s) => s.lastHealthStatus === 'down').length,
+      unknown: stores.filter((s) => s.lastHealthStatus === 'unknown').length,
+      terminals: stores.reduce((n, s) => n + s.terminalCount, 0),
+    }),
+    [stores],
+  );
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return stores.filter((s) => {
+      if (statusFilter !== 'all' && s.status !== statusFilter) return false;
+      if (!q) return true;
+      return (
+        s.name.toLowerCase().includes(q) ||
+        s.slug.toLowerCase().includes(q) ||
+        s.baseUrl.toLowerCase().includes(q)
+      );
+    });
+  }, [stores, query, statusFilter]);
 
   if (loading) {
     return <Spinner label="Loading stores…" />;
@@ -460,11 +615,51 @@ export default function StoresPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
+      {/* Fleet summary */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <SummaryTile label="Stores" value={summary.total} />
+        <SummaryTile label="Active" value={summary.active} tone="green" />
+        <SummaryTile label="Paused" value={summary.paused} tone="amber" />
+        <SummaryTile label="Healthy" value={summary.up} tone="green" />
+        <SummaryTile label="Unreachable" value={summary.down} tone="red" />
+        <SummaryTile label="Terminals" value={summary.terminals} tone="brand" />
+      </div>
+
+      {/* Toolbar */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm text-slate-400">
-          {stores.length} store{stores.length === 1 ? '' : 's'} — each row is one Vula deployment
-        </p>
+        <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative sm:max-w-xs sm:flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search name, slug or domain"
+              className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm focus:border-brand-500 focus:outline-none"
+            />
+          </div>
+          <div className="flex gap-1 rounded-lg bg-slate-100 p-1">
+            {(
+              [
+                ['all', 'All'],
+                ['active', 'Active'],
+                ['paused', 'Paused'],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                onClick={() => setStatusFilter(value)}
+                className={`rounded-md px-3 py-1.5 text-xs font-bold transition ${
+                  statusFilter === value
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         <button
           onClick={() => {
             setFormError(null);
@@ -510,133 +705,271 @@ export default function StoresPage() {
             </button>
           </div>
         </div>
+      ) : visible.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+          No stores match “{query}”.
+        </div>
       ) : (
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-          <table className="w-full text-sm">
-            <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-400">
-              <tr>
-                <th className="px-4 py-3">Store</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Domain</th>
-                <th className="px-4 py-3">Terminals</th>
-                <th className="px-4 py-3">Health</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {stores.map((store) => (
-                <tr key={store.id} className="align-top hover:bg-slate-50">
-                  <td className="px-4 py-3">
-                    <div className="font-bold text-slate-900">{store.name}</div>
-                    <p className="font-mono text-xs text-slate-400">{store.slug}</p>
-                  </td>
-                  <td className="px-4 py-3">
-                    <StatusBadge
-                      status={store.vertical}
-                      colors={VERTICAL_COLORS}
-                      label={VERTICAL_LABELS[store.vertical]}
-                    />
-                  </td>
-                  <td className="px-4 py-3">
-                    <a
-                      href={store.baseUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      title={store.baseUrl}
-                      className="break-all font-mono text-xs text-brand-600 hover:underline"
-                    >
-                      {store.baseUrl.replace(/^https?:\/\//, '')}
-                    </a>
-                  </td>
-                  <td className="px-4 py-3">
-                    <TerminalChips store={store} />
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="flex items-center gap-2">
-                      <HealthDot status={store.lastHealthStatus} />
-                      <span className="text-xs font-semibold text-slate-600">
-                        {HEALTH_LABELS[store.lastHealthStatus]}
+        <div className="space-y-3">
+          {visible.map((store) => {
+            const busy = busyId === store.id;
+            const terminalsPushed = store.terminalCount > 0 && store.lastConfigStatus === 'ok';
+
+            return (
+              <div
+                key={store.id}
+                className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+              >
+                <div className="flex flex-col gap-4 px-5 py-4 xl:flex-row xl:items-start xl:gap-8">
+                  {/* Identity */}
+                  <div className="min-w-0 xl:w-72 xl:shrink-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className="truncate text-base font-bold text-slate-900"
+                        title={store.name}
+                      >
+                        {store.name}
                       </span>
-                    </span>
-                    {store.lastHealthStatus !== 'unknown' && (
-                      <p className="mt-1 text-xs text-slate-400">{fmtTime(store.lastHealthAt)}</p>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    <StatusBadge
-                      status={store.status}
-                      colors={STORE_COLORS}
-                      label={STATUS_LABELS[store.status]}
-                    />
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {busyId === store.id ? (
-                      <span className="inline-flex justify-end">
-                        <IconButton
-                          icon={Loader2}
-                          title="Working…"
-                          onClick={() => undefined}
-                          busy
+                      <StatusBadge
+                        status={store.status}
+                        colors={STORE_COLORS}
+                        label={STATUS_LABELS[store.status]}
+                      />
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2">
+                      <span
+                        className="truncate font-mono text-xs text-slate-400"
+                        title={store.slug}
+                      >
+                        {store.slug}
+                      </span>
+                      <StatusBadge
+                        status={store.vertical}
+                        colors={VERTICAL_COLORS}
+                        label={VERTICAL_LABELS[store.vertical]}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Details as labelled columns */}
+                  <div className="grid flex-1 grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 xl:grid-cols-5">
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Company
+                      </div>
+                      <div className="mt-0.5 truncate text-xs font-semibold text-slate-700" title={store.companyName || 'Unassigned'}>
+                        {store.companyName || 'Unassigned'}
+                      </div>
+                      <div className="text-[11px] text-slate-400">{store.planName}</div>
+                    </div>
+
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Domain
+                      </div>
+                      <a
+                        href={store.baseUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={store.baseUrl}
+                        className="mt-0.5 block truncate font-mono text-xs text-brand-600 hover:underline"
+                      >
+                        {store.baseUrl.replace(/^https?:\/\//, '')}
+                      </a>
+                    </div>
+
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Health
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                        <HealthDot status={store.lastHealthStatus} />
+                        {HEALTH_LABELS[store.lastHealthStatus]}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        {store.lastHealthStatus === 'unknown' ? 'Never checked' : fmtTime(store.lastHealthAt)}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Config
+                      </div>
+                      <div className="mt-0.5">
+                        <StatusBadge
+                          status={store.lastConfigStatus}
+                          colors={CONFIG_COLORS}
+                          label={CONFIG_LABELS[store.lastConfigStatus]}
                         />
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-slate-400">
+                        {fmtTime(store.lastConfigAt)}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        VAT no.
+                      </div>
+                      <div className="mt-0.5 font-mono text-xs text-slate-600">
+                        {store.vatRegNo || '—'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex flex-wrap gap-1.5 xl:shrink-0 xl:justify-end">
+                    {busy ? (
+                      <span className="inline-flex items-center gap-2 py-1.5 text-xs font-semibold text-slate-400">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        Working…
                       </span>
                     ) : (
-                      <span className="inline-flex gap-1.5">
-                        <IconButton
+                      <>
+                        <ActionButton
                           icon={Pencil}
-                          title="Edit store"
+                          label="Edit"
                           onClick={() => {
                             setFormError(null);
                             setModal({ mode: 'edit', store });
                           }}
-                          className="bg-slate-100 text-slate-700 hover:bg-slate-200"
                         />
-                        <IconButton
+                        <ActionButton
                           icon={Rocket}
-                          title="Push terminals now"
+                          label="Push"
+                          title="Push Till 1..N to this store now"
                           onClick={() => void pushNow(store)}
-                          className="bg-slate-100 text-slate-600 hover:bg-slate-200"
                         />
-                        <IconButton
+                        <ActionButton
                           icon={HeartPulse}
-                          title="Check health"
+                          label="Check"
+                          title="Check store health"
                           onClick={() => void healthCheck(store)}
-                          className="bg-sky-50 text-sky-700 hover:bg-sky-100"
+                          className="border-sky-200 text-sky-700 hover:bg-sky-50"
                         />
-                        <IconButton
+                        <ActionButton
                           icon={KeyRound}
-                          title="Get store admin password"
+                          label="Admin"
+                          title="Issue a temporary store admin password"
                           onClick={() => void getAdminPassword(store)}
-                          className="bg-violet-50 text-violet-700 hover:bg-violet-100"
+                          className="border-violet-200 text-violet-700 hover:bg-violet-50"
                         />
-                        <IconButton
+                        <ActionButton
                           icon={store.status === 'active' ? ToggleRight : ToggleLeft}
-                          title={store.status === 'active' ? 'Pause store' : 'Resume store'}
+                          label={store.status === 'active' ? 'Pause' : 'Resume'}
                           onClick={() => void togglePause(store)}
                           className={
                             store.status === 'active'
-                              ? 'bg-green-50 text-green-700 hover:bg-green-100'
-                              : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                              ? 'border-amber-200 text-amber-700 hover:bg-amber-50'
+                              : 'border-green-200 text-green-700 hover:bg-green-50'
                           }
                         />
-                      </span>
+                        {confirmDeleteId === store.id ? (
+                          <>
+                            <ActionButton
+                              icon={Trash2}
+                              label="Confirm remove"
+                              onClick={() => void removeStore(store)}
+                              className="border-red-600 bg-red-600 text-white hover:bg-red-500"
+                            />
+                            <ActionButton
+                              label="Cancel"
+                              icon={X}
+                              onClick={() => setConfirmDeleteId(null)}
+                            />
+                          </>
+                        ) : (
+                          <ActionButton
+                            icon={Trash2}
+                            label="Remove"
+                            title="Remove this store from the control plane (pause it first)"
+                            onClick={() => setConfirmDeleteId(store.id)}
+                            className="border-red-200 text-red-600 hover:bg-red-50"
+                          />
+                        )}
+                      </>
                     )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </div>
+                </div>
+
+                {/* Entitlement needs attention (over cap, overdue, unassigned) */}
+                {store.entitlementNote ? (
+                  <div className="border-t border-amber-100 bg-amber-50/60 px-5 py-2 text-[11px] font-medium text-amber-800">
+                    {store.entitlementNote}
+                  </div>
+                ) : null}
+
+                {/* Terminal roster — every till, laid out across the full card width */}
+                <div className="border-t border-slate-100 bg-slate-50/50 px-5 py-3">
+                  <div className="mb-2 flex items-center gap-3">
+                    <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Terminals
+                    </span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+                        terminalsPushed ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-600'
+                      }`}
+                    >
+                      {store.terminalCount} configured
+                    </span>
+                  </div>
+                  <TerminalRoster store={store} />
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
+
+      <p className="text-xs text-slate-400">
+        Each card is one Vula store deployment. Terminal tiles show Till 1…N as pushed to the store;
+        green means the last config push succeeded.
+      </p>
 
       {modal && (
         <StoreFormModal
           modal={modal}
           saving={saving}
           error={formError}
+          companies={companies}
           onClose={() => setModal(null)}
           onSubmit={(values) => void submitForm(values)}
         />
+      )}
+
+      {newToken && (
+        <Modal title={`Control-plane token — ${newToken.storeName}`} onClose={() => setNewToken(null)}>
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              The control plane generated this token. It is shown <strong>once</strong> and is never
+              returned again — copy it into the deployment's env as{' '}
+              <code className="rounded bg-slate-100 px-1 font-mono text-xs">CONTROL_PLANE_TOKEN</code>,
+              then restart the store. Until that matches, every push and health check will fail with
+              &ldquo;Invalid control plane token&rdquo;.
+            </p>
+            <div className="rounded-lg bg-slate-900 px-4 py-3 text-center font-mono text-sm tracking-wider text-emerald-300 break-all">
+              {newToken.token}
+            </div>
+            <p className="text-xs text-slate-400">
+              If the deployment already exists with its own token, delete this store record and add it
+              again pasting that token instead.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => void navigator.clipboard.writeText(newToken.token).catch(() => undefined)}
+                className="rounded-lg px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-100"
+              >
+                Copy
+              </button>
+              <button
+                onClick={() => setNewToken(null)}
+                className="rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-brand-700"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {adminPassword && (

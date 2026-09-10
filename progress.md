@@ -2,10 +2,253 @@
 
 Dated log of the build.
 
+## 2026-09-10 — the fleet is self-describing: wrong-kind registrations refused
+
+- Owner reported two failing rows:
+  - `HM Spares Head Office` (panel) showing **Down** — its URL was
+    `https://localhost:3250`, i.e. `https://` (TLS) against a plain-HTTP
+    deployment, **and** 3250 is a *store*, not a Head Office.
+  - `HM Spares CT` (store) failing push — the duplicate of `urban-threads-cpt` on
+    3252 with a control-plane-generated token.
+- **Both apps already identify themselves on their PUBLIC `/health`**: a store
+  answers `app: "vula"`, a Head Office answers `service: "vula-head-office"`. So
+  `probeAppKind()` now reads that before registering anything, and:
+  - a **store** row pointed at a Head Office is refused (`409 wrong_app_kind`),
+  - a **Head Office** row pointed at a store is refused — the mistake that was made.
+  - Only a *definitive* mismatch is refused: an unreachable URL (or one that answers
+    without identifying) is allowed, because the registry row is normally created
+    before the container is deployed. That keeps create-then-deploy working.
+- **Stopped prefilling `https://`** in the Head Office form — that prefill is how a
+  local `http://localhost:3250` became a TLS URL. The field is now empty with an
+  example placeholder.
+- Cleaned up the two non-functional rows (both registry-only; deployments and data
+  untouched, backup at `/tmp/control-plane.db.before-cleanup`). The fleet is now 8
+  stores + 1 Head Office, all healthy.
+- Tests: **95 control plane (8 suites)**, +4 covering the identity guards and that
+  an unreachable deployment still registers.
+
+## 2026-09-10 — store teardown added; duplicate-URL guard; one-time token reveal
+
+- Owner reported `Push failed: Invalid control plane token` against "HM Spares". Two
+  rows share that name, which is the confusion:
+  - `hm-spares` (id 9, :3250) — tokens match, push **succeeds** (verified live).
+  - `hm-spares-ct` (id 12, :3252) — the test row created earlier: it duplicates the
+    `urban-threads-cpt` deployment and carries a control-plane-generated token the
+    store never had, so it can never authenticate.
+- **Store teardown added** (`DELETE /api/stores/:id`), the F1 item, with the
+  pause-first policy: an active store is refused with `409 store_active` and told to
+  pause first, so a live till cannot vanish from the fleet in one click. Removal
+  deletes the registry row only — the deployment and its data are untouched — and
+  the URL becomes available for re-registration. UI gains a two-step `Remove`
+  action beside Pause/Resume.
+- **One deployment, one registry row** is now enforced for stores and panels: a
+  second row on an already-registered URL is refused with `409 base_url_in_use`,
+  naming the existing store. (The check runs after input validation, so a malformed
+  token still returns 400 rather than being masked.) This would have caught
+  `hm-spares-ct` at creation.
+- **A generated control-plane token is revealed once**, on create, with instructions
+  to install it as `CONTROL_PLANE_TOKEN`. Previously it was generated and discarded,
+  leaving the operator no way to make the push work. List and detail still never
+  return it.
+- **Action errors now surface the real reason.** A fallback swallowed any non-ApiError
+  into a useless "Action failed"; the underlying message is now always shown.
+- Tests: **91 control plane (8 suites)**, +4 for teardown and +1 for the URL guard.
+
+## 2026-09-10 — registry rebuild bug fixed, live data repaired, regression guard added
+
+- Owner reported `no such table: main.plans_old` when creating a company. **My bug**,
+  introduced with the `once-off` period migration, and it had corrupted live data.
+- Cause: the rebuild renamed `plans` → `plans_old` **with foreign keys enabled**.
+  SQLite then (a) rewrote `companies.plan_id` to reference `"plans_old"`, so dropping
+  the temp table left writes failing against a non-existent table, and (b) fired
+  `ON DELETE SET NULL` on the drop, **wiping Urban Threads' plan assignment**.
+- Amplified by five duplicate `tsx watch server.ts` processes re-running the
+  migration on every file save. Reduced to a single server.
+- Fixed with SQLite's documented procedure: `foreign_keys = OFF` and
+  `legacy_alter_table = ON` set outside the transaction, and create-new → copy →
+  drop-old → rename order. The migration now also **heals** a database already
+  damaged by the faulty version and is idempotent.
+- Live registry backed up, healed, plan assignment restored, licences re-pushed to
+  the three branches and the panel. Verified: company create/edit works, all four
+  apps report `plan=multi-store`, no `plans_old` references remain.
+- Added `src/__tests__/migration.test.ts` (+7) which would have caught it: it boots
+  the migration against a pre-`once-off` database with real data and asserts the FK
+  is intact, the assignment survives, and a damaged database is repaired.
+- Tests: **86 control plane (8 suites)**; za-pos suite untouched at 277.
+
+## 2026-09-10 — paid-through explained, and guarded deletion added
+
+- Owner asked two things:
+  1. **"What is New company → Paid through?"** It is the date a subscription is paid
+     up to, and it is the single input behind licence state: active before it, past
+     due for the grace window after it, then suspended with new sales refused. It
+     also caps `maxOfflineUntil`, so it bounds how long a disconnected till may keep
+     trading. Relabelled **"Paid up to"** with an inline explanation, since "paid
+     through" is accounting shorthand.
+  2. **"Unable to delete a company — intentional?"** No: **no delete route existed at
+     all**, for companies or panels. But a blind delete would have been wrong anyway —
+     the schema cascades `panels` and nulls `stores.company_id`, so it would silently
+     delete a merchant's Head Office and strip its branches' plan and licence.
+     Added `DELETE /api/companies/:id`, refused with **409 `company_in_use`** while
+     the company owns stores or a Head Office, naming exactly what blocks it and
+     pointing at suspension as the history-preserving alternative. Added
+     `DELETE /api/panels/:id` so the guard is satisfiable (removes the registration
+     only, never the deployment). Both use inline two-step confirmation rather than
+     a native dialog, which some browsers suppress.
+- Live check on the real merchant: *"Urban Threads Retail Group still owns 3 stores
+  and 1 Head Office. Reassign or remove those first… To stop trading without losing
+  history, suspend it instead."*
+- Tests: **79 control plane (7 suites)**, +5 covering delete guards and that
+  detaching a store leaves it intact and unassigned rather than cascading it away.
+
+## 2026-09-10 — pricing made explicit, custom plans, and one-step client onboarding
+
+- Owner raised three things:
+  1. **"New Head Office → Merchant → dropdown, why?"** A Head Office must belong to
+     exactly one company, so the form needs to know which. But it was a dead end for a
+     brand-new client — you had to leave and create the company first. The modal now
+     offers **"+ New merchant"** inline (name, slug, plan) and creates the company
+     before the Head Office, so onboarding a client is one screen. When no merchants
+     exist yet it opens straight into that mode rather than showing an empty dropdown.
+  2. **"Plans price — per month or once off? Be explicit."** It was genuinely
+     ambiguous: the table showed a bare number. `billing_period` now supports
+     `monthly` | `annual` | **`once-off`** (added with a `plans` table rebuild, since
+     SQLite cannot widen a CHECK in place), the Plans page has a "Billed how?"
+     selector, and every price display is suffixed "per month" / "per year" /
+     "once-off". A test asserts an invalid period is refused. Documented that the
+     control plane does not charge anyone — the price list exists so a quote and an
+     invoice raised elsewhere agree (billing/payment recording is L3, unbuilt).
+  3. **"Can we not create our own Plans?"** The API allowed it but the UI did not.
+     There is now a **New plan** flow (code, name, store cap, till ceiling, features,
+     price + period), so the seeded four are a starting point rather than a closed
+     list.
+- Tests: **74 control plane (7 suites)**; typecheck and build clean.
+
+## 2026-09-10 — naming settled; Companies, Plans and Head Office creation added
+
+- **Naming (owner asked, two planes were being confused):** the vendor app at `:3240`
+  is the **Vula Control Plane**; the merchant app at `:3260` is **Head Office**.
+  Deliberately asymmetric, because "control plane" means the fleet-management layer
+  and only the vendor app is one — two names both ending in "CP" preserve the
+  ambiguity. Recorded in `CONTEXT.md` §2a.
+- **Two real gaps the owner hit, both closed:**
+  - **No way to set or upgrade a company's plan.** There was no UI at all for
+    companies or plans, only API routes. Added a **Companies** page (create a
+    merchant, set/upgrade its plan, set paid-through or a trial, manual suspend;
+    shows stores used vs the cap, head-office count, and a billing-attention tile)
+    and a **Plans** page (view and edit each tier's store cap, per-store till
+    ceiling, feature set and price).
+  - **No way to create a Head Office.** The panels page listed and managed them but
+    had no create flow. Added **New Head Office** — pick the merchant, name, slug
+    and URL; the control plane issues the token and delivers the company licence.
+- **Stores can be assigned to a merchant** from the store modal (on create and
+  edit), so a new branch joins a company immediately and the plan's cap applies.
+- **Navigation** (the app had none) is now **Stores · Head Offices · Companies ·
+  Plans**, with the environment always visible.
+- Verified live end to end: created PharmaCrest on Starter → first store accepted →
+  second store **refused** with `store_cap_reached` and an upgrade message →
+  upgraded the company to Multi-Store → second store then accepted. Test rows were
+  removed afterwards so the fleet stays honest.
+- Tests still green: **74 control plane (7 suites)**, **277 za-pos (28 suites)**.
+
+## 2026-09-10 — companies, plans and the Company Control Panel become fleet members
+
+- Owner asked why the control plane at `:3240` showed nothing about the merchant's
+  multi-store panel. Answer: no company entity existed, and the panel app was
+  referenced nowhere in this repo (one incidental "L5 Head Office" line). Fixed.
+- **New registry tables:** `plans` (four SA-retail tiers seeded — Starter 1 store /
+  2 tills, Retail 1/8, Multi-Store 10/25, Enterprise 50/99 — every value editable),
+  `companies` (the merchant: the unit of billing, owning both branches and panel),
+  `panels` (one Company Control Panel per merchant), and `stores.company_id`.
+  Auto-migrated on the existing 8-row registry.
+- **`src/services/subscriptions.ts`:** billing state is DERIVED from `paid_through`
+  plus the grace window (active → past_due → suspended), so nothing needs a cron; a
+  manual company suspension is a separate override. Cap checks (`canAddStore`,
+  `canUseTerminals`) run at the point of action.
+- **Caps fail loudly, never silently:** over-cap store creation and terminal pushes
+  return **402** with an upgrade message and a machine-readable code
+  (`store_cap_reached`, `terminal_cap_exceeded`). Unassigned stores are not policed.
+- **Licence claims are finally populated.** L1 left `companyId`/`planCode`/
+  `features` inert; `issueLicence` now receives the resolved entitlement, so branch
+  licences carry the real company, plan, feature set and paid-through date.
+- **Routes:** `/api/plans`, `/api/companies` (CRUD), `/api/panels` (register, edit,
+  health, push licence). Store list/detail now expose company, plan and billing
+  state; a store can be reassigned with `PUT /stores/:id { companyId }`.
+- **Panel side (`za-pos/head-office`):** a new token-guarded `/api/internal/status`
+  (version, environment, branch count, licence state) and `/api/internal/licence`,
+  plus a `panel_licence` table and ES256 verification with the control plane's
+  public key. The panel is verified as `app: company-control-panel`.
+- **UI:** real navigation (it had none) — Stores · Panels — with the environment
+  always visible; a new Panels page (reachable/unreachable/licence-attention tiles,
+  per-panel health/version/licence, Diagnostics and Push Licence); store cards gain
+  a **Company** column and surface entitlement notes (over cap, overdue, unassigned).
+- **Boundary asserted, not commented:** a test walks the JSON of `/api/stores`,
+  `/api/panels`, `/api/companies` and `/api/plans` and fails if any field name looks
+  like trading data, and another asserts the control-plane token never leaves the
+  server. §40 requires the boundary at the API, so that is where it is tested.
+- **Drift fixed:** `schema.sql` now mirrors the code DDL (it was missing `vertical`,
+  the four `licence_*` columns and all three new tables); stale "5 stores" references
+  corrected to 8; **F3a struck** — it planned a control-plane dashboard with product
+  count, orders/revenue, open tills and low-stock, which the SPOG spec forbids here.
+- Tests: **74 green (7 suites)**, up from 52 (+22 in `companies.test.ts`); the panel
+  suite is 20. `tsc --noEmit` and the frontend build clean.
+
+## 2026-09-10 — licence signing: the control plane becomes the authority (L1)
+
+- Owner approved a subscription/licensing plan; **L1 (asymmetric licence
+  foundation)** shipped. Motivation: the store used to sign its own lease with
+  its own `JWT_SECRET`, so a tenant could grant itself a subscription.
+- `src/services/licenceSigner.ts`: ES256/P-256 keypair from `LEASE_PRIVATE_KEY`
+  (or `LEASE_KEY_FILE`), `keyId` for rotation, monotonic per-store `sequence`,
+  and a real `maxOfflineUntil = min(now + LICENCE_OFFLINE_DAYS, paidThrough +
+  LICENCE_GRACE_DAYS)` clamp. Production **refuses to start** without a private
+  key rather than issue unverifiable licences; dev generates an ephemeral pair
+  with a loud warning.
+- `scripts/generate-licence-key.ts` prints the pair for installation. There is no
+  way to smuggle the private key into a store: stores get only the public key.
+- Delivery: `POST /api/internal/licence` on the store (new `storeClient.pushLicence`),
+  sent on store creation, on every health check, and on demand via
+  `POST /api/stores/:id/licence`. `GET /api/stores/licence/key` publishes the
+  verification key for operators. New registry columns `licence_sequence`,
+  `licence_issued_at`, `licence_push_status`, `licence_pushed_at` (auto-migrated).
+- Tests: `src/__tests__/licence-signer.test.ts` (+10) — verifies what we signed,
+  rejects tampered payloads and signatures and foreign keys, refuses malformed
+  tokens, pins the 64-byte IEEE-P1363 signature the browser needs, and pins the
+  grace clamp. Suite now **52 green (6 suites)**; `tsc --noEmit` and the frontend
+  build clean.
+- Next: L2 companies & plans, L3 billing, L4 feature enforcement, L5 Head Office
+  entitlements.
+
+## 2026-09-10 — fleet view redesigned: cards, full terminal roster, fleet summary
+
+- Owner feedback: the stores list looked "too squashed", and Everyday
+  Retail's **25 terminals showed only 12** (`MAX_CHIPS = 12` silently
+  rendered 12 chips plus a `+13` badge — the rest were unreachable).
+- Replaced the 7-column table with **one full-width card per store** (owner
+  follow-up: single-company cards should span the row rather than sit three
+  per line). Each card is laid out horizontally — identity (name, slug,
+  status and store-type chips), then Domain / Health / Config / VAT as
+  labelled columns, then actions — with the terminal roster on its own
+  full-width strip beneath. Page width raised from `max-w-6xl` to
+  `max-w-[1600px]` to give the roster room.
+- **Terminal roster is now unbounded**: every till renders as a fixed-size
+  numbered tile in a wrapping row, so 25 tills show 25 tiles across the
+  card. Green = last config push succeeded, grey = never pushed. The `+N`
+  overflow badge is gone.
+- Actions are labelled (`Edit`, `Push`, `Check`, `Admin`, `Pause`) rather
+  than five unlabelled icon buttons, so a card is scannable at a glance.
+- Added a **fleet summary strip** (Stores, Active, Paused, Healthy,
+  Unreachable, Terminals) plus **search** (name/slug/domain) and a
+  status filter — a real at-a-glance fleet view.
+- Added the missing favicon link (`/vula-mark.svg`); the CP mark itself
+  was already a vector path, not a font glyph.
+- Tests: 42 green (5 suites); `tsc --noEmit` and the frontend build clean.
+
 ## 2026-09-06 — fleet phase set planned (F1–F3, no code)
 
 - Owner asked to start the control plane and all stores. Fleet verified
-  from the registry DB: 5 stores — brake-bolt-spares (spares, 3 tills),
+  from the registry DB (2026-09-06; the fleet has since grown to 8): 5 stores —
+  brake-bolt-spares (spares, 3 tills),
   builders-hardware (hardware, 3), everyday-retail (general, 25),
   medisave-pharmacy (pharmacy, 5), urban-threads (clothing, 2) — all
   `active`, health `up`, config `ok`. No registration gaps.

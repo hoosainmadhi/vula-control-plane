@@ -34,6 +34,77 @@ implementation `~/apps/optimed-control-plane`. Vocabulary here is _store_
 | control_plane_token | Per-store secret sent as `X-Control-Plane-Token` on every internal-API call. **Supplied at store creation** (64 hex chars — it must match the `CONTROL_PLANE_TOKEN` env already set on the store's container) **or generated** (32-byte hex) when omitted. Stored in the registry, **never returned by the API or shown in the UI** |
 | last_config_status  | `pending` (never pushed) · `ok` (last push succeeded) · `failed` (last push failed). The error message itself is not persisted in v1                                                                                                                                                                                                |
 
+## 2a. Companies, plans and panels (2026-09)
+
+### Naming — two planes, two products
+
+| Port | Name | Audience |
+|---|---|---|
+| 3240 | **Vula Control Plane** | The SaaS vendor. One instance, all clients. |
+| 3260 | **Head Office** | The merchant. One instance per merchant. |
+
+"Control plane" is a term of art for the layer that manages a fleet, and only the
+vendor app is one. The merchant's app is a business application, so naming it a
+control plane is what makes the two confusable in conversation. Do not write
+"SaaS CP" / "Multistore CP" — both end in CP and the ambiguity survives.
+
+
+- **A company is the merchant account** — the unit of billing, and the owner of both
+  the branch stores and the Company Control Panel. It holds a plan, a `paid_through`
+  date and an optional trial. Without it, a plan granting "N stores" has nothing to
+  count against.
+- **A plan grants** a store-count cap, a per-store terminal ceiling, and a feature
+  set. Four tiers are seeded and every value is editable: `starter` (1 store /
+  2 tills), `retail` (1/8), `multi-store` (10/25), `enterprise` (50/99). Operators
+  can also **create their own plans** — the seeded four are a starting point, not a
+  closed catalogue.
+- **A plan's price always carries its recurrence.** `billing_period` is one of
+  `monthly` | `annual` | `once-off`, and the UI never shows a bare number — a figure
+  without its period is not a price. `once-off` means a perpetual licence rather than
+  a subscription. **The control plane does not charge anyone**: the price list exists
+  so a quote and an invoice raised elsewhere agree. Billing/payment recording is L3
+  and unbuilt.
+- **A Head Office belongs to exactly one company**, which is why creating one asks
+  for the merchant. The flow creates the merchant inline when the client is new, so
+  onboarding does not require visiting two screens.
+- **`paid_through` is the date the subscription is paid up to.** It is the single
+  input that drives licence state: before it a company is `active`, after it the
+  account is `past_due` for the grace window, then `suspended` and new sales stop on
+  its stores. It also caps how far ahead `maxOfflineUntil` may be set, so it bounds
+  how long a disconnected till keeps trading. Labelled "Paid up to" in the UI.
+- **The fleet is self-describing.** Both applications identify themselves on their
+  public `/health` — a store answers `app: "vula"`, a Head Office answers
+  `service: "vula-head-office"` — and the control plane probes that before
+  registering a row. A store pointed at a Head Office (or vice versa) is refused as
+  `wrong_app_kind`, because the two are different products and a mismatch can never
+  authenticate. Only a *definitive* mismatch is refused: an unreachable URL is
+  allowed, since a registry row is normally created before its container is
+  deployed.
+- **Deletion is guarded, deliberately.** A company can only be deleted when it owns
+  no stores and no Head Office. The schema cascades a panel and nulls store
+  assignments, so an unguarded delete would silently strip a merchant's Head Office
+  and its branches' entitlement — the refusal names the blockers and points at
+  suspension, which stops trade without losing history. A Head Office row can be
+  removed on its own (that deletes the registration, never the deployment).
+- **Billing state is derived, never stored**: `active` → `past_due` (inside the
+  grace window after `paid_through`) → `suspended` (beyond grace). A manual company
+  `suspension` is a separate operator override. Nothing runs on a schedule.
+- **Caps fail loudly.** Creating a store beyond the cap or pushing more terminals
+  than the plan allows returns **402** with an upgrade message. An unassigned store
+  is not cap-policed, so a store predating companies keeps working.
+- **The Company Control Panel is a managed application in the vendor's fleet.** One
+  per merchant (e.g. `urban-threads-ho.vula-app.co.za`), it is a *separate* app with
+  its own database and its own `ho_users` logins. The control plane **provisions,
+  monitors and licences** it, and the customer reaches it directly at its own URL.
+- **The privacy boundary is absolute, and asserted by tests.** The control plane may
+  know whether an application is functioning; it may never learn how much money it is
+  making. Panel endpoints expose only URL, health, last seen, version, config state,
+  licence state and branch count. Business data (sales, revenue, customers, profit,
+  transaction contents, cash-ups) never passes through this app, and the boundary is
+  enforced at the API rather than in the React tree. The tempting shortcut to avoid
+  is SSO from the control plane into a panel: the control plane links out, it never
+  embeds.
+
 ## 3. Fleet topology
 
 ```

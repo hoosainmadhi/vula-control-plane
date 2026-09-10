@@ -7,10 +7,31 @@ and can reset a store's admin password. House control-plane pattern (see
 `~/apps/common-files/CONTROL-PLANE-SPEC.md`; reference implementation
 `~/apps/optimed-control-plane`).
 
-**Scope (v1):** stores CRUD + terminal provisioning. The store side of the
-internal API (`/api/internal/*`, guarded by a per-store `CONTROL_PLANE_TOKEN`)
-follows the CP-authored contract — see `CONTEXT.md` §4 — and shipped in
-za-pos 2026-09-03; `scripts/dev-store-stub.ts` remains a dev stand-in.
+**Scope:** the fleet registry, terminal provisioning, and **subscription
+licensing**. Concretely:
+
+- **Stores** — register a deployment, push `Till 1..N`, health-check it, reset its
+  admin password, and tear it down (pause-first).
+- **Companies** — the merchant account, and the unit of billing. It owns its branch
+  stores *and* its Head Office, and holds the plan and the paid-up-to date.
+- **Plans** — a store-count cap, a per-store terminal ceiling, a feature set, and a
+  price with its recurrence (`monthly` / `annual` / `once-off`). Four tiers are
+  seeded and every value is editable; operators can add their own.
+- **Head Offices** — one per merchant. The control plane deploys, monitors and
+  licences it and never reads inside it. See the privacy boundary in `CONTEXT.md` §2a.
+- **Licences** — the control plane signs them (ES256/P-256) and stores or panels
+  verify with the public key. Entitlement is real, and works offline.
+
+Billing *recording* (invoices/payments) is not built — `paid_through` is set by hand
+today. The store side of the internal API (`/api/internal/*`, guarded by a per-store
+`CONTROL_PLANE_TOKEN`) follows the contract in `CONTEXT.md` §4 and ships in za-pos;
+`scripts/dev-store-stub.ts` remains a dev stand-in.
+
+## Naming
+
+`:3240` is the **Control Plane** (yours, one instance, all clients). `:3260` is the
+merchant's **Head Office** (one per merchant). Avoid "SaaS CP" / "Multistore CP" —
+two names ending in CP is what makes them confusable.
 
 ## Stack
 

@@ -16,8 +16,56 @@ CONTEXT.md "Internal API contract").
 
 ## Current Phase
 
-CP v1 complete (delivered 2026-09-03). **Planned, not started:** fleet
-phase set F1–F3 (2026-09-06) — see below.
+**Subscription licensing & multi-tenant fleet (2026-09-10).** CP v1 (stores CRUD +
+terminal provisioning) shipped 2026-09-03; the licensing/commercial layer landed
+2026-09-10 and is the current workstream.
+
+Shipped 2026-09-10:
+- **L1 asymmetric licence signing** — ES256/P-256 keypair, `POST /api/internal/licence`
+  delivery, published verification key. Replaced the scheme where a store signed its
+  own lease with its own JWT secret.
+- **Companies & plans** — the merchant account (unit of billing, owner of branches
+  *and* the Head Office), four seeded editable tiers, derived billing state, and
+  402 cap refusals with upgrade messaging.
+- **Head Offices as fleet members** — `panels` with registration, health, version
+  and licence; the panel verifies the company licence with the same public key.
+- **Fleet hygiene** — Store Type → **POS profile** naming pending, store teardown
+  (pause-first), one-deployment-one-row, self-describing app kinds
+  (`wrong_app_kind`), one-time token reveal.
+- Tests: 95 across 8 suites.
+
+**Planned, not started:** the L2–L5 remainder and the SPOG UI set below; and the
+older fleet phase set F1–F3 (2026-09-06), with F3a struck and F3b/F3c reassigned.
+
+## Phase set (planned 2026-09-10): licensing & the SPOG
+
+Decisions locked with the owner: asymmetric CP-signed licences · warn → grace →
+block new sales, keep all data · manual invoices first (gateway later) · tiered plan
+(max stores + per-store till ceiling + features), 4 seeded editable tiers · over a
+cap, block and offer an upgrade · curated feature gating (6 keys).
+
+- [x] **L1 Asymmetric licence foundation** (2026-09-10)
+- [x] **L2 Companies & plans** (2026-09-10) — incl. caps and the panel entity
+- [ ] **L3 Billing** — invoices + payments; marking paid advances `paid_through` and
+      re-pushes the licence; trial support. Until this lands the date is typed by
+      hand and there is no payment history.
+- [ ] **L4 Enforcement** — `requireFeature(key)` returning **402**, the subscription
+      gate that blocks new sales after grace (server-side, so going online is not a
+      bypass), `/runtime-config` exposure, and the register's warn/grace/suspended
+      states. **Plans currently gate nothing.**
+- [ ] **L5 Head Office entitlements** — the panel gates `multi_store` on the company
+      licence, completing the chain.
+- [ ] **SPOG — no new telemetry** — drop VAT (§4); Store Type → **POS profile** with
+      the spec's values incl. Restaurant and Custom; rename actions to Configure /
+      Push Config / Diagnostics / Support / More; split administrative state from
+      technical health with the richer vocabularies; expand summary cards and
+      filters; extend search to name/slug/domain/ID (§21).
+- [ ] **SPOG — needs store telemetry** — a `/api/internal/telemetry` payload
+      (app/schema/config version, heartbeat, per-terminal last-seen, sync events)
+      before Version / Sync / terminal-online / Diagnostics can show real values.
+      Do this **before** designing the store card, or the card gets designed twice.
+- [ ] **Plans: deactivate in the UI** (`is_active` exists, no toggle) and an
+      **audit trail** (§38) — every privileged action is currently unattributed.
 
 ## Phases
 
@@ -137,7 +185,7 @@ phases — CP ops hardening first, then Coolify auto-provisioning, then
 central-office-over-the-fleet. Implementation happens in this repo (F1,
 F2) and across both repos (F3); each phase ships with the test suite
 green, docs updated and one commit. Settle the uncommitted working tree
-before F1 starts. Fleet verified from the registry: all 5 stores active,
+before F1 starts. Fleet verified from the registry (2026-09-10: 8 stores,
 health up, config ok.
 
 - [ ] **F1 CP ops hardening** (this repo)
@@ -168,9 +216,12 @@ health up, config ok.
   - Tests against a mocked Coolify API; deploy runbook updated.
 - [ ] **F3 central office over the fleet** (both repos; tenant internal
       API v0.3.0 in ~/apps/za-pos)
-  - F3a fleet summary: `GET /api/internal/fleet/summary` (token-
-    guarded) per store — app version, vertical, product count, today's
-    orders/revenue, open tills, low-stock count; CP dashboard tab.
+  - ~~F3a fleet summary~~ **STRUCK 2026-09-10** — it planned a control-plane
+    dashboard carrying product count, today's orders/revenue, open tills and
+    low-stock count. The Developer Control Plane spec (§1, §8, §40) forbids
+    business metrics on this surface: the CP may know whether an app is
+    functioning, never how much money it is making. That dashboard is delivered
+    by the merchant's own Company Control Panel (`za-pos/head-office`) instead.
   - F3b catalogue push: a central catalogue in the CP, pushed to chosen
     stores via an internal upsert (SKU as the key) — same trust model
     as the verticals push.

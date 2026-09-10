@@ -1,5 +1,68 @@
 # Findings
 
+## 2026-09-10 — a table rebuild corrupted the registry (my bug, and what it taught)
+
+**Symptom reported by the owner:** creating or editing a company failed with
+`no such table: main.plans_old`.
+
+**Root cause.** The migration that widened `plans.billing_period` to allow
+`'once-off'` rebuilt the table as:
+
+```sql
+ALTER TABLE plans RENAME TO plans_old;   -- ← wrong: foreign keys ON
+CREATE TABLE IF NOT EXISTS plans (...);  -- new DDL
+INSERT INTO plans SELECT ... FROM plans_old;
+DROP TABLE plans_old;                    -- ← fires ON DELETE SET NULL
+```
+
+Two SQLite behaviours make that sequence destructive:
+
+1. **`ALTER TABLE ... RENAME TO` rewrites references in OTHER tables.** Since
+   SQLite 3.25 the default is `legacy_alter_table = OFF`, so renaming `plans` to
+   `plans_old` silently rewrote `companies.plan_id REFERENCES plans(id)` into
+   `REFERENCES "plans_old"(id)`. Dropping the temporary table then left `companies`
+   pointing at a table that did not exist — which is precisely why *writes* failed
+   with "no such table: main.plans_old" while reads looked fine.
+2. **`DROP TABLE` fires foreign-key actions.** With `foreign_keys = ON`, dropping
+   `plans_old` triggered the (rewritten) `ON DELETE SET NULL` and **wiped every
+   company's plan assignment** — Urban Threads silently lost its Multi-Store plan.
+
+**Amplifier.** Five duplicate `tsx watch server.ts` processes were running for the
+control plane. `tsx watch` restarts on every file save, so each save re-ran the
+migration concurrently, and the corruption kept being re-applied. Only one of them
+could hold `:3240`; the rest were failed or racing boot attempts. Worth remembering
+when restarting services from tool calls.
+
+**The correct SQLite rebuild procedure**, now implemented as `rebuildTable()` in
+`src/config/registryDb.ts`:
+
+```sql
+PRAGMA foreign_keys = OFF;      -- OUTSIDE the transaction; pragma is a no-op inside
+PRAGMA legacy_alter_table = ON; -- stops RENAME rewriting other tables' FK clauses
+BEGIN;
+  CREATE TABLE t_rebuild (...);  -- create-new FIRST
+  INSERT INTO t_rebuild (cols) SELECT cols FROM t;
+  DROP TABLE t;
+  ALTER TABLE t_rebuild RENAME TO t;
+COMMIT;
+PRAGMA legacy_alter_table = OFF;
+PRAGMA foreign_keys = ON;
+```
+
+**Repair.** The migration now also *heals* damage: any table whose stored DDL still
+references `plans_old` is rebuilt against the real `plans`, an interrupted rebuild
+is recovered, and the whole step is idempotent. The live registry was backed up to
+`/tmp/control-plane.db.before-repair` before being healed; the wiped plan
+assignment was restored and licences re-pushed to the three branches and the panel.
+
+**Guard.** `src/__tests__/migration.test.ts` builds a database with the *old*
+schema plus real data and asserts, on boot: the CHECK widened, no temporary table
+left behind, `companies` still references `plans` (never `plans_old`), the plan
+assignment survived rather than being nulled, existing rows kept their values, a
+second boot changes nothing, and an already-damaged database is repaired. That test
+would have caught this before it reached a live registry.
+
+
 Dated, verified findings that shaped the build.
 
 ## 2026-09-03 — za-pos tenant internal API does NOT exist yet
@@ -90,7 +153,7 @@ future column needs a CHECK change, mirror optimed's rebuild choreography.
 ## 2026-09-06 — fleet planning session (F1–F3 planned, no code)
 
 - **Fleet state verified from the registry** (`data/control-plane.db`,
-  read-only): 5 stores, all `active` / health `up` / config `ok` —
+  read-only; 5 stores at the time, 8 now), all `active` / health `up` / config `ok` —
   brake-bolt-spares (spares, 3 tills), builders-hardware (hardware, 3),
   everyday-retail (general, 25), medisave-pharmacy (pharmacy, 5),
   urban-threads (clothing, 2). No gaps to register.

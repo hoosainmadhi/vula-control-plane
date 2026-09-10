@@ -5,6 +5,83 @@ export type ConfigStatus = 'pending' | 'ok' | 'failed';
 export type HealthStatus = 'up' | 'down' | 'unknown';
 export type StoreVertical = 'general' | 'clothing' | 'spares' | 'hardware' | 'pharmacy';
 
+export type PlanPeriod = 'monthly' | 'annual' | 'once-off';
+
+export interface Plan {
+  id: number;
+  code: string;
+  name: string;
+  maxStores: number;
+  maxTerminalsPerStore: number;
+  features: string[];
+  priceCents: number;
+  /** How the price recurs — 'once-off' is a perpetual licence, not a subscription. */
+  billingPeriod: 'monthly' | 'annual' | 'once-off';
+  isActive: boolean;
+  createdAt: string;
+}
+
+export type BillingState = 'active' | 'trial' | 'past_due' | 'suspended' | 'unlicensed';
+
+export interface Company {
+  id: number;
+  name: string;
+  slug: string;
+  billingEmail: string;
+  planId: number | null;
+  planCode: string;
+  planName: string;
+  paidThrough: string | null;
+  trialEndsAt: string | null;
+  /** Operator override: active or manually suspended. Distinct from billing state. */
+  status: 'active' | 'suspended';
+  billingState: BillingState;
+  storesUsed: number;
+  maxStores: number;
+  maxTerminalsPerStore: number;
+  features: string[];
+  panels: number;
+  note: string;
+  createdAt: string;
+}
+
+/** Feature keys a plan can grant. Kept in step with the store-side gate list. */
+export const FEATURE_KEYS = [
+  'customer_credit',
+  'advanced_reports',
+  'multi_store',
+  'stock_transfers',
+  'ecommerce_bridges',
+  'ai_assistant',
+] as const;
+
+export interface Panel {
+  id: number;
+  companyId: number;
+  companyName: string;
+  slug: string;
+  name: string;
+  baseUrl: string;
+  status: StoreStatus;
+  lastHealthStatus: HealthStatus;
+  lastHealthAt: string | null;
+  appVersion: string | null;
+  licenceSequence: number;
+  licenceIssuedAt: string | null;
+  licencePushStatus: ConfigStatus;
+  licencePushedAt: string | null;
+  planCode: string;
+  planName: string;
+  billingState: string;
+  createdAt: string;
+}
+
+export interface PanelPushOutcome {
+  ok: boolean;
+  sequence?: number;
+  error?: string;
+}
+
 export interface Store {
   id: number;
   slug: string;
@@ -18,6 +95,12 @@ export interface Store {
   lastConfigAt: string | null;
   lastHealthAt: string | null;
   lastHealthStatus: HealthStatus;
+  companyId: number | null;
+  companyName: string;
+  planCode: string;
+  planName: string;
+  billingState: string;
+  entitlementNote: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -57,6 +140,11 @@ export interface LoginResponse {
 export interface CreateStoreResponse {
   store: Store;
   firstPush: PushOutcome | null;
+  /**
+   * Present only when the control plane generated the token. Shown once so the
+   * operator can install it in the deployment's env; never returned again.
+   */
+  generatedControlPlaneToken?: string;
 }
 
 export interface ResetAdminResponse {
@@ -73,4 +161,6 @@ export interface StoreFormValues {
   baseUrl: string;
   terminalCount: string;
   controlPlaneToken: string;
+  /** Merchant this store belongs to; '' = unassigned. */
+  companyId: string;
 }

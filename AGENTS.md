@@ -98,19 +98,39 @@ za-pos-control-plane/
   in index.css (no tailwind.config).
 - Money: none in this app (no prices stored here).
 
+## Naming — two planes, two products
+
+| Port | Name | Audience |
+| ---- | ---- | -------- |
+| 3240 | **Vula Control Plane** | The SaaS vendor. One instance, all clients. |
+| 3260 | **Head Office** | The merchant. One instance per merchant. |
+
+"Control plane" is the fleet-management layer and only the vendor app is one, so
+do **not** write "SaaS CP" / "Multistore CP" — two names ending in CP keep the
+ambiguity alive. See `CONTEXT.md` §2a.
+
 ## API surface (`/api` prefix, `{ error }` on failure)
 
 | Method & path                         | Access                          | Purpose                                                                                                                            |
 | ------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | POST `/auth/login`                    | public (rate-limited 20/15 min) | office session → `{ token, user }`                                                                                                 |
-| GET `/stores`                         | office                          | fleet list (never returns the control_plane_token)                                                                                 |
-| POST `/stores`                        | office                          | create store (optional `controlPlaneToken` matching the store env — blank generates) + **first push** (failure never fails create) |
+| GET `/stores`                         | office                          | fleet list — company, plan, billing state; never returns the token                                                                 |
+| POST `/stores`                        | office                          | create store + **first push and first licence**; refuses a duplicate URL and a Head Office URL; a generated token is returned **once** |
 | GET `/stores/:id`                     | office                          | detail: terminal preview Till 1..N + config snapshot                                                                               |
-| PUT `/stores/:id`                     | office                          | name/vatRegNo/terminalCount/baseUrl (slug immutable; **no auto-push**)                                                             |
-| PATCH `/stores/:id/pause` · `/resume` | office                          | paused stores 409 push/reset-admin                                                                                                 |
-| POST `/stores/:id/push`               | office                          | push `{terminalCount, terminals: Till 1..N}` to the store                                                                          |
-| POST `/stores/:id/health`             | office                          | ping `GET /api/internal/status`, record up/down                                                                                    |
+| PUT `/stores/:id`                     | office                          | name/vatRegNo/terminalCount/baseUrl/companyId (slug immutable; **no auto-push**)                                                   |
+| PATCH `/stores/:id/pause` · `/resume` | office                          | paused stores 409 push/reset-admin/licence                                                                                         |
+| DELETE `/stores/:id`                  | office                          | **pause-first teardown**: 409 `store_active` while active; removes the registry row only, never the deployment                     |
+| POST `/stores/:id/push`               | office                          | push `{terminalCount, terminals: Till 1..N}`; 402 if over the plan's till ceiling                                                  |
+| POST `/stores/:id/health`             | office                          | ping `GET /api/internal/status`, record up/down, refresh the licence                                                               |
+| POST `/stores/:id/licence`            | office                          | re-issue and deliver the signed licence                                                                                            |
 | POST `/stores/:id/reset-admin`        | office                          | store resets its admin pw; temp password shown once, never stored                                                                  |
+| GET `/stores/licence/key`             | office                          | the public verification key stores install (never the private key)                                                                |
+| GET/POST `/plans`, PUT `/plans/:id`   | office                          | plan catalogue: store cap, per-store till ceiling, features, price + `monthly`/`annual`/`once-off`                                 |
+| GET/POST `/companies`, GET/PUT/DELETE `/:id` | office                   | merchant accounts — the unit of billing; owns the branches and the Head Office; DELETE is 409 `company_in_use` while it owns either |
+| GET/POST `/panels`, GET/PUT/DELETE `/:id` | office                      | one Head Office per merchant; POST/DELETE are the registration only                                                               |
+| GET `/panels/licence/key`             | office                          | as `/stores/licence/key`                                                                                                           |
+| POST `/panels/:id/health`             | office                          | ping the panel's own `/api/internal/status`, record health + version                                                               |
+| POST `/panels/:id/licence`            | office                          | re-issue and deliver the company licence to a panel                                                                                |
 | GET `/health`                         | public                          | liveness (Coolify healthcheck)                                                                                                     |
 
 ## Testing conventions

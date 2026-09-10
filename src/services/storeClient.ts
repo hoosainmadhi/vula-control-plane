@@ -115,12 +115,87 @@ export const pushTerminals = async (
   return body;
 };
 
+/**
+ * What kind of Vula application answers at this URL?
+ *
+ * Both apps identify themselves on their PUBLIC /health, so this needs no token —
+ * which matters when the control plane has just generated one and would only get
+ * a 401 back. Used to stop a store row being pointed at a Head Office, or a Head
+ * Office row at a store: the two are different products and a mismatch can never
+ * authenticate.
+ */
+export type AppKind = 'store' | 'head-office' | 'unknown';
+
+export const probeAppKind = async (
+  baseUrl: string,
+  timeoutMs = env.storeRequestTimeoutMs,
+): Promise<{ reachable: boolean; kind: AppKind; detail?: string }> => {
+  try {
+    const res = await fetch(`${resolveBase(baseUrl)}/health`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const raw = await res.text();
+    let body: { app?: unknown; service?: unknown } | null = null;
+    try {
+      body = raw ? (JSON.parse(raw) as { app?: unknown; service?: unknown }) : null;
+    } catch {
+      // Non-JSON health response: reachable, but we cannot identify it.
+    }
+    if (body?.service === 'vula-head-office') return { reachable: true, kind: 'head-office' };
+    if (body?.app === 'vula') return { reachable: true, kind: 'store' };
+    return { reachable: true, kind: 'unknown' };
+  } catch (err) {
+    return {
+      reachable: false,
+      kind: 'unknown',
+      detail: err instanceof Error ? err.message : String(err),
+    };
+  }
+};
+
 /** Pings GET /api/internal/status; resolves with the store's status body. */
 export const ping = async (
   store: Pick<StoreRecord, 'base_url' | 'control_plane_token'>,
   options: CallOptions = {},
 ): Promise<unknown> => {
   const { body } = await request(store, 'GET', '/api/internal/status', undefined, options);
+  return body;
+};
+
+/**
+ * Pings a Company Control Panel's own token-guarded status endpoint. The panel
+ * exposes operational metadata only (version, health) — the control plane never
+ * reads inside it.
+ */
+export const pingPanel = async (
+  panel: Pick<StoreRecord, 'base_url' | 'control_plane_token'>,
+  options: CallOptions = {},
+): Promise<unknown> => {
+  const { body } = await request(panel, 'GET', '/api/internal/status', undefined, options);
+  return body;
+};
+
+/** Delivers a signed licence to a panel's POST /api/internal/licence. */
+export const pushLicenceToPanel = async (
+  panel: Pick<StoreRecord, 'base_url' | 'control_plane_token'>,
+  token: string,
+  options: CallOptions = {},
+): Promise<unknown> => {
+  const { body } = await request(panel, 'POST', '/api/internal/licence', { token }, options);
+  return body;
+};
+
+/**
+ * Delivers a signed licence to POST /api/internal/licence. The store verifies it
+ * against the control-plane public key before accepting, so a failed push leaves
+ * the previous licence in force rather than clearing entitlement.
+ */
+export const pushLicence = async (
+  store: Pick<StoreRecord, 'base_url' | 'control_plane_token'>,
+  token: string,
+  options: CallOptions = {},
+): Promise<unknown> => {
+  const { body } = await request(store, 'POST', '/api/internal/licence', { token }, options);
   return body;
 };
 

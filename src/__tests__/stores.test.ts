@@ -32,6 +32,13 @@ const lastFetch = (): [string, FetchInit | undefined] => {
   ];
 };
 
+/** Find a store call by the internal path it targets. */
+const fetchTo = (path: string): [string, FetchInit | undefined] => {
+  const match = fetchMock.mock.calls.find((c) => String(c[0]).endsWith(path));
+  expect(match).toBeDefined();
+  return [match![0] as string, match![1] as FetchInit | undefined];
+};
+
 /** Mocked store configure endpoint that echoes back the pushed terminalCount. */
 const mockConfigureOk = (): void => {
   fetchMock.mockImplementation(async (_url, init) => {
@@ -78,10 +85,14 @@ describe('POST /api/stores — create + first push', () => {
       lastHealthStatus: 'unknown',
     });
     expect(firstPush.ok).toBe(true);
-    // The control plane token must never leave the server.
-    expect(JSON.stringify(res.body)).not.toContain('controlPlaneToken');
+    // A generated token is revealed exactly once, so the operator can install it.
+    // (`controlPlaneToken` is the store field, which is never serialised.)
+    expect(JSON.stringify(res.body)).not.toContain('"controlPlaneToken"');
+    expect(typeof (res.body as { generatedControlPlaneToken?: string }).generatedControlPlaneToken).toBe(
+      'string',
+    );
 
-    const [url, init] = lastFetch();
+    const [url, init] = fetchTo('/api/internal/configure');
     expect(url).toBe('http://localhost:3299/api/internal/configure');
     expect(init?.method).toBe('POST');
     expect(init?.headers?.['X-Control-Plane-Token']).toMatch(/^[0-9a-f]{64}$/);
@@ -94,6 +105,14 @@ describe('POST /api/stores — create + first push', () => {
         { till: 3, name: 'Till 3' },
       ],
     });
+
+    // Creation also delivers a signed licence, so the store can verify its
+    // entitlement without ever holding a signing key.
+    const [licenceUrl, licenceInit] = fetchTo('/api/internal/licence');
+    expect(licenceUrl).toBe('http://localhost:3299/api/internal/licence');
+    const licenceBody = JSON.parse(licenceInit?.body as string) as { token: string };
+    expect(licenceBody.token.split('.')).toHaveLength(2);
+    expect((res.body as { firstLicence: { ok: boolean } }).firstLicence.ok).toBe(true);
   });
 
   it('pushes an explicit vertical with the store and surfaces it on the store', async () => {
@@ -105,7 +124,7 @@ describe('POST /api/stores — create + first push', () => {
     expect(res.status).toBe(201);
     expect((res.body as { store: StoreBody }).store.vertical).toBe('hardware');
 
-    const [, init] = lastFetch();
+    const [, init] = fetchTo('/api/internal/configure');
     expect(JSON.parse(init?.body as string)).toMatchObject({ vertical: 'hardware' });
   });
 
@@ -117,9 +136,11 @@ describe('POST /api/stores — create + first push', () => {
       .set(auth())
       .send(createPayload({ controlPlaneToken: token }));
     expect(res.status).toBe(201);
-    const [, init] = lastFetch();
+    const [, init] = fetchTo('/api/internal/configure');
     expect(init?.headers?.['X-Control-Plane-Token']).toBe(token);
-    expect(JSON.stringify(res.body)).not.toContain('controlPlaneToken');
+    // A supplied token is not echoed back — only a generated one is shown, once.
+    expect((res.body as { generatedControlPlaneToken?: string }).generatedControlPlaneToken).toBeUndefined();
+    expect(JSON.stringify(res.body)).not.toContain('"controlPlaneToken"');
 
     const bad = await request(app)
       .post('/api/stores')
@@ -230,13 +251,18 @@ describe('POST /api/stores — validation', () => {
   it('409s on a duplicate slug without calling the store', async () => {
     mockConfigureOk();
     await request(app).post('/api/stores').set(auth()).send(createPayload());
+    // The successful create makes two store calls (configure + licence); the
+    // rejected duplicate must add none.
+    const callsAfterCreate = fetchMock.mock.calls.length;
+    expect(callsAfterCreate).toBeGreaterThan(0);
+
     const dup = await request(app)
       .post('/api/stores')
       .set(auth())
       .send(createPayload({ name: 'Other' }));
     expect(dup.status).toBe(409);
     expect(dup.body.error).toMatch(/already exists/i);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(callsAfterCreate);
   });
 });
 
@@ -245,6 +271,7 @@ describe('PUT /api/stores/:id — edit', () => {
     mockConfigureOk();
     const created = await request(app).post('/api/stores').set(auth()).send(createPayload());
     const id = (created.body as { store: { id: number } }).store.id;
+    const callsAfterCreate = fetchMock.mock.calls.length;
 
     const res = await request(app)
       .put(`/api/stores/${id}`)
@@ -258,8 +285,8 @@ describe('PUT /api/stores/:id — edit', () => {
       terminalCount: 4,
       slug: 'gardens-mall',
     });
-    // Edits alone never hit the store: only the create-time push happened.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Edits alone never hit the store — only create-time calls happened.
+    expect(fetchMock).toHaveBeenCalledTimes(callsAfterCreate);
   });
 
   it('rejects an unknown vertical on edit', async () => {
@@ -404,4 +431,79 @@ describe('POST /api/stores/:id/reset-admin', () => {
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/store exploded/i);
   });
+
+describe('one deployment, one registry row', () => {
+  it('refuses a second store on a URL that is already registered', async () => {
+    const first = await request(app)
+      .post('/api/stores')
+      .set(auth())
+      .send(createPayload({ slug: 'first', baseUrl: 'http://localhost:3297' }));
+    expect(first.status).toBe(201);
+
+    const second = await request(app)
+      .post('/api/stores')
+      .set(auth())
+      .send(createPayload({ slug: 'duplicate-port', baseUrl: 'http://localhost:3297/' }));
+    expect(second.status).toBe(409);
+    expect(second.body.code).toBe('base_url_in_use');
+    // The message names the store that already owns the URL, so the operator can act.
+    expect(second.body.error).toMatch(/already registered as "first"/i);
+    expect(second.body.existing).toMatchObject({ slug: 'first' });
+  });
+});
+
+describe('store teardown', () => {
+  it('refuses to remove an active store, pointing at pause first', async () => {
+    const created = await request(app)
+      .post('/api/stores')
+      .set(auth())
+      .send(createPayload({ slug: 'live-site', baseUrl: 'http://localhost:3296' }));
+    const id = created.body.store.id;
+
+    const res = await request(app).delete(`/api/stores/${id}`).set(auth());
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('store_active');
+    expect(res.body.error).toMatch(/pause it first/i);
+
+    // Still present.
+    await request(app).get(`/api/stores/${id}`).set(auth()).expect(200);
+  });
+
+  it('removes a paused store and says the deployment is untouched', async () => {
+    const created = await request(app)
+      .post('/api/stores')
+      .set(auth())
+      .send(createPayload({ slug: 'old-site', baseUrl: 'http://localhost:3295' }));
+    const id = created.body.store.id;
+
+    await request(app).patch(`/api/stores/${id}/pause`).set(auth()).expect(200);
+
+    const res = await request(app).delete(`/api/stores/${id}`).set(auth()).expect(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.message).toMatch(/deployment and data are untouched/i);
+
+    await request(app).get(`/api/stores/${id}`).set(auth()).expect(404);
+  });
+
+  it('frees the URL for re-registration after removal', async () => {
+    const created = await request(app)
+      .post('/api/stores')
+      .set(auth())
+      .send(createPayload({ slug: 'temp-site', baseUrl: 'http://localhost:3294' }));
+    await request(app).patch(`/api/stores/${created.body.store.id}/pause`).set(auth()).expect(200);
+    await request(app).delete(`/api/stores/${created.body.store.id}`).set(auth()).expect(200);
+
+    // The one-deployment-one-row guard must not keep blocking a URL that is gone.
+    const again = await request(app)
+      .post('/api/stores')
+      .set(auth())
+      .send(createPayload({ slug: 're-registered', baseUrl: 'http://localhost:3294' }));
+    expect(again.status).toBe(201);
+  });
+
+  it('404s for an unknown store', async () => {
+    await request(app).delete('/api/stores/9999').set(auth()).expect(404);
+  });
+});
+
 });

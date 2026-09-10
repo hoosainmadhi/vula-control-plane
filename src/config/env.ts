@@ -38,6 +38,17 @@ export interface Env {
   jwtSecret: string;
   jwtTtlHours: number;
   storeRequestTimeoutMs: number;
+  /**
+   * Licence signing material. The private key never leaves this process; stores
+   * receive only the public key and verify what the control plane signs.
+   * Both are base64url-encoded DER: PKCS#8 for the private key, SPKI for the public.
+   */
+  licencePrivateKey: string | null;
+  licencePublicKey: string | null;
+  licenceKeyId: string;
+  licenceOfflineDays: number;
+  licenceGraceDays: number;
+  licenceKeyFile: string | null;
 }
 
 export const env: Env = {
@@ -50,6 +61,14 @@ export const env: Env = {
   jwtSecret: requireEnv('JWT_SECRET', 'dev-secret-change-me', 'your-64-char-random-secret-here'),
   jwtTtlHours: Number(process.env.JWT_TTL_HOURS || 168),
   storeRequestTimeoutMs: Number(process.env.STORE_REQUEST_TIMEOUT_MS || 5000),
+  // Not required at boot: when unset the signer generates a dev keypair (and, in
+  // production, refuses to serve licences until a real key is configured).
+  licencePrivateKey: process.env.LEASE_PRIVATE_KEY?.trim() || null,
+  licencePublicKey: process.env.LEASE_PUBLIC_KEY?.trim() || null,
+  licenceKeyId: process.env.LEASE_KEY_ID?.trim() || 'k1',
+  licenceOfflineDays: Number(process.env.LICENCE_OFFLINE_DAYS || 14),
+  licenceGraceDays: Number(process.env.LICENCE_GRACE_DAYS || 3),
+  licenceKeyFile: process.env.LEASE_KEY_FILE?.trim() || null,
 };
 
 export { logger };
