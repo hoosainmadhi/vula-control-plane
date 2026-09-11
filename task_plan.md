@@ -16,22 +16,35 @@ CONTEXT.md "Internal API contract").
 
 ## Current Phase
 
-**Automated Client Onboarding via Coolify API (2026-09-11).**
-Shipped 2026-09-11:
-- **Coolify v1 REST API Integration (`services/coolify.ts`)** — Client methods to create applications
-  targeting `hoosainmadhi/za-pos`, inject environment variables, mount persistent Docker storage volumes,
-  trigger deployment, and monitor lifecycle.
-- **Store Provisioning Orchestrator (`services/storeProvisioning.ts`)** — Background worker handling container
-  creation $\rightarrow$ health polling $\rightarrow$ store admin bootstrapping over HTTP $\rightarrow$ initial
-  terminal configure & licence push $\rightarrow$ deployed status update.
-- **Registry Schema & UI Additions** — Added `deploy_status`, `coolify_uuid`, `volume_name`, `admin_email` columns.
-  Updated `StoresPage.tsx` with "Auto-provision container on Coolify" toggle, live deployment status badges
-  (`Provisioning on Coolify...`, `Auto-deployed`, `Deploy failed`), and 4-second live polling.
-- Tests: 95 across 8 suites.
+**L4 Enforcement — control-plane authority side (2026-09-11).** Plans no longer
+gate nothing. Shipped in this repo:
+
+- **Curated feature vocabulary** (`src/services/features.ts`) — the six locked
+  keys with labels + `enforcedBy`; plans may grant only these (400 names an
+  unknown key); served at `GET /api/plans/features`.
+- **CP-side gates (402)** — `requireFeature(plan, key)` in subscriptions.ts;
+  `multi_store` required for multi-store onboarding and single→multi upgrades
+  (`feature_not_in_plan`); a **suspended** company buys no new capacity —
+  store creation and till increases refused (`subscription_suspended`), while
+  config/licence pushes stay open so a store can learn it is unsuspended.
+- **Enforcement propagation** — company PUT (plan / paid-through / trial /
+  status change) immediately re-pushes signed licences to all branch stores +
+  Head Office; delivery failures reported in `licencePush`, never fatal.
+- **Register states surfaced** — `registerState`
+  (`ok|warn|grace|suspended|trial|unlicensed`) + `tradingBlocked` on stores
+  and companies; Register column on the fleet card, "Sales blocked" pill on
+  companies.
+- Tests: 120 across 11 suites (+15 `enforcement.test.ts`).
+- **Contract authored in CONTEXT.md §2b** — the store side is the za-pos
+  workstream (below). Previous phase — restaurant vertical mirror (2026-09-11).
+
+**Next step:** L4 store side in `~/apps/za-pos` (its task_plan tracks it), or
+F1 CP ops hardening here — owner's order says L4 store side first.
 
 Previous Phase — **Subscription licensing & multi-tenant fleet (2026-09-10).** CP v1 (stores CRUD +
 terminal provisioning) shipped 2026-09-03; the licensing/commercial layer landed
 2026-09-10.
+
 - **L1 asymmetric licence signing** — ES256/P-256 keypair, `POST /api/internal/licence`
   delivery, published verification key.
 - **Companies & plans (L2)** — merchant accounts, 4 editable tiers, derived billing state,
@@ -41,7 +54,7 @@ terminal provisioning) shipped 2026-09-03; the licensing/commercial layer landed
 - **Fleet hygiene** — store teardown (pause-first), one-deployment-one-row, self-describing app kinds
   (`wrong_app_kind`), one-time token reveal.
 
-**Planned, not started:** the L2–L5 remainder and the SPOG UI set below; and the
+**Planned, not started:** the store side of L4, L5, the SPOG UI set below; and the
 older fleet phase set F1–F3 (2026-09-06), with F3a struck and F3b/F3c reassigned.
 
 ## Phase set (planned 2026-09-10): licensing & the SPOG
@@ -57,10 +70,14 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       marking paid advances `paid_through` and automatically re-pushes signed licences
       to all branch stores and Head Office panels; automated renewal checks (`/api/billing/renew-check`);
       and dedicated Office Billing & Invoicing UI (`/billing`).
-- [ ] **L4 Enforcement** — `requireFeature(key)` returning **402**, the subscription
-      gate that blocks new sales after grace (server-side, so going online is not a
-      bypass), `/runtime-config` exposure, and the register's warn/grace/suspended
-      states. **Plans currently gate nothing.**
+- [x] **L4 Enforcement — control-plane authority side** (2026-09-11) — curated feature
+      vocabulary + validation, CP-side 402 gates (`feature_not_in_plan`,
+      `subscription_suspended`), licence propagation on entitlement change, register
+      states surfaced; contract in CONTEXT §2b. Store side below.
+- [ ] **L4 Enforcement — store side (za-pos workstream)** — `requireFeature(key)`
+      middleware (402) on gated routes, the suspended gate on checkout + sync
+      replay, `subscription` block in `/api/runtime-config`, and the register's
+      warn/grace/suspended banners + UI feature hiding.
 - [ ] **L5 Head Office entitlements** — the panel gates `multi_store` on the company
       licence, completing the chain.
 - [ ] **SPOG — no new telemetry** — drop VAT (§4); Store Type → **POS profile** with
@@ -172,10 +189,10 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
 
 ### Decisions added (see progress.md 2026-09-03 late entry)
 
-| #   | Decision                                                                                                   | Rationale                                                                                        |
-| --- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| D11 | Store type field is `vertical` everywhere (UI label "Store type"), values `general` · `clothing` · `spares` · `supermarket`, default `general` | Mirrors za-pos `settings.vertical` 1:1 so the push maps directly; tenant docs always called it "store type (vertical)" |
-| D12 | Every configure push carries `vertical`; tenant applies it + seeds the pack idempotently; an absent `vertical` leaves the store's type untouched | Same trust model as terminal replacement; older CP builds stay compatible (tenant-side leniency) |
+| #   | Decision                                                                                                                                         | Rationale                                                                                                              |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| D11 | Store type field is `vertical` everywhere (UI label "Store type"), values `general` · `clothing` · `spares` · `supermarket`, default `general`   | Mirrors za-pos `settings.vertical` 1:1 so the push maps directly; tenant docs always called it "store type (vertical)" |
+| D12 | Every configure push carries `vertical`; tenant applies it + seeds the pack idempotently; an absent `vertical` leaves the store's type untouched | Same trust model as terminal replacement; older CP builds stay compatible (tenant-side leniency)                       |
 
 ## Phase 6 (post-v1): verticals — supermarket merged into general, hardware added (2026-09-03)
 

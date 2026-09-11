@@ -18,6 +18,8 @@ import Spinner from '../components/Spinner';
 import StatusBadge, {
   CONFIG_COLORS,
   HealthDot,
+  REGISTER_STATE_COLORS,
+  REGISTER_STATE_LABELS,
   STORE_COLORS,
   VERTICAL_COLORS,
 } from '../components/StatusBadge';
@@ -282,8 +284,8 @@ function StoreFormModal({ modal, saving, error, companies, onClose, onSubmit }: 
             ))}
           </select>
           <p className="mt-1 text-xs text-slate-400">
-            The merchant this store belongs to. Its plan caps how many stores you can add and how many tills
-            each may run.
+            The merchant this store belongs to. Its plan caps how many stores you can add and how
+            many tills each may run.
           </p>
         </div>
         <div>
@@ -320,11 +322,14 @@ function StoreFormModal({ modal, saving, error, companies, onClose, onSubmit }: 
               <span>Auto-provision container on Coolify</span>
             </label>
             <p className="text-[11px] text-teal-800">
-              When checked, Coolify creates the application container, attaches a persistent /data volume, and deploys it automatically.
+              When checked, Coolify creates the application container, attaches a persistent /data
+              volume, and deploys it automatically.
             </p>
             {form.provision ? (
               <div>
-                <label className="mb-1 block text-xs font-semibold text-slate-700">Initial Store Administrator Email</label>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">
+                  Initial Store Administrator Email
+                </label>
                 <input
                   type="email"
                   value={form.adminEmail ?? ''}
@@ -504,11 +509,7 @@ export default function StoresPage() {
         });
         const store = res.store;
         notify(
-          res.provisioning
-            ? 'ok'
-            : res.firstPush?.ok
-              ? 'ok'
-              : 'error',
+          res.provisioning ? 'ok' : res.firstPush?.ok ? 'ok' : 'error',
           res.provisioning
             ? `Store ${store.slug} created — container provisioning launched on Coolify...`
             : res.firstPush?.ok
@@ -808,7 +809,10 @@ export default function StoresPage() {
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                         Company
                       </div>
-                      <div className="mt-0.5 truncate text-xs font-semibold text-slate-700" title={store.companyName || 'Unassigned'}>
+                      <div
+                        className="mt-0.5 truncate text-xs font-semibold text-slate-700"
+                        title={store.companyName || 'Unassigned'}
+                      >
                         {store.companyName || 'Unassigned'}
                       </div>
                       <div className="text-[11px] text-slate-400">{store.planName}</div>
@@ -838,7 +842,9 @@ export default function StoresPage() {
                         {HEALTH_LABELS[store.lastHealthStatus]}
                       </div>
                       <div className="text-[11px] text-slate-400">
-                        {store.lastHealthStatus === 'unknown' ? 'Never checked' : fmtTime(store.lastHealthAt)}
+                        {store.lastHealthStatus === 'unknown'
+                          ? 'Never checked'
+                          : fmtTime(store.lastHealthAt)}
                       </div>
                     </div>
 
@@ -855,6 +861,25 @@ export default function StoresPage() {
                       </div>
                       <div className="mt-0.5 text-[11px] text-slate-400">
                         {fmtTime(store.lastConfigAt)}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Register
+                      </div>
+                      <div
+                        className="mt-0.5"
+                        title="What the store's register shows for the subscription"
+                      >
+                        <StatusBadge
+                          status={store.registerState}
+                          colors={REGISTER_STATE_COLORS}
+                          label={REGISTER_STATE_LABELS[store.registerState] ?? store.registerState}
+                        />
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-slate-400">
+                        {store.tradingBlocked ? 'New sales refused' : 'Trading normally'}
                       </div>
                     </div>
                   </div>
@@ -949,7 +974,9 @@ export default function StoresPage() {
                     </span>
                     <span
                       className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
-                        terminalsPushed ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-600'
+                        terminalsPushed
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-slate-200 text-slate-600'
                       }`}
                     >
                       {store.terminalCount} configured
@@ -980,25 +1007,32 @@ export default function StoresPage() {
       )}
 
       {newToken && (
-        <Modal title={`Control-plane token — ${newToken.storeName}`} onClose={() => setNewToken(null)}>
+        <Modal
+          title={`Control-plane token — ${newToken.storeName}`}
+          onClose={() => setNewToken(null)}
+        >
           <div className="space-y-4">
             <p className="text-sm text-slate-600">
               The control plane generated this token. It is shown <strong>once</strong> and is never
               returned again — copy it into the deployment's env as{' '}
-              <code className="rounded bg-slate-100 px-1 font-mono text-xs">CONTROL_PLANE_TOKEN</code>,
-              then restart the store. Until that matches, every push and health check will fail with
-              &ldquo;Invalid control plane token&rdquo;.
+              <code className="rounded bg-slate-100 px-1 font-mono text-xs">
+                CONTROL_PLANE_TOKEN
+              </code>
+              , then restart the store. Until that matches, every push and health check will fail
+              with &ldquo;Invalid control plane token&rdquo;.
             </p>
             <div className="rounded-lg bg-slate-900 px-4 py-3 text-center font-mono text-sm tracking-wider text-emerald-300 break-all">
               {newToken.token}
             </div>
             <p className="text-xs text-slate-400">
-              If the deployment already exists with its own token, delete this store record and add it
-              again pasting that token instead.
+              If the deployment already exists with its own token, delete this store record and add
+              it again pasting that token instead.
             </p>
             <div className="flex justify-end gap-2">
               <button
-                onClick={() => void navigator.clipboard.writeText(newToken.token).catch(() => undefined)}
+                onClick={() =>
+                  void navigator.clipboard.writeText(newToken.token).catch(() => undefined)
+                }
                 className="rounded-lg px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-100"
               >
                 Copy

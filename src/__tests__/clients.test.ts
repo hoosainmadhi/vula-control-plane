@@ -33,6 +33,16 @@ afterEach(() => {
 
 const auth = (): Record<string, string> => authHeader(token);
 
+/** The seeded multi-store plan id — multi-store topology is a plan feature (L4). */
+const multiStorePlanId = async (): Promise<number> => {
+  const res = await request(app).get('/api/plans').set(auth()).expect(200);
+  const plan = (res.body as Array<{ id: number; code: string }>).find(
+    (p) => p.code === 'multi-store',
+  );
+  expect(plan).toBeDefined();
+  return plan!.id;
+};
+
 describe('Client-Centric Management & Orchestration (§1, §5, §6, §7)', () => {
   it('creates and deploys a single-store client via onboarding wizard (§5)', async () => {
     const res = await request(app)
@@ -86,6 +96,7 @@ describe('Client-Centric Management & Orchestration (§1, §5, §6, §7)', () =>
         name: 'Urban Threads Group',
         slug: 'urban-threads',
         billingEmail: 'accounts@urbanthreads.co.za',
+        planId: await multiStorePlanId(),
         deploymentType: 'multi_store',
         headOffice: {
           name: 'Urban Threads Head Office',
@@ -150,11 +161,13 @@ describe('Client-Centric Management & Orchestration (§1, §5, §6, §7)', () =>
     const clientId = createRes.body.client.id;
     expect(createRes.body.client.topology).toBe('single_store');
 
-    // 2. Upgrade to multi-store
+    // 2. Upgrade to multi-store — the plan rides along, since multi-store
+    // topology is gated on the plan feature (L4) and this client started on no plan.
     const upgradeRes = await request(app)
       .post(`/api/clients/${clientId}/upgrade-to-multistore`)
       .set(auth())
       .send({
+        planId: await multiStorePlanId(),
         headOffice: {
           name: 'MotoSpares Head Office',
           slug: 'motospares-ho',
@@ -176,15 +189,12 @@ describe('Client-Centric Management & Orchestration (§1, §5, §6, §7)', () =>
     expect(upgradeRes.body.job.type).toBe('upgrade_to_multistore');
 
     // Verify existing store still exists and new store was added
-    const detail = await request(app)
-      .get(`/api/clients/${clientId}`)
-      .set(auth())
-      .expect(200);
+    const detail = await request(app).get(`/api/clients/${clientId}`).set(auth()).expect(200);
 
     expect(detail.body.stores.length).toBe(2);
     const storeSlugs = detail.body.stores.map((s: any) => s.slug);
     expect(storeSlugs).toContain('motospares-central'); // preserved existing!
-    expect(storeSlugs).toContain('motospares-north');   // newly added!
+    expect(storeSlugs).toContain('motospares-north'); // newly added!
     expect(detail.body.headOffice.slug).toBe('motospares-ho');
   });
 
@@ -260,10 +270,7 @@ describe('Client-Centric Management & Orchestration (§1, §5, §6, §7)', () =>
     expect(updateRes.body.billingEmail).toBe('billing@kloofautospares.co.za');
 
     // Verify detail reflects the updated name
-    const detail = await request(app)
-      .get(`/api/clients/${clientId}`)
-      .set(auth())
-      .expect(200);
+    const detail = await request(app).get(`/api/clients/${clientId}`).set(auth()).expect(200);
     expect(detail.body.client.name).toBe('Kloof Auto Spares');
   });
 });

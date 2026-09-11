@@ -2,6 +2,55 @@
 
 Dated log of the build.
 
+## 2026-09-11 — L4 enforcement, control-plane authority side (plans stop being informational)
+
+- **Curated feature vocabulary (`src/services/features.ts`)**: the six locked
+  keys (`customer_credit`, `advanced_reports`, `multi_store`,
+  `stock_transfers`, `ecommerce_bridges`, `ai_assistant`) now live as
+  `PLAN_FEATURES` with labels and `enforcedBy` (store / head-office /
+  control-plane). `validateFeatureKeys()` refuses unknown keys at plan
+  create/edit (400 names the bad key and the allowed list) and normalises to
+  vocabulary order so licences carry a deterministic feature list. Served at
+  `GET /api/plans/features`.
+- **CP-side `requireFeature(plan, key)`** (subscriptions.ts) — takes the plan
+  that will be in force when the capability lands (an upgrade may carry its
+  own plan switch). Gates: `POST /api/clients` with `deploymentType:
+multi_store` and `POST /api/clients/:id/upgrade-to-multistore` need
+  `multi_store` → `402 { error, code: 'feature_not_in_plan' }`, refused
+  before anything is created.
+- **Suspended = no new capacity**: store creation for a suspended company and
+  terminal-count increases on its stores return
+  `402 { error, code: 'subscription_suspended' }`. Same-count pushes and
+  unrelated edits stay allowed — config/licence delivery is how a store
+  learns it has been unsuspended. Grace (`past_due`) and trial keep trading.
+- **Propagation**: `PUT /api/companies/:id` detects an entitlement change
+  (planId / paidThrough / trialEndsAt / status) and immediately runs
+  `pushLicencesForCompany` (the L3 path) — a manual suspension reaches the
+  registers in seconds, not at the next sweep. Response carries
+  `licencePush: { storesUpdated, panelsUpdated, errors }` (null when nothing
+  entitlement-bearing changed); delivery failures are reported, never fatal.
+- **Register states**: `registerEnforcementFor()` maps billing state to
+  `registerState` (`ok | warn | grace | suspended | trial | unlicensed`, warn
+  = paid-through ends within `REGISTER_WARN_DAYS = 7`, mirroring za-pos
+  `licence.ts`) + `tradingBlocked`. Surfaced on `StoreOut`/`CompanyOut`, the
+  fleet card gained a **Register** column, companies gained a "Sales blocked"
+  pill.
+- **Naming lesson**: the first draft called the flag `salesBlocked` — the §40
+  privacy-boundary test failed it immediately (forbidden key pattern
+  `/sales/i`). Renamed to **`tradingBlocked`**, which is also the better
+  domain word (suspension stops trading; reads/returns/cash-ups stay open).
+- Existing `clients.test.ts` onboarding/upgrade tests now pass an explicit
+  multi-store `planId` — correct, since multi-store topology is a plan
+  feature and a no-plan company must not get it for free.
+- CONTEXT.md §2b "Feature enforcement (L4)" authored: vocabulary table,
+  who-enforces-what, propagation, register-state vocabulary, and the tenant
+  TODO (requireFeature middleware, checkout/sync gate, runtime-config
+  subscription block, banners). **No `/api/internal/*` shapes changed** — the
+  licence already carries everything; nothing for the tenant contract to
+  break.
+- Tests: **120 green across 11 suites** (+15 `enforcement.test.ts`);
+  typecheck clean; frontend build green.
+
 ## 2026-09-11 — restaurant store type (tenant P4 mirror)
 
 - `restaurant` added to the CP vertical vocabulary, mirroring the tenant
@@ -9,7 +58,7 @@ Dated log of the build.
   starter-pack-only like hardware/pharmacy): `StoreVertical` union +
   `STORE_VERTICALS` in `src/config/registryDb.ts`, mirrored union in
   `frontend/src/types.ts`, `VERTICAL_COLORS` pill (`bg-rose-100
-  text-rose-700`) in `StatusBadge.tsx`, `StoresPage` chip label
+text-rose-700`) in `StatusBadge.tsx`, `StoresPage` chip label
   "Restaurant" + form option "Restaurant & quick service", and the two
   hard-coded POS-profile dropdowns (`ClientsPage` wizard +
   `ClientDetailPage` edit modal) gained "Restaurant & Quick Service".
@@ -87,7 +136,7 @@ Dated log of the build.
 - Owner reported two failing rows:
   - `HM Spares Head Office` (panel) showing **Down** — its URL was
     `https://localhost:3250`, i.e. `https://` (TLS) against a plain-HTTP
-    deployment, **and** 3250 is a *store*, not a Head Office.
+    deployment, **and** 3250 is a _store_, not a Head Office.
   - `HM Spares CT` (store) failing push — the duplicate of `urban-threads-cpt` on
     3252 with a control-plane-generated token.
 - **Both apps already identify themselves on their PUBLIC `/health`**: a store
@@ -95,7 +144,7 @@ Dated log of the build.
   `probeAppKind()` now reads that before registering anything, and:
   - a **store** row pointed at a Head Office is refused (`409 wrong_app_kind`),
   - a **Head Office** row pointed at a store is refused — the mistake that was made.
-  - Only a *definitive* mismatch is refused: an unreachable URL (or one that answers
+  - Only a _definitive_ mismatch is refused: an unreachable URL (or one that answers
     without identifying) is allowed, because the registry row is normally created
     before the container is deployed. That keeps create-then-deploy working.
 - **Stopped prefilling `https://`** in the Head Office form — that prefill is how a
@@ -175,9 +224,9 @@ Dated log of the build.
      `DELETE /api/panels/:id` so the guard is satisfiable (removes the registration
      only, never the deployment). Both use inline two-step confirmation rather than
      a native dialog, which some browsers suppress.
-- Live check on the real merchant: *"Urban Threads Retail Group still owns 3 stores
+- Live check on the real merchant: _"Urban Threads Retail Group still owns 3 stores
   and 1 Head Office. Reassign or remove those first… To stop trading without losing
-  history, suspend it instead."*
+  history, suspend it instead."_
 - Tests: **79 control plane (7 suites)**, +5 covering delete guards and that
   detaching a store leaves it intact and unassigned rather than cascading it away.
 
@@ -281,7 +330,7 @@ Dated log of the build.
 - `src/services/licenceSigner.ts`: ES256/P-256 keypair from `LEASE_PRIVATE_KEY`
   (or `LEASE_KEY_FILE`), `keyId` for rotation, monotonic per-store `sequence`,
   and a real `maxOfflineUntil = min(now + LICENCE_OFFLINE_DAYS, paidThrough +
-  LICENCE_GRACE_DAYS)` clamp. Production **refuses to start** without a private
+LICENCE_GRACE_DAYS)` clamp. Production **refuses to start** without a private
   key rather than issue unverifiable licences; dev generates an ephemeral pair
   with a loud warning.
 - `scripts/generate-licence-key.ts` prints the pair for installation. There is no
@@ -354,7 +403,7 @@ Dated log of the build.
   same day): `StoreVertical` union + `STORE_VERTICALS` in
   `src/config/registryDb.ts`, mirrored `StoreVertical` in
   `frontend/src/types.ts`, VERTICAL_COLORS pill (`bg-emerald-100
-  text-emerald-700`) in StatusBadge, and StoresPage chip label "Pharmacy" +
+text-emerald-700`) in StatusBadge, and StoresPage chip label "Pharmacy" +
   form option "Pharmacy & wellness" (pushed verbatim in the configure
   payload; the tenant seeds its schedule-grouped starter pack).
   `scripts/dev-store-stub.ts` allow-list updated; the "rejects an unknown
@@ -426,7 +475,7 @@ catalogue, IBT, GitHub push of this repo.
 - Cross-repo change (CP + za-pos tenant) making the **store type** a
   registry-owned field pushed to every store. Field name `vertical`
   everywhere (tenant vocabulary, `general | clothing | spares |
-  supermarket`); UI labels it "Store type"; default `general` (matches the
+supermarket`); UI labels it "Store type"; default `general` (matches the
   tenant's `settings.vertical` default).
 - CP `stores` table gains `vertical TEXT NOT NULL DEFAULT 'general'`
   (`STORES_DDL` + `schema.sql` mirror + `ensureColumns` auto-migration for

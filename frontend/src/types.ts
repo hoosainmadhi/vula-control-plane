@@ -4,12 +4,7 @@ export type StoreStatus = 'active' | 'paused';
 export type ConfigStatus = 'pending' | 'ok' | 'failed';
 export type HealthStatus = 'up' | 'down' | 'unknown';
 export type StoreVertical =
-  | 'general'
-  | 'clothing'
-  | 'spares'
-  | 'hardware'
-  | 'pharmacy'
-  | 'restaurant';
+  'general' | 'clothing' | 'spares' | 'hardware' | 'pharmacy' | 'restaurant';
 
 export type PlanPeriod = 'monthly' | 'annual' | 'once-off';
 
@@ -28,6 +23,13 @@ export interface Plan {
 }
 
 export type BillingState = 'active' | 'trial' | 'past_due' | 'suspended' | 'unlicensed';
+
+/**
+ * How the register presents the subscription (L4). Derived by the control plane
+ * from the same inputs the licence carries; the register derives the same states
+ * from its licence.
+ */
+export type RegisterState = 'ok' | 'warn' | 'grace' | 'suspended' | 'trial' | 'unlicensed';
 
 export interface Company {
   id: number;
@@ -48,6 +50,10 @@ export interface Company {
   features: string[];
   panels: number;
   note: string;
+  /** How the register will present the subscription. */
+  registerState: RegisterState;
+  /** True when the register refuses new sales for this company. */
+  tradingBlocked: boolean;
   createdAt: string;
 }
 
@@ -107,6 +113,10 @@ export interface Store {
   planName: string;
   billingState: string;
   entitlementNote: string;
+  /** How the register will present the subscription. */
+  registerState: RegisterState;
+  /** True when the register refuses new sales for this store's company. */
+  tradingBlocked: boolean;
   deployStatus?: 'not_deployed' | 'provisioning' | 'deployed' | 'failed';
   coolifyUuid?: string | null;
   adminEmail?: string | null;
@@ -284,5 +294,3 @@ export interface ClientDetailResponse {
     steps: DeploymentJobStep[];
   } | null;
 }
-
-

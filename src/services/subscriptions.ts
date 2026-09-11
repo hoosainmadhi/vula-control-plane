@@ -76,7 +76,10 @@ export function deriveBillingState(company: CompanyRecord, now: Date = new Date(
 }
 
 /** Resolve a company's plan into a full entitlement set. */
-export function entitlementsFor(company: CompanyRecord | null, now: Date = new Date()): Entitlements {
+export function entitlementsFor(
+  company: CompanyRecord | null,
+  now: Date = new Date(),
+): Entitlements {
   if (!company) return { ...UNASSIGNED };
 
   const plan: PlanRecord | null = company.plan_id ? getPlanById(company.plan_id) : null;
@@ -156,3 +159,73 @@ export function canUseTerminals(company: CompanyRecord | null, terminalCount: nu
 
 /** Today, as the CP measures it — used by tests and cap messages. */
 export const today = (): string => dayString(new Date());
+
+// --- L4 enforcement -----------------------------------------------------------
+
+/**
+ * How the register will present the subscription, derived from the same inputs
+ * the licence carries. The CP surfaces it so the office sees which stores will
+ * warn or refuse sales without having to decode billing states; the register
+ * derives the same states from its licence (za-pos `licence.ts` mirrors the
+ * windows — keep the two sides in step).
+ *
+ *  - `ok`         — paid up with more than the warn window to run
+ *  - `warn`       — paid up, but the subscription ends within REGISTER_WARN_DAYS
+ *  - `grace`      — past paid_through, inside the grace window; trading continues
+ *  - `suspended`  — grace over (or manually suspended); the register refuses new sales
+ *  - `trial` / `unlicensed` — passed through from the billing state
+ */
+export type RegisterState = 'ok' | 'warn' | 'grace' | 'suspended' | 'trial' | 'unlicensed';
+
+/** Warn the register (and the office) this many days before paid_through ends. */
+export const REGISTER_WARN_DAYS = 7;
+
+export interface RegisterEnforcement {
+  registerState: RegisterState;
+  /** True when the store's register refuses new sales (never for reads/returns/cash-ups). */
+  tradingBlocked: boolean;
+}
+
+export const registerEnforcementFor = (
+  ent: Entitlements,
+  now: Date = new Date(),
+): RegisterEnforcement => {
+  switch (ent.billingState) {
+    case 'suspended':
+      return { registerState: 'suspended', tradingBlocked: true };
+    case 'past_due':
+      return { registerState: 'grace', tradingBlocked: false };
+    case 'trial':
+      return { registerState: 'trial', tradingBlocked: false };
+    case 'unlicensed':
+      return { registerState: 'unlicensed', tradingBlocked: false };
+    case 'active': {
+      if (ent.paidThrough) {
+        const paid = new Date(`${ent.paidThrough}T23:59:59.000Z`);
+        paid.setUTCDate(paid.getUTCDate() - REGISTER_WARN_DAYS);
+        if (now.getTime() >= paid.getTime())
+          return { registerState: 'warn', tradingBlocked: false };
+      }
+      return { registerState: 'ok', tradingBlocked: false };
+    }
+  }
+};
+
+/**
+ * Feature gate for the control plane's own capability grants. The plan feature
+ * set is written into every licence; this is the CP-side half of the same
+ * contract — where the CP itself grants a capability (multi-store
+ * orchestration today), a plan without the feature is refused with the same
+ * 402 shape the applications use. Pass the plan that will be in force when the
+ * capability lands: the company's current plan, or the one an action upgrades to.
+ */
+export function requireFeature(plan: PlanRecord | null, key: string): CapCheck {
+  const features = planFeatures(plan);
+  if (!features.includes(key)) {
+    return {
+      ok: false,
+      reason: `The ${plan?.name ?? 'assigned'} plan does not include "${key}". Upgrade the plan to use it.`,
+    };
+  }
+  return { ok: true };
+}

@@ -4,12 +4,14 @@
 
 ## Deferred from the licensing work (2026-09-10)
 
-- **Billing recording (L3)** — invoices, payments, mark-paid. `paid_through` is a
-  hand-typed date today, so there is no payment history or dunning trail. This is
-  the next functional gap.
-- **Feature enforcement (L4)** — a plan's feature set is *informational* right now:
-  nothing is gated, so a Starter company can use every Enterprise feature. Needs
-  `requireFeature(key)` (402), the sales gate after grace, and the register states.
+- ~~**Billing recording (L3)**~~ **shipped 2026-09-11** — invoices, payments,
+  paid-through advancement, automated renewals, Billing UI.
+- ~~**Feature enforcement (L4)**~~ **CP authority side shipped 2026-09-11** —
+  curated vocabulary + validation, `requireFeature` 402 gates, licence
+  propagation on entitlement change, register states surfaced; contract in
+  CONTEXT §2b. The store side (`requireFeature` middleware, checkout/sync
+  gate, `/api/runtime-config` subscription block, register banners) is the
+  **za-pos workstream**.
 - **Head Office entitlement (L5)** — the panel should gate `multi_store`.
 - **Store telemetry** — app/schema/config version, heartbeat, per-terminal
   last-seen, sync events. Without it the SPOG's Version / Sync / terminal-online /

@@ -1,5 +1,33 @@
 # Findings
 
+## 2026-09-11 — L4 enforcement notes
+
+- **The §40 privacy-boundary test guards field NAMES, not just values.** Naming
+  a new wire field `salesBlocked` failed `assertNoBusinessData` because the
+  forbidden pattern includes `/sales/i` — the test cannot know the flag is
+  entitlement state rather than trading data, and it shouldn't try. Renamed to
+  `tradingBlocked`, which is also more accurate domain language: a suspension
+  stops _trading_ (new sales), while reads, returns, voids and cash-ups stay
+  open. Lesson: on this surface, avoid business-flavoured substrings in field
+  names even when the meaning is innocent.
+- **A company with no plan derives `active`, not `unlicensed`.** L2's
+  `deriveBillingState` treats a missing `paid_through` as active (Starter-cap
+  fallback), so a no-plan company is `ok` at the register with an empty
+  feature list — it keeps trading. `unlicensed` is reserved for a _store with
+  no company at all_ (the `UNASSIGNED` entitlement). The gate implication:
+  `requireFeature` on a null plan refuses everything, which is exactly what
+  closed the "upgrade to multi-store for free" hole the old clients tests
+  were exercising.
+- **Feature lists are stored in vocabulary order, not submission order.**
+  `validateFeatureKeys` normalises, so licences are byte-deterministic across
+  UI submissions and plan edits — a licence re-push never diffs just because
+  checkboxes arrived in a different order.
+- **The upgrade-to-multistore gate must check the _effective_ plan.** The
+  route accepts `planId`, and `orchestrateUpgradeToMultiStore` applies that
+  plan switch before deploying — so a Starter company upgrading WITH a
+  multi-store planId must be allowed (the gate would otherwise read the
+  current Starter plan and wrongly refuse).
+
 ## 2026-09-10 — a table rebuild corrupted the registry (my bug, and what it taught)
 
 **Symptom reported by the owner:** creating or editing a company failed with
@@ -21,7 +49,7 @@ Two SQLite behaviours make that sequence destructive:
    SQLite 3.25 the default is `legacy_alter_table = OFF`, so renaming `plans` to
    `plans_old` silently rewrote `companies.plan_id REFERENCES plans(id)` into
    `REFERENCES "plans_old"(id)`. Dropping the temporary table then left `companies`
-   pointing at a table that did not exist — which is precisely why *writes* failed
+   pointing at a table that did not exist — which is precisely why _writes_ failed
    with "no such table: main.plans_old" while reads looked fine.
 2. **`DROP TABLE` fires foreign-key actions.** With `foreign_keys = ON`, dropping
    `plans_old` triggered the (rewritten) `ON DELETE SET NULL` and **wiped every
@@ -49,19 +77,18 @@ PRAGMA legacy_alter_table = OFF;
 PRAGMA foreign_keys = ON;
 ```
 
-**Repair.** The migration now also *heals* damage: any table whose stored DDL still
+**Repair.** The migration now also _heals_ damage: any table whose stored DDL still
 references `plans_old` is rebuilt against the real `plans`, an interrupted rebuild
 is recovered, and the whole step is idempotent. The live registry was backed up to
 `/tmp/control-plane.db.before-repair` before being healed; the wiped plan
 assignment was restored and licences re-pushed to the three branches and the panel.
 
-**Guard.** `src/__tests__/migration.test.ts` builds a database with the *old*
+**Guard.** `src/__tests__/migration.test.ts` builds a database with the _old_
 schema plus real data and asserts, on boot: the CHECK widened, no temporary table
 left behind, `companies` still references `plans` (never `plans_old`), the plan
 assignment survived rather than being nulled, existing rows kept their values, a
 second boot changes nothing, and an already-damaged database is repaired. That test
 would have caught this before it reached a live registry.
-
 
 Dated, verified findings that shaped the build.
 

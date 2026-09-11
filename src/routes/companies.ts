@@ -30,7 +30,14 @@ import {
   requireSlug,
   requireString,
 } from '../utils/validate.js';
-import { entitlementsFor, type Entitlements } from '../services/subscriptions.js';
+import {
+  entitlementsFor,
+  registerEnforcementFor,
+  type Entitlements,
+  type RegisterEnforcement,
+} from '../services/subscriptions.js';
+import { PLAN_FEATURES, validateFeatureKeys } from '../services/features.js';
+import { pushLicencesForCompany } from '../services/billing.js';
 
 export const companiesRouter = Router();
 companiesRouter.use(requireOffice);
@@ -71,6 +78,10 @@ export interface CompanyOut {
   panels: number;
   /** Operator-facing sentence when something needs attention; '' when healthy. */
   note: string;
+  /** How the register will present the subscription (mirrors the licence the store holds). */
+  registerState: RegisterEnforcement['registerState'];
+  /** True when the register refuses new sales for this company. */
+  tradingBlocked: boolean;
   createdAt: string;
 }
 
@@ -107,6 +118,7 @@ const companyToOut = (company: CompanyRecord): CompanyOut => {
     features: ent.features,
     panels: listPanelsForCompany(company.id).length,
     note: ent.note,
+    ...registerEnforcementFor(ent),
     createdAt: company.created_at,
   };
 };
@@ -118,6 +130,19 @@ const companyFromParams = (raw: string): CompanyRecord => {
 };
 
 // --- Plans -------------------------------------------------------------------
+
+/**
+ * The curated feature vocabulary. Plans may only grant these keys, and the
+ * applications gate on exactly these — the list is the cross-application
+ * contract, so it is served for the Plans UI and for the store/head-office
+ * workstreams to mirror.
+ */
+plansRouter.get(
+  '/features',
+  asyncHandler(async (_req, res) => {
+    res.json(PLAN_FEATURES);
+  }),
+);
 
 plansRouter.get(
   '/',
@@ -139,13 +164,14 @@ plansRouter.post(
     if (!Number.isInteger(maxStores) || maxStores < 1 || maxStores > 500) {
       throw new ValidationError('maxStores must be an integer between 1 and 500');
     }
-    if (!Number.isInteger(maxTerminalsPerStore) || maxTerminalsPerStore < 1 || maxTerminalsPerStore > 99) {
+    if (
+      !Number.isInteger(maxTerminalsPerStore) ||
+      maxTerminalsPerStore < 1 ||
+      maxTerminalsPerStore > 99
+    ) {
       throw new ValidationError('maxTerminalsPerStore must be an integer between 1 and 99');
     }
-    const rawFeatures = req.body?.features;
-    if (rawFeatures !== undefined && !Array.isArray(rawFeatures)) {
-      throw new ValidationError('features must be an array of strings');
-    }
+    const features = validateFeatureKeys(req.body?.features ?? []);
     const billingPeriod = (req.body?.billingPeriod ?? 'monthly') as string;
     if (!PLAN_PERIODS.includes(billingPeriod as never)) {
       throw new ValidationError(`billingPeriod must be one of: ${PLAN_PERIODS.join(', ')}`);
@@ -157,7 +183,7 @@ plansRouter.post(
           name,
           maxStores,
           maxTerminalsPerStore,
-          features: (rawFeatures as string[] | undefined) ?? [],
+          features,
           priceCents: Number(req.body?.priceCents ?? 0),
           billingPeriod: billingPeriod as 'monthly' | 'annual' | 'once-off',
         }),
@@ -198,7 +224,7 @@ plansRouter.put(
       ...(body.maxTerminalsPerStore !== undefined
         ? { maxTerminalsPerStore: Number(body.maxTerminalsPerStore) }
         : {}),
-      ...(rawFeatures !== undefined ? { features: rawFeatures as string[] } : {}),
+      ...(rawFeatures !== undefined ? { features: validateFeatureKeys(rawFeatures) } : {}),
       ...(body.priceCents !== undefined ? { priceCents: Number(body.priceCents) } : {}),
       ...(body.billingPeriod !== undefined
         ? { billingPeriod: body.billingPeriod as 'monthly' | 'annual' | 'once-off' }
@@ -315,20 +341,53 @@ companiesRouter.put(
     if (body.status !== undefined && !['active', 'suspended'].includes(String(body.status))) {
       throw new ValidationError('status must be active or suspended');
     }
+    const planId =
+      body.planId !== undefined ? (body.planId === null ? null : Number(body.planId)) : undefined;
+    const paidThrough =
+      body.paidThrough !== undefined
+        ? (optionalString(body, 'paidThrough', 10) ?? null)
+        : undefined;
+    const trialEndsAt =
+      body.trialEndsAt !== undefined
+        ? (optionalString(body, 'trialEndsAt', 10) ?? null)
+        : undefined;
+    const status = body.status !== undefined ? (body.status as 'active' | 'suspended') : undefined;
+
     const updated = updateCompany(company.id, {
       ...(body.name !== undefined ? { name: requireString(body, 'name') } : {}),
       ...(body.billingEmail !== undefined
         ? { billingEmail: optionalString(body, 'billingEmail', 200) ?? '' }
         : {}),
-      ...(body.planId !== undefined ? { planId: body.planId === null ? null : Number(body.planId) } : {}),
-      ...(body.paidThrough !== undefined
-        ? { paidThrough: optionalString(body, 'paidThrough', 10) ?? null }
-        : {}),
-      ...(body.trialEndsAt !== undefined
-        ? { trialEndsAt: optionalString(body, 'trialEndsAt', 10) ?? null }
-        : {}),
-      ...(body.status !== undefined ? { status: body.status as 'active' | 'suspended' } : {}),
+      ...(planId !== undefined ? { planId } : {}),
+      ...(paidThrough !== undefined ? { paidThrough } : {}),
+      ...(trialEndsAt !== undefined ? { trialEndsAt } : {}),
+      ...(status !== undefined ? { status } : {}),
     });
-    res.json(companyToOut(updated!));
+
+    // An entitlement change (plan, paid-through, trial, suspension) is only real
+    // once the stores and Head Office hold licences that say so. Re-push
+    // immediately rather than waiting for the next health check — a manual
+    // suspension must reach the registers in seconds, and a payment must lift
+    // the block just as fast. Failures are reported, never fail the edit: the
+    // registry row is already correct and the next sweep retries delivery.
+    const entitlementChanged =
+      (planId !== undefined && planId !== company.plan_id) ||
+      (paidThrough !== undefined && paidThrough !== company.paid_through) ||
+      (trialEndsAt !== undefined && trialEndsAt !== company.trial_ends_at) ||
+      (status !== undefined && status !== company.status);
+    let licencePush: Awaited<ReturnType<typeof pushLicencesForCompany>> | null = null;
+    if (entitlementChanged) {
+      try {
+        licencePush = await pushLicencesForCompany(company.id);
+      } catch (err) {
+        licencePush = {
+          storesUpdated: 0,
+          panelsUpdated: 0,
+          errors: [err instanceof Error ? err.message : String(err)],
+        };
+      }
+    }
+
+    res.json({ ...companyToOut(updated!), licencePush });
   }),
 );

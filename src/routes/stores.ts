@@ -33,12 +33,20 @@ import {
 import { runStoreProvisioning } from '../services/storeProvisioning.js';
 import { setStoreDeployStatus, listAuditLogs } from '../config/registryDb.js';
 import { runHealthSweep } from '../services/healthSweep.js';
-import { issueLicence, isEphemeralKey, licenceKeyId, licencePublicKey } from '../services/licenceSigner.js';
+import {
+  issueLicence,
+  isEphemeralKey,
+  licenceKeyId,
+  licencePublicKey,
+} from '../services/licenceSigner.js';
 import {
   canAddStore,
   canUseTerminals,
+  deriveBillingState,
   entitlementsFor,
+  registerEnforcementFor,
   type Entitlements,
+  type RegisterEnforcement,
 } from '../services/subscriptions.js';
 import { requireOffice } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -83,6 +91,10 @@ export interface StoreOut {
   billingState: Entitlements['billingState'];
   /** '' when nothing needs the operator's attention. */
   entitlementNote: string;
+  /** How the register will present the subscription (mirrors the licence the store holds). */
+  registerState: RegisterEnforcement['registerState'];
+  /** True when the register refuses new sales for this store's company. */
+  tradingBlocked: boolean;
   deployStatus: 'not_deployed' | 'provisioning' | 'deployed' | 'failed';
   coolifyUuid: string | null;
   adminEmail: string | null;
@@ -148,6 +160,7 @@ const storeToOut = (store: StoreRecord): StoreOut => ({
       planName: ent.planName,
       billingState: ent.billingState,
       entitlementNote: ent.note,
+      ...registerEnforcementFor(ent),
     };
   })(),
   deployStatus: store.deploy_status ?? 'not_deployed',
@@ -356,6 +369,15 @@ storesRouter.post(
       const parsed = Number(companyIdRaw);
       const company = Number.isInteger(parsed) && parsed > 0 ? getCompanyById(parsed) : null;
       if (!company) throw new ValidationError('companyId does not match a known company');
+      // A suspended subscription blocks new sales — a new store is new capacity,
+      // so it is refused the same way. Stores that exist keep trading history.
+      if (deriveBillingState(company) === 'suspended') {
+        res.status(402).json({
+          error: `${company.name} is suspended — new stores are refused until the subscription is settled. Existing stores keep trading their data.`,
+          code: 'subscription_suspended',
+        });
+        return;
+      }
       const addOk = canAddStore(company);
       if (!addOk.ok) {
         res.status(402).json({ error: addOk.reason, code: 'store_cap_reached' });
@@ -376,9 +398,10 @@ storesRouter.post(
     if (companyId !== null) setStoreCompany(store.id, companyId);
 
     const provision = Boolean(req.body?.provision);
-    const adminEmail = typeof req.body?.adminEmail === 'string' && req.body.adminEmail.trim()
-      ? req.body.adminEmail.trim().toLowerCase()
-      : null;
+    const adminEmail =
+      typeof req.body?.adminEmail === 'string' && req.body.adminEmail.trim()
+        ? req.body.adminEmail.trim().toLowerCase()
+        : null;
 
     if (provision) {
       setStoreDeployStatus(store.id, 'provisioning', { adminEmail: adminEmail ?? undefined });
@@ -456,6 +479,25 @@ storesRouter.put(
     if (body['vertical'] !== undefined) input.vertical = optionalVertical(body);
     if (body['terminalCount'] !== undefined) input.terminalCount = requireTerminalCount(body);
     if (body['baseUrl'] !== undefined) input.baseUrl = requireBaseUrl(body);
+
+    // Raising the till count is new capacity: refused while the owning company
+    // is suspended, exactly like a new store. Same-count pushes stay allowed so
+    // config and licence delivery keep working — that is how a store learns it
+    // has been unsuspended.
+    if (
+      input.terminalCount !== undefined &&
+      store.company_id !== null &&
+      input.terminalCount > store.terminal_count
+    ) {
+      const company = getCompanyById(store.company_id);
+      if (company && deriveBillingState(company) === 'suspended') {
+        res.status(402).json({
+          error: `${company.name} is suspended — adding terminals is refused until the subscription is settled.`,
+          code: 'subscription_suspended',
+        });
+        return;
+      }
+    }
 
     // Reassign the store to another merchant, or clear the link with null.
     if (body['companyId'] !== undefined) {

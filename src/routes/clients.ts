@@ -25,7 +25,7 @@ import {
   requireInt,
   optionalInt,
 } from '../utils/validate.js';
-import { entitlementsFor } from '../services/subscriptions.js';
+import { entitlementsFor, requireFeature } from '../services/subscriptions.js';
 import {
   orchestrateClientDeployment,
   orchestrateUpgradeToMultiStore,
@@ -185,8 +185,12 @@ clientsRouter.put(
     }
 
     const name = body.name !== undefined ? requireString(body, 'name') : undefined;
-    const billingEmail = body.billingEmail !== undefined ? optionalString(body, 'billingEmail', 200) ?? '' : undefined;
-    const planId = body.planId !== undefined ? (body.planId === null ? null : Number(body.planId)) : undefined;
+    const billingEmail =
+      body.billingEmail !== undefined
+        ? (optionalString(body, 'billingEmail', 200) ?? '')
+        : undefined;
+    const planId =
+      body.planId !== undefined ? (body.planId === null ? null : Number(body.planId)) : undefined;
     const status = body.status !== undefined ? (body.status as 'active' | 'suspended') : undefined;
 
     const updated = updateCompany(company.id, {
@@ -213,12 +217,24 @@ clientsRouter.post(
     const slug = requireSlug(req.body);
     const billingEmail = optionalString(req.body, 'billingEmail') ?? '';
     const planId = optionalInt(req.body, 'planId') ?? null;
-    const deploymentType = req.body?.deploymentType === 'multi_store' ? 'multi_store' : 'single_store';
+    const deploymentType =
+      req.body?.deploymentType === 'multi_store' ? 'multi_store' : 'single_store';
     const autoDeploy = req.body?.autoDeploy !== false;
 
     // Check slug uniqueness
     if (getCompanyBySlug(slug)) {
       throw new HttpError(409, `A client with slug '${slug}' already exists`);
+    }
+
+    // A Head Office with branches is the `multi_store` plan feature (L4): a plan
+    // without it cannot have the topology orchestrated, whatever the wizard says.
+    if (deploymentType === 'multi_store') {
+      const plan = planId !== null ? getPlanById(planId) : null;
+      const feature = requireFeature(plan, 'multi_store');
+      if (!feature.ok) {
+        res.status(402).json({ error: feature.reason, code: 'feature_not_in_plan' });
+        return;
+      }
     }
 
     // 1. Create company record
@@ -237,9 +253,13 @@ clientsRouter.post(
     // 2. Format stores list
     const rawStores = (req.body?.stores ?? []) as Array<Record<string, unknown>>;
     const stores = rawStores.map((s, idx) => ({
-      name: typeof s.name === 'string' && s.name.trim() ? s.name.trim() : `${name} Store ${idx + 1}`,
+      name:
+        typeof s.name === 'string' && s.name.trim() ? s.name.trim() : `${name} Store ${idx + 1}`,
       slug: typeof s.slug === 'string' && s.slug.trim() ? s.slug.trim() : `${slug}-${idx + 1}`,
-      baseUrl: typeof s.baseUrl === 'string' && s.baseUrl.trim() ? s.baseUrl.trim() : `https://${slug}-${idx + 1}.vula-app.co.za`,
+      baseUrl:
+        typeof s.baseUrl === 'string' && s.baseUrl.trim()
+          ? s.baseUrl.trim()
+          : `https://${slug}-${idx + 1}.vula-app.co.za`,
       terminalCount: typeof s.terminalCount === 'number' ? s.terminalCount : 1,
       adminEmail: typeof s.adminEmail === 'string' ? s.adminEmail.trim() : undefined,
     }));
@@ -256,14 +276,25 @@ clientsRouter.post(
     }
 
     // 3. Format Head Office if multi_store
-    let headOffice: { name: string; slug: string; baseUrl: string; adminEmail?: string } | undefined;
+    let headOffice:
+      { name: string; slug: string; baseUrl: string; adminEmail?: string } | undefined;
     if (deploymentType === 'multi_store') {
       const rawHo = req.body?.headOffice as Record<string, unknown> | undefined;
       headOffice = {
-        name: typeof rawHo?.name === 'string' && rawHo.name.trim() ? rawHo.name.trim() : `${name} Head Office`,
-        slug: typeof rawHo?.slug === 'string' && rawHo.slug.trim() ? rawHo.slug.trim() : `${slug}-ho`,
-        baseUrl: typeof rawHo?.baseUrl === 'string' && rawHo.baseUrl.trim() ? rawHo.baseUrl.trim() : `https://${slug}-ho.vula-app.co.za`,
-        adminEmail: typeof rawHo?.adminEmail === 'string' ? rawHo.adminEmail.trim() : billingEmail || undefined,
+        name:
+          typeof rawHo?.name === 'string' && rawHo.name.trim()
+            ? rawHo.name.trim()
+            : `${name} Head Office`,
+        slug:
+          typeof rawHo?.slug === 'string' && rawHo.slug.trim() ? rawHo.slug.trim() : `${slug}-ho`,
+        baseUrl:
+          typeof rawHo?.baseUrl === 'string' && rawHo.baseUrl.trim()
+            ? rawHo.baseUrl.trim()
+            : `https://${slug}-ho.vula-app.co.za`,
+        adminEmail:
+          typeof rawHo?.adminEmail === 'string'
+            ? rawHo.adminEmail.trim()
+            : billingEmail || undefined,
       };
     }
 
@@ -296,23 +327,62 @@ clientsRouter.post(
       throw new HttpError(409, 'Client is already configured as Multi-Store');
     }
 
+    // Gate on the plan that will be in force when the topology lands: the one
+    // being upgraded to when supplied, otherwise the company's current plan.
+    const requestedPlanId = optionalInt(req.body, 'planId');
+    if (requestedPlanId && !getPlanById(requestedPlanId)) {
+      throw new HttpError(400, 'planId does not match a known plan');
+    }
+    const effectivePlan = requestedPlanId
+      ? getPlanById(requestedPlanId)
+      : company.plan_id
+        ? getPlanById(company.plan_id)
+        : null;
+    const feature = requireFeature(effectivePlan, 'multi_store');
+    if (!feature.ok) {
+      res.status(402).json({ error: feature.reason, code: 'feature_not_in_plan' });
+      return;
+    }
+
     const rawHo = (req.body?.headOffice ?? {}) as Record<string, unknown>;
     const headOffice = {
-      name: typeof rawHo.name === 'string' && rawHo.name.trim() ? rawHo.name.trim() : `${company.name} Head Office`,
-      slug: typeof rawHo.slug === 'string' && rawHo.slug.trim() ? rawHo.slug.trim() : `${company.slug}-ho`,
-      baseUrl: typeof rawHo.baseUrl === 'string' && rawHo.baseUrl.trim() ? rawHo.baseUrl.trim() : `https://${company.slug}-ho.vula-app.co.za`,
-      adminEmail: typeof rawHo.adminEmail === 'string' ? rawHo.adminEmail.trim() : company.billing_email || undefined,
+      name:
+        typeof rawHo.name === 'string' && rawHo.name.trim()
+          ? rawHo.name.trim()
+          : `${company.name} Head Office`,
+      slug:
+        typeof rawHo.slug === 'string' && rawHo.slug.trim()
+          ? rawHo.slug.trim()
+          : `${company.slug}-ho`,
+      baseUrl:
+        typeof rawHo.baseUrl === 'string' && rawHo.baseUrl.trim()
+          ? rawHo.baseUrl.trim()
+          : `https://${company.slug}-ho.vula-app.co.za`,
+      adminEmail:
+        typeof rawHo.adminEmail === 'string'
+          ? rawHo.adminEmail.trim()
+          : company.billing_email || undefined,
     };
 
-    let newStore: { name: string; slug: string; baseUrl: string; terminalCount: number; adminEmail?: string } | undefined;
+    let newStore:
+      | { name: string; slug: string; baseUrl: string; terminalCount: number; adminEmail?: string }
+      | undefined;
     const rawNewStore = req.body?.newStore as Record<string, unknown> | undefined;
     if (rawNewStore) {
       newStore = {
-        name: typeof rawNewStore.name === 'string' ? rawNewStore.name.trim() : `${company.name} Branch 2`,
+        name:
+          typeof rawNewStore.name === 'string'
+            ? rawNewStore.name.trim()
+            : `${company.name} Branch 2`,
         slug: typeof rawNewStore.slug === 'string' ? rawNewStore.slug.trim() : `${company.slug}-2`,
-        baseUrl: typeof rawNewStore.baseUrl === 'string' ? rawNewStore.baseUrl.trim() : `https://${company.slug}-2.vula-app.co.za`,
-        terminalCount: typeof rawNewStore.terminalCount === 'number' ? rawNewStore.terminalCount : 1,
-        adminEmail: typeof rawNewStore.adminEmail === 'string' ? rawNewStore.adminEmail.trim() : undefined,
+        baseUrl:
+          typeof rawNewStore.baseUrl === 'string'
+            ? rawNewStore.baseUrl.trim()
+            : `https://${company.slug}-2.vula-app.co.za`,
+        terminalCount:
+          typeof rawNewStore.terminalCount === 'number' ? rawNewStore.terminalCount : 1,
+        adminEmail:
+          typeof rawNewStore.adminEmail === 'string' ? rawNewStore.adminEmail.trim() : undefined,
       };
     }
 

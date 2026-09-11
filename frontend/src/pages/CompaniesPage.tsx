@@ -93,7 +93,8 @@ export default function CompaniesPage() {
     () => ({
       total: companies.length,
       onPlan: companies.filter((c) => c.planId !== null).length,
-      attention: companies.filter((c) => c.billingState !== 'active' && c.billingState !== 'trial').length,
+      attention: companies.filter((c) => c.billingState !== 'active' && c.billingState !== 'trial')
+        .length,
       stores: companies.reduce((n, c) => n + c.storesUsed, 0),
     }),
     [companies],
@@ -172,7 +173,10 @@ export default function CompaniesPage() {
     return (
       <div className="space-y-4">
         <ErrorBox message={loadError} />
-        <button onClick={() => void load()} className="text-sm font-semibold text-brand-600 hover:underline">
+        <button
+          onClick={() => void load()}
+          className="text-sm font-semibold text-brand-600 hover:underline"
+        >
           Retry
         </button>
       </div>
@@ -188,19 +192,24 @@ export default function CompaniesPage() {
           { label: 'Billing attention', value: summary.attention, tone: 'text-amber-600' },
           { label: 'Stores managed', value: summary.stores, tone: 'text-brand-600' },
         ].map((tile) => (
-          <div key={tile.label} className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5">
+          <div
+            key={tile.label}
+            className="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5"
+          >
             <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
               {tile.label}
             </div>
-            <div className={`mt-0.5 text-lg font-black tabular-nums ${tile.tone}`}>{tile.value}</div>
+            <div className={`mt-0.5 text-lg font-black tabular-nums ${tile.tone}`}>
+              {tile.value}
+            </div>
           </div>
         ))}
       </div>
 
       <div className="flex items-center justify-between">
         <p className="text-sm text-slate-500">
-          A company is the merchant account: it owns the branches and the Head Office application, and
-          is where the plan and paid-through date live.
+          A company is the merchant account: it owns the branches and the Head Office application,
+          and is where the plan and paid-through date live.
         </p>
         <button
           onClick={openCreate}
@@ -213,7 +222,10 @@ export default function CompaniesPage() {
       {notice && (
         <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-700">
           <span>{notice}</span>
-          <button onClick={() => setNotice(null)} className="text-xs text-slate-400 hover:text-slate-600">
+          <button
+            onClick={() => setNotice(null)}
+            className="text-xs text-slate-400 hover:text-slate-600"
+          >
             ✕
           </button>
         </div>
@@ -221,7 +233,8 @@ export default function CompaniesPage() {
 
       {companies.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
-          No companies yet. Create one to own a merchant's stores and Head Office, then assign stores to it.
+          No companies yet. Create one to own a merchant's stores and Head Office, then assign
+          stores to it.
         </div>
       ) : (
         <div className="space-y-3">
@@ -230,15 +243,27 @@ export default function CompaniesPage() {
               <div className="flex flex-col gap-4 px-5 py-4 xl:flex-row xl:items-start xl:gap-8">
                 <div className="min-w-0 xl:w-72 xl:shrink-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="truncate text-base font-bold text-slate-900">{company.name}</span>
+                    <span className="truncate text-base font-bold text-slate-900">
+                      {company.name}
+                    </span>
                     <StatusBadge
                       status={company.billingState}
                       colors={BILLING_COLORS}
                       label={BILLING_LABELS[company.billingState]}
                     />
+                    {company.tradingBlocked ? (
+                      <span
+                        className="inline-block whitespace-nowrap rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700"
+                        title="The registers refuse new sales while the subscription is suspended"
+                      >
+                        Sales blocked
+                      </span>
+                    ) : null}
                   </div>
                   <div className="truncate font-mono text-xs text-slate-400">{company.slug}</div>
-                  <div className="truncate text-xs text-slate-500">{company.billingEmail || '—'}</div>
+                  <div className="truncate text-xs text-slate-500">
+                    {company.billingEmail || '—'}
+                  </div>
                 </div>
 
                 <div className="grid flex-1 grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
@@ -246,7 +271,9 @@ export default function CompaniesPage() {
                     <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                       Plan
                     </div>
-                    <div className="mt-0.5 text-xs font-bold text-slate-800">{company.planName}</div>
+                    <div className="mt-0.5 text-xs font-bold text-slate-800">
+                      {company.planName}
+                    </div>
                     <div className="font-mono text-[11px] text-slate-400">{company.planCode}</div>
                   </div>
                   <div>
@@ -268,7 +295,9 @@ export default function CompaniesPage() {
                       {company.paidThrough ?? '—'}
                     </div>
                     {company.trialEndsAt ? (
-                      <div className="text-[11px] text-slate-400">Trial to {company.trialEndsAt}</div>
+                      <div className="text-[11px] text-slate-400">
+                        Trial to {company.trialEndsAt}
+                      </div>
                     ) : null}
                   </div>
                   <div>
@@ -326,7 +355,10 @@ export default function CompaniesPage() {
       )}
 
       {modalOpen && (
-        <Modal title={editingId ? `Configure ${form.name}` : 'New company'} onClose={() => setModalOpen(false)}>
+        <Modal
+          title={editingId ? `Configure ${form.name}` : 'New company'}
+          onClose={() => setModalOpen(false)}
+        >
           <div className="space-y-4">
             {formError && <ErrorBox message={formError} />}
 
@@ -395,9 +427,9 @@ export default function CompaniesPage() {
                   className={inputCls}
                 />
                 <p className="mt-1 text-xs text-slate-400">
-                  The date this subscription is paid up to. Before it the account is active; after it the
-                  account goes past due for the grace window, then new sales stop. It also caps how long a
-                  disconnected till may keep trading offline.
+                  The date this subscription is paid up to. Before it the account is active; after
+                  it the account goes past due for the grace window, then new sales stop. It also
+                  caps how long a disconnected till may keep trading offline.
                 </p>
               </div>
               <div>
@@ -416,14 +448,17 @@ export default function CompaniesPage() {
                 <label className={labelCls}>Account status</label>
                 <select
                   value={form.status}
-                  onChange={(e) => setForm({ ...form, status: e.target.value as 'active' | 'suspended' })}
+                  onChange={(e) =>
+                    setForm({ ...form, status: e.target.value as 'active' | 'suspended' })
+                  }
                   className={inputCls}
                 >
                   <option value="active">Active</option>
                   <option value="suspended">Suspended (manual override)</option>
                 </select>
                 <p className="mt-1 text-xs text-slate-400">
-                  Billing state is normally derived from the paid-through date; suspending here overrides it.
+                  Billing state is normally derived from the paid-through date; suspending here
+                  overrides it.
                 </p>
               </div>
             )}

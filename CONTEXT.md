@@ -19,35 +19,34 @@ implementation `~/apps/optimed-control-plane`. Vocabulary here is _store_
 
 ## 2. Domain glossary
 
-| Term                | Meaning                                                                                                                                                                                                                                                                                                                             |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| store               | One fleet member: a deployed Vula instance with its own DB, reachable at its `base_url`                                                                                                                                                                                                                                             |
-| slug                | URL-safe unique store id: `^[a-z0-9][a-z0-9-]*$`, ≤ 40 chars, lowercase. Immutable after creation (it names the deployment, so renaming would orphan the store's identity)                                                                                                                                                          |
-| terminal / Till N   | A register device at a store. Terminal N is configured by a successful push that covers `till N`. V1 terminals are generated `Till 1..N` (names may later become custom)                                                                                                                                                            |
-| terminal_count      | Desired terminal count, 1–99. Owned by the control plane; pushed to the store via `/api/internal/configure`                                                                                                                                                                                                                         |
+| Term                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| store               | One fleet member: a deployed Vula instance with its own DB, reachable at its `base_url`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| slug                | URL-safe unique store id: `^[a-z0-9][a-z0-9-]*$`, ≤ 40 chars, lowercase. Immutable after creation (it names the deployment, so renaming would orphan the store's identity)                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| terminal / Till N   | A register device at a store. Terminal N is configured by a successful push that covers `till N`. V1 terminals are generated `Till 1..N` (names may later become custom)                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| terminal_count      | Desired terminal count, 1–99. Owned by the control plane; pushed to the store via `/api/internal/configure`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | vertical            | Store type: `general` (default) · `clothing` · `spares` · `hardware` · `pharmacy` · `restaurant`. Tenant vocabulary (`settings.vertical` on the store — same values in `~/apps/za-pos/src/services/vertical.ts`). Owned by the control plane; pushed on every configure and applied by the store (which seeds the type's starter category pack). 2026-09-03: `supermarket` merged into `general`; `hardware` added. 2026-09-04: `pharmacy` added (starter pack only on the tenant — schedule-grouped categories). 2026-09-11: `restaurant` added (starter pack only on the tenant — menu categories; tables/KDS are P5–P7) |
-| push                | The CP → store call that applies the terminal configuration. Create attempts a **first push**; afterwards pushes are explicit only (PUT edits never auto-push)                                                                                                                                                                      |
-| config snapshot     | The store's response body from the last successful push, stored as `last_config_snapshot_json`; drives the "configured" ticks in the terminal preview                                                                                                                                                                               |
-| health check        | CP → store `GET /api/internal/status` ping, manual in v1; outcome stored as `last_health_status` (up/down/unknown) + `last_health_at`                                                                                                                                                                                               |
-| pause / resume      | Operator state on the registry row. Paused stores refuse push and reset-admin (409); health checks still allowed                                                                                                                                                                                                                    |
-| office admin        | The single control-plane operator, authenticated from env (`OFFICE_ADMIN_EMAIL` / `OFFICE_ADMIN_PASSWORD`); JWT kind `office`. No users table in v1                                                                                                                                                                                 |
-| control_plane_token | Per-store secret sent as `X-Control-Plane-Token` on every internal-API call. **Supplied at store creation** (64 hex chars — it must match the `CONTROL_PLANE_TOKEN` env already set on the store's container) **or generated** (32-byte hex) when omitted. Stored in the registry, **never returned by the API or shown in the UI** |
-| last_config_status  | `pending` (never pushed) · `ok` (last push succeeded) · `failed` (last push failed). The error message itself is not persisted in v1                                                                                                                                                                                                |
+| push                | The CP → store call that applies the terminal configuration. Create attempts a **first push**; afterwards pushes are explicit only (PUT edits never auto-push)                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| config snapshot     | The store's response body from the last successful push, stored as `last_config_snapshot_json`; drives the "configured" ticks in the terminal preview                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| health check        | CP → store `GET /api/internal/status` ping, manual in v1; outcome stored as `last_health_status` (up/down/unknown) + `last_health_at`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| pause / resume      | Operator state on the registry row. Paused stores refuse push and reset-admin (409); health checks still allowed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| office admin        | The single control-plane operator, authenticated from env (`OFFICE_ADMIN_EMAIL` / `OFFICE_ADMIN_PASSWORD`); JWT kind `office`. No users table in v1                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| control_plane_token | Per-store secret sent as `X-Control-Plane-Token` on every internal-API call. **Supplied at store creation** (64 hex chars — it must match the `CONTROL_PLANE_TOKEN` env already set on the store's container) **or generated** (32-byte hex) when omitted. Stored in the registry, **never returned by the API or shown in the UI**                                                                                                                                                                                                                                                                                        |
+| last_config_status  | `pending` (never pushed) · `ok` (last push succeeded) · `failed` (last push failed). The error message itself is not persisted in v1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 ## 2a. Companies, plans and panels (2026-09)
 
 ### Naming — two planes, two products
 
-| Port | Name | Audience |
-|---|---|---|
+| Port | Name                   | Audience                                    |
+| ---- | ---------------------- | ------------------------------------------- |
 | 3240 | **Vula Control Plane** | The SaaS vendor. One instance, all clients. |
-| 3260 | **Head Office** | The merchant. One instance per merchant. |
+| 3260 | **Head Office**        | The merchant. One instance per merchant.    |
 
 "Control plane" is a term of art for the layer that manages a fleet, and only the
 vendor app is one. The merchant's app is a business application, so naming it a
 control plane is what makes the two confusable in conversation. Do not write
 "SaaS CP" / "Multistore CP" — both end in CP and the ambiguity survives.
-
 
 - **A company is the merchant account** — the unit of billing, and the owner of both
   the branch stores and the Company Control Panel. It holds a plan, a `paid_through`
@@ -77,7 +76,7 @@ control plane is what makes the two confusable in conversation. Do not write
   `service: "vula-head-office"` — and the control plane probes that before
   registering a row. A store pointed at a Head Office (or vice versa) is refused as
   `wrong_app_kind`, because the two are different products and a mismatch can never
-  authenticate. Only a *definitive* mismatch is refused: an unreachable URL is
+  authenticate. Only a _definitive_ mismatch is refused: an unreachable URL is
   allowed, since a registry row is normally created before its container is
   deployed.
 - **Deletion is guarded, deliberately.** A company can only be deleted when it owns
@@ -93,7 +92,7 @@ control plane is what makes the two confusable in conversation. Do not write
   than the plan allows returns **402** with an upgrade message. An unassigned store
   is not cap-policed, so a store predating companies keeps working.
 - **The Company Control Panel is a managed application in the vendor's fleet.** One
-  per merchant (e.g. `urban-threads-ho.vula-app.co.za`), it is a *separate* app with
+  per merchant (e.g. `urban-threads-ho.vula-app.co.za`), it is a _separate_ app with
   its own database and its own `ho_users` logins. The control plane **provisions,
   monitors and licences** it, and the customer reaches it directly at its own URL.
 - **The privacy boundary is absolute, and asserted by tests.** The control plane may
@@ -104,6 +103,83 @@ control plane is what makes the two confusable in conversation. Do not write
   enforced at the API rather than in the React tree. The tempting shortcut to avoid
   is SSO from the control plane into a panel: the control plane links out, it never
   embeds.
+
+## 2b. Feature enforcement (L4, 2026-09-11)
+
+Before L4 a plan's feature set was informational — nothing anywhere read it. L4 makes
+it a contract shared by all three applications. The licence remains the source of
+truth at the store: it carries `features[]`, `billingState`, `paidThrough` and
+`maxOfflineUntil`, and each application derives its own gate from those claims.
+
+### The curated feature vocabulary (six keys, locked with the owner)
+
+A plan may grant only these keys; the control plane refuses anything else at plan
+write time (400, naming the unknown key) so a typo cannot flow silently into licences.
+Served machine-readably at `GET /api/plans/features` (see `src/services/features.ts`
+— the canonical list lives there).
+
+| Key                 | Label              | Enforced by                         |
+| ------------------- | ------------------ | ----------------------------------- |
+| `customer_credit`   | Customer credit    | store                               |
+| `advanced_reports`  | Advanced reports   | store                               |
+| `multi_store`       | Multi-store        | control plane · Head Office · store |
+| `stock_transfers`   | Stock transfers    | Head Office                         |
+| `ecommerce_bridges` | E-commerce bridges | store                               |
+| `ai_assistant`      | AI assistant       | store                               |
+
+### Who enforces what
+
+- **The store (za-pos register)** gates its own API server-side — `requireFeature(key)`
+  middleware returns **402** when the licence's feature list lacks the key, and the
+  checkout path (including offline replay via sync push) refuses **new sales** while
+  suspended. Server-side is deliberate: being online must not be a bypass. Reads,
+  returns, voids and cash-ups are never blocked — suspension stops trading, it never
+  destroys data or traps history. Offline trade is bounded by the licence's
+  `maxOfflineUntil` clamp. The register surfaces **warn / grace / suspended** states
+  in its UI from the same licence (see the register-state vocabulary below).
+- **The control plane** gates capability grants of its own:
+  - multi-store client onboarding and single→multi upgrades require `multi_store`
+    → **402 `{ error, code: 'feature_not_in_plan' }`** (the plan that will be in
+    force when the topology lands is the one checked — an upgrade may carry its own
+    plan switch);
+  - a **suspended** company buys no new capacity: creating a store for it, or
+    raising a store's terminal count, returns **402
+    `{ error, code: 'subscription_suspended' }`**. Config and licence pushes are
+    never blocked — that is how a store learns it has been unsuspended.
+- **The Head Office panel** verifies the company licence and gates `multi_store` on
+  it (L5, pending).
+
+### Enforcement propagation
+
+An entitlement change (plan, paid-through, trial, suspension) re-pushes signed
+licences to all of the company's stores and Head Office immediately (same path L3
+uses on payment), so a manual suspension reaches the registers in seconds rather
+than at the next health sweep. Delivery failures are reported in the API response
+(`licencePush.errors`) and never fail the edit — the registry row is already
+correct, and the next sweep retries.
+
+### Register states (shared vocabulary)
+
+Derived by the CP from the billing state and surfaced on stores and companies
+(`registerState` + `tradingBlocked`); the register derives the same from its
+licence. The two sides must keep the windows in step (CP: `REGISTER_WARN_DAYS = 7`,
+grace from env `LICENCE_GRACE_DAYS`).
+
+| State        | Meaning                                                    | Register behaviour            |
+| ------------ | ---------------------------------------------------------- | ----------------------------- |
+| `ok`         | Paid up, more than 7 days to run                           | trading normally              |
+| `warn`       | Paid up, subscription ends within 7 days                   | trading, renewal banner       |
+| `grace`      | Past paid-through, inside the grace window                 | trading, grace banner         |
+| `suspended`  | Grace over, or operator suspension                         | **new sales refused**         |
+| `trial`      | Inside the trial window                                    | trading, trial banner         |
+| `unlicensed` | No company/plan behind the licence (informational licence) | trading, no entitlement gates |
+
+**For the tenant workstream (za-pos) to implement against this contract:**
+`requireFeature` middleware (402) on the gated routes, the suspended gate on the
+checkout + sync-replay paths, a `subscription` block (register state, features,
+sales/trading status) in `/api/runtime-config`, and the register banners/feature
+hiding. No internal-API (`/api/internal/*`) shapes change in L4 — the licence
+already carries everything the store needs.
 
 ## 3. Fleet topology
 
@@ -149,11 +225,11 @@ when it is missing or wrong. The store should 404 (not 401) these routes when
 `CONTROL_PLANE_TOKEN` is unset on the container, so unconfigured stores don't
 advertise the surface.
 
-| Endpoint                         | CP client fn    | Request                                                                                                                              | Response (2xx)                                                                                                                               |
-| -------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Endpoint                         | CP client fn    | Request                                                                                                                                                                           | Response (2xx)                                                                                                                               |
+| -------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /api/internal/configure`   | `pushTerminals` | `{ terminalCount: N, vertical: "general"\|"clothing"\|"spares"\|"hardware"\|"pharmacy"\|"restaurant", terminals: [{ till: 1, name: "Till 1" }, …, { till: N, name: "Till N" }] }` | `{ ok: true, applied: { terminalCount: N, terminals: [...] } }` — full body is stored as the config snapshot                                 |
-| `GET /api/internal/status`       | `ping`          | —                                                                                                                                     | any JSON describing the store, e.g. `{ ok, storeName, vatRegNo, vertical, version, terminalCount, terminals }`                               |
-| `POST /api/internal/admin/reset` | `resetAdmin`    | —                                                                                                                                     | `{ ok: true, tempPassword: "<one-time>" }` — the **store generates** the temp password; the CP only proxies it (shown once, never persisted) |
+| `GET /api/internal/status`       | `ping`          | —                                                                                                                                                                                 | any JSON describing the store, e.g. `{ ok, storeName, vatRegNo, vertical, version, terminalCount, terminals }`                               |
+| `POST /api/internal/admin/reset` | `resetAdmin`    | —                                                                                                                                                                                 | `{ ok: true, tempPassword: "<one-time>" }` — the **store generates** the temp password; the CP only proxies it (shown once, never persisted) |
 
 Every CP push includes `vertical` (CP-owned). The store validates it (400
 listing the allowed values when unknown), writes it to `settings.vertical`
@@ -169,23 +245,23 @@ and push _outcomes_ are recorded on the registry row regardless.
 
 `stores` — one row per fleet member:
 
-| Column                      | Type / constraint                              | Notes                                             |
-| --------------------------- | ---------------------------------------------- | ------------------------------------------------- |
-| `id`                        | INTEGER PK AUTOINCREMENT                       |                                                   |
-| `slug`                      | TEXT NOT NULL UNIQUE                           | Validated `^[a-z0-9][a-z0-9-]*$` ≤ 40; immutable  |
-| `name`                      | TEXT NOT NULL                                  | Display name                                      |
-| `vat_reg_no`                | TEXT NULL                                      | Shown on the dashboard; informational in v1       |
+| Column                      | Type / constraint                              | Notes                                                                                                                          |
+| --------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                        | INTEGER PK AUTOINCREMENT                       |                                                                                                                                |
+| `slug`                      | TEXT NOT NULL UNIQUE                           | Validated `^[a-z0-9][a-z0-9-]*$` ≤ 40; immutable                                                                               |
+| `name`                      | TEXT NOT NULL                                  | Display name                                                                                                                   |
+| `vat_reg_no`                | TEXT NULL                                      | Shown on the dashboard; informational in v1                                                                                    |
 | `vertical`                  | TEXT NOT NULL DEFAULT 'general'                | Store type; enum enforced at the API layer (no CHECK — SQLite can't add one via the auto-migration). Pushed on every configure |
-| `terminal_count`            | INTEGER NOT NULL DEFAULT 1 CHECK 1–99          | Pushed as Till 1..N                               |
-| `base_url`                  | TEXT NOT NULL CHECK http(s)%                   | Trailing slash stripped at write                  |
-| `control_plane_token`       | TEXT NOT NULL                                  | Never serialized by the API                       |
-| `status`                    | TEXT DEFAULT 'active' CHECK active/paused      | Paused blocks push + reset-admin                  |
-| `last_config_status`        | TEXT DEFAULT 'pending' CHECK pending/ok/failed | Last push outcome                                 |
-| `last_config_at`            | TEXT NULL                                      | UTC `datetime('now')`                             |
-| `last_config_snapshot_json` | TEXT NULL                                      | Store's configure response (kept only on success) |
-| `last_health_at`            | TEXT NULL                                      | UTC                                               |
-| `last_health_status`        | TEXT DEFAULT 'unknown' CHECK up/down/unknown   | up/down recorded on each manual check             |
-| `created_at` / `updated_at` | TEXT NOT NULL DEFAULT (datetime('now'))        | UTC                                               |
+| `terminal_count`            | INTEGER NOT NULL DEFAULT 1 CHECK 1–99          | Pushed as Till 1..N                                                                                                            |
+| `base_url`                  | TEXT NOT NULL CHECK http(s)%                   | Trailing slash stripped at write                                                                                               |
+| `control_plane_token`       | TEXT NOT NULL                                  | Never serialized by the API                                                                                                    |
+| `status`                    | TEXT DEFAULT 'active' CHECK active/paused      | Paused blocks push + reset-admin                                                                                               |
+| `last_config_status`        | TEXT DEFAULT 'pending' CHECK pending/ok/failed | Last push outcome                                                                                                              |
+| `last_config_at`            | TEXT NULL                                      | UTC `datetime('now')`                                                                                                          |
+| `last_config_snapshot_json` | TEXT NULL                                      | Store's configure response (kept only on success)                                                                              |
+| `last_health_at`            | TEXT NULL                                      | UTC                                                                                                                            |
+| `last_health_status`        | TEXT DEFAULT 'unknown' CHECK up/down/unknown   | up/down recorded on each manual check                                                                                          |
+| `created_at` / `updated_at` | TEXT NOT NULL DEFAULT (datetime('now'))        | UTC                                                                                                                            |
 
 Conventions: snake_case columns, CHECK-constrained enums, ISO-ish UTC
 timestamps, JSON text for snapshots. No audit table, no users table, no

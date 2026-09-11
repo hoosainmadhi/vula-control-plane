@@ -27,6 +27,25 @@ export const VERTICAL_COLORS: Record<string, string> = {
   restaurant: 'bg-rose-100 text-rose-700',
 };
 
+/** Register subscription states (L4) — what the till shows and whether it sells. */
+export const REGISTER_STATE_COLORS: Record<string, string> = {
+  ok: 'bg-green-100 text-green-700',
+  warn: 'bg-amber-100 text-amber-700',
+  grace: 'bg-orange-100 text-orange-700',
+  suspended: 'bg-red-100 text-red-700',
+  trial: 'bg-sky-100 text-sky-700',
+  unlicensed: 'bg-slate-100 text-slate-600',
+};
+
+export const REGISTER_STATE_LABELS: Record<string, string> = {
+  ok: 'Register: OK',
+  warn: 'Register: renewal due',
+  grace: 'Register: grace',
+  suspended: 'Register: sales blocked',
+  trial: 'Register: trial',
+  unlicensed: 'Register: unlicensed',
+};
+
 interface StatusBadgeProps {
   status: string;
   colors: Record<string, string>;
