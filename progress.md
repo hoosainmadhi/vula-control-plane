@@ -2,6 +2,68 @@
 
 Dated log of the build.
 
+## 2026-09-11 — Consolidated Plan: Client-Centric Workflow, Durable Orchestration & Operations Hardening (Phases 0–5)
+
+- **Client-Centric Control Plane Architecture (`src/routes/clients.ts`, `services/clientOrchestrator.ts`)**:
+  1. Refactored Control Plane primary navigation around canonical **Client / Company** entities (`ClientsPage.tsx` at `/`).
+  2. Built **New Client Wizard** (`+ New Client`):
+     - Step 1: Client Information (Name, Slug, Billing Email, Plan, POS Profile).
+     - Step 2: Deployment Topology selection (Single Store vs Multi-Store).
+     - Step 3: Technical Setup (Single store FQDN/Tills or Head Office + Branch store roster).
+     - Step 4: Review & Automated Orchestration.
+  3. Built **Client Detail Portal** (`ClientDetailPage.tsx` at `/clients/:id`):
+     - Comprehensive tabs for Overview, Stores Fleet, Head Office Panel, and Deployments.
+     - Live deployment stepper with granular step outcomes and one-click Retry.
+     - Single-to-Multi Upgrade workflow (§7): deploys Head Office and branches without touching existing store databases.
+- **Durable Deployment Jobs & Steps Engine (`deployment_jobs`, `deployment_job_steps`)**:
+  1. Persistent job ledger: `deployment_jobs` and `deployment_job_steps` with status tracking (`pending`, `running`, `complete`, `failed`).
+  2. Idempotent step runner: checks existing resources, skips already completed steps, resumes failed steps without duplicate container creation.
+  3. Automated multi-store wiring: auto-deploys HO, branches, configures terminals, provisions admins, wires HO URL/token into branch stores, and broadcasts asymmetric trade licences.
+- **Operations Hardening & Privacy Cleanups**:
+  1. Removed `vat_reg_no` from Developer Control Plane store creation/edit forms and DTOs (§21).
+  2. Configuration versioning: added `desired_config_version` and `applied_config_version` tracking (§22).
+  3. Background health sweep service (`services/healthSweep.ts`): pings active stores/panels, records latency in milliseconds, and exposes `POST /api/stores/health-sweep` (§23).
+  4. Audit logging table (`audit_logs`) and API (`GET /api/stores/audit-logs`) tracking privileged admin actions (§27).
+- Tests: 104 green across 10 suites (+4 new client orchestration tests); backend and frontend builds clean.
+
+## 2026-09-11 — L3 Billing & Invoicing shipped (automated subscriptions & licence renewals)
+
+- **Subscription Invoicing & Payments Engine (`services/billing.ts`)**:
+  1. `invoices` table: tracks invoice number (`INV-YYYYMMDD-XXXX`), company id, amount, due date, paid date, status (`pending`, `paid`, `overdue`, `cancelled`).
+  2. `payments` table: records completed fee settlements with payment method (`manual`, `stripe`, `bank_transfer`, `credit_card`, `paypal`), transaction ID, and timestamp.
+  3. `billing_settings` table: per-company auto-renewal preferences and invoice notification settings.
+  4. Monotonic renewal date calculation: `calculateRenewalDate()` computes exact renewal dates (+1 month for monthly, +1 year for annual, 2099-12-31 for once-off). Extends from existing future `paid_through` if active, or from today if past due.
+  5. Automated fleet licence push: upon payment settlement or auto-renewal, signed asymmetric licences are instantly re-minted with monotonic sequence and pushed to every branch store (`pushLicence`) and Company Head Office panel (`pushLicenceToPanel`).
+  6. Automated background renewal sweep: `runAutomatedRenewals()` scans all active merchant companies with priced plans. Subscriptions within the 3-day expiry threshold automatically generate invoices, settle payments, advance `paid_through`, and broadcast renewed licences.
+- **Office Billing API (`src/routes/billing.ts`)**:
+  - `GET /api/billing/invoices`, `GET /api/billing/invoices/:id`, `POST /api/billing/invoices`
+  - `POST /api/billing/invoices/:id/pay` (record payment, advance `paid_through`, push licences)
+  - `POST /api/billing/invoices/:id/cancel`
+  - `GET /api/billing/payments`, `GET/PUT /api/billing/settings/:companyId`
+  - `POST /api/billing/renew-check` (trigger automated renewal cycle)
+- **Executive Billing Dashboard (`frontend/src/pages/BillingPage.tsx`)**:
+  - Live billing KPIs (Total Billed, Collected Revenue, Outstanding Receivables).
+  - Status filters, invoice generator modal, payment capture modal, and manual trigger for the automated renewal sweep.
+  - Recent payment audit ledger.
+- Tests: 100 green across 9 suites (+5 new comprehensive billing tests); backend typecheck and frontend production build clean.
+
+## 2026-09-11 — automated Coolify container provisioning (F2 core shipped)
+
+- Integrated Coolify v1 REST API client (`services/coolify.ts`) into the Control Plane,
+  porting the proven pattern from `optimed-control-plane`.
+- Added background provisioning service (`services/storeProvisioning.ts`): calls Coolify v1 API,
+  creates applications targeting `hoosainmadhi/za-pos`, injects environment variables
+  (`PORT=3000`, `DB_PATH=/data/za-pos.db`, `LEASE_PUBLIC_KEY`, `APP_URL`, `JWT_SECRET`,
+  `CONTROL_PLANE_TOKEN`), attaches Docker persistent volumes, triggers build & deploy, polls
+  `/health` until up, bootstraps store admin via `/api/internal/admin/init`, and pushes initial
+  terminals + trade licence.
+- Database schema: added `deploy_status`, `coolify_uuid`, `volume_name`, `admin_email` columns
+  to `stores` table with auto-migrations in `src/config/registryDb.ts`.
+- UI: Added "Auto-provision container on Coolify" checkbox and admin email input to `StoresPage.tsx`
+  create modal, live deployment status badges (`Provisioning on Coolify...` with animated spinner,
+  `Auto-deployed`, `Deploy failed`), and automatic 4-second live polling while provisioning.
+- Tests: 95 green across 8 suites; typecheck and frontend build clean.
+
 ## 2026-09-10 — the fleet is self-describing: wrong-kind registrations refused
 
 - Owner reported two failing rows:

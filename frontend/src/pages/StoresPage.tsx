@@ -285,15 +285,6 @@ function StoreFormModal({ modal, saving, error, companies, onClose, onSubmit }: 
           </p>
         </div>
         <div>
-          <label className={labelCls}>VAT registration no.</label>
-          <input
-            value={form.vatRegNo}
-            onChange={(e) => setForm({ ...form, vatRegNo: e.target.value })}
-            className={inputCls}
-            placeholder="4530211828 (optional)"
-          />
-        </div>
-        <div>
           <label className={labelCls}>Store base URL</label>
           <input
             required
@@ -316,6 +307,34 @@ function StoreFormModal({ modal, saving, error, companies, onClose, onSubmit }: 
           />
         </div>
         {!editing && (
+          <div className="space-y-3 rounded-lg border border-teal-200 bg-teal-50/50 p-3">
+            <label className="flex items-center gap-2.5 text-xs font-bold text-teal-950 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.provision ?? false}
+                onChange={(e) => setForm({ ...form, provision: e.target.checked })}
+                className="rounded border-teal-300 text-teal-600 focus:ring-teal-500"
+              />
+              <span>Auto-provision container on Coolify</span>
+            </label>
+            <p className="text-[11px] text-teal-800">
+              When checked, Coolify creates the application container, attaches a persistent /data volume, and deploys it automatically.
+            </p>
+            {form.provision ? (
+              <div>
+                <label className="mb-1 block text-xs font-semibold text-slate-700">Initial Store Administrator Email</label>
+                <input
+                  type="email"
+                  value={form.adminEmail ?? ''}
+                  onChange={(e) => setForm({ ...form, adminEmail: e.target.value })}
+                  placeholder="admin@newstore.co.za"
+                  className={inputCls}
+                />
+              </div>
+            ) : null}
+          </div>
+        )}
+        {!editing && !form.provision && (
           <div>
             <label className={labelCls}>
               Control plane token <span className="font-normal text-slate-400">(optional)</span>
@@ -444,6 +463,16 @@ export default function StoresPage() {
     void load();
   }, [load]);
 
+  // Live polling when any store is currently being provisioned on Coolify
+  useEffect(() => {
+    const isProvisioning = stores.some((s) => s.deployStatus === 'provisioning');
+    if (!isProvisioning) return;
+    const interval = setInterval(() => {
+      void load();
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [stores, load]);
+
   const notify = (kind: NoticeKind, text: string): void => setNotice({ kind, text });
 
   const submitForm = async (values: StoreFormValues): Promise<void> => {
@@ -452,7 +481,7 @@ export default function StoresPage() {
     try {
       const body = {
         name: values.name.trim(),
-        vatRegNo: values.vatRegNo.trim() || null,
+        vatRegNo: values.vatRegNo ? values.vatRegNo.trim() : null,
         vertical: values.vertical,
         baseUrl: values.baseUrl.trim(),
         terminalCount: Number(values.terminalCount),
@@ -468,14 +497,21 @@ export default function StoresPage() {
             ...body,
             slug: values.slug,
             ...(values.controlPlaneToken ? { controlPlaneToken: values.controlPlaneToken } : {}),
+            ...(values.provision ? { provision: true, adminEmail: values.adminEmail?.trim() } : {}),
           },
         });
         const store = res.store;
         notify(
-          res.firstPush?.ok ? 'ok' : 'error',
-          res.firstPush?.ok
-            ? `Store ${store.slug} created; Till 1..${store.terminalCount} pushed`
-            : `Store ${store.slug} created but the first push failed: ${res.firstPush?.error ?? 'unknown error'}`,
+          res.provisioning
+            ? 'ok'
+            : res.firstPush?.ok
+              ? 'ok'
+              : 'error',
+          res.provisioning
+            ? `Store ${store.slug} created — container provisioning launched on Coolify...`
+            : res.firstPush?.ok
+              ? `Store ${store.slug} created; Till 1..${store.terminalCount} pushed`
+              : `Store ${store.slug} created but the first push failed: ${res.firstPush?.error ?? 'unknown error'}`,
         );
         // Reveal a generated token exactly once — otherwise the operator has no
         // way to put it into the deployment, and every push fails on mismatch.
@@ -735,6 +771,19 @@ export default function StoresPage() {
                         colors={STORE_COLORS}
                         label={STATUS_LABELS[store.status]}
                       />
+                      {store.deployStatus === 'provisioning' ? (
+                        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-700 animate-pulse">
+                          <Loader2 className="h-3 w-3 animate-spin" /> Provisioning
+                        </span>
+                      ) : store.deployStatus === 'deployed' ? (
+                        <span className="inline-flex items-center rounded-full bg-teal-50 border border-teal-200 px-2 py-0.5 text-[10px] font-bold text-teal-700">
+                          Auto-deployed
+                        </span>
+                      ) : store.deployStatus === 'failed' ? (
+                        <span className="inline-flex items-center rounded-full bg-rose-50 border border-rose-200 px-2 py-0.5 text-[10px] font-bold text-rose-700">
+                          Deploy failed
+                        </span>
+                      ) : null}
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-2">
                       <span
@@ -804,15 +853,6 @@ export default function StoresPage() {
                       </div>
                       <div className="mt-0.5 text-[11px] text-slate-400">
                         {fmtTime(store.lastConfigAt)}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        VAT no.
-                      </div>
-                      <div className="mt-0.5 font-mono text-xs text-slate-600">
-                        {store.vatRegNo || '—'}
                       </div>
                     </div>
                   </div>

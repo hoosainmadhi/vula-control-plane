@@ -30,6 +30,9 @@ import {
   probeAppKind,
   StoreClientError,
 } from '../services/storeClient.js';
+import { runStoreProvisioning } from '../services/storeProvisioning.js';
+import { setStoreDeployStatus, listAuditLogs } from '../config/registryDb.js';
+import { runHealthSweep } from '../services/healthSweep.js';
 import { issueLicence, isEphemeralKey, licenceKeyId, licencePublicKey } from '../services/licenceSigner.js';
 import {
   canAddStore,
@@ -80,6 +83,9 @@ export interface StoreOut {
   billingState: Entitlements['billingState'];
   /** '' when nothing needs the operator's attention. */
   entitlementNote: string;
+  deployStatus: 'not_deployed' | 'provisioning' | 'deployed' | 'failed';
+  coolifyUuid: string | null;
+  adminEmail: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -144,6 +150,9 @@ const storeToOut = (store: StoreRecord): StoreOut => ({
       entitlementNote: ent.note,
     };
   })(),
+  deployStatus: store.deploy_status ?? 'not_deployed',
+  coolifyUuid: store.coolify_uuid ?? null,
+  adminEmail: store.admin_email ?? null,
   createdAt: store.created_at,
   updatedAt: store.updated_at,
 });
@@ -270,6 +279,22 @@ storesRouter.get(
 );
 
 storesRouter.post(
+  '/health-sweep',
+  asyncHandler(async (_req, res) => {
+    const summary = await runHealthSweep();
+    res.json({ ok: true, summary });
+  }),
+);
+
+storesRouter.get(
+  '/audit-logs',
+  asyncHandler(async (_req, res) => {
+    const logs = listAuditLogs(100);
+    res.json({ ok: true, logs });
+  }),
+);
+
+storesRouter.post(
   '/',
   asyncHandler(async (req, res) => {
     const name = requireString(req.body, 'name');
@@ -349,6 +374,17 @@ storesRouter.post(
       controlPlaneToken,
     );
     if (companyId !== null) setStoreCompany(store.id, companyId);
+
+    const provision = Boolean(req.body?.provision);
+    const adminEmail = typeof req.body?.adminEmail === 'string' && req.body.adminEmail.trim()
+      ? req.body.adminEmail.trim().toLowerCase()
+      : null;
+
+    if (provision) {
+      setStoreDeployStatus(store.id, 'provisioning', { adminEmail: adminEmail ?? undefined });
+      void runStoreProvisioning(store.id, adminEmail);
+    }
+
     // Attempt the first push right away; a failed attempt never fails creation.
     const firstPush = await attemptPush(store);
     const firstLicence = await attemptLicencePush(getStoreById(store.id)!);
@@ -357,9 +393,19 @@ storesRouter.post(
       store: storeToOut(updated),
       firstPush,
       firstLicence,
+      provisioning: provision,
       // Present only when we generated one. Never returned by list or detail.
       ...(generatedToken ? { generatedControlPlaneToken: generatedToken } : {}),
     });
+  }),
+);
+
+storesRouter.post(
+  '/:id/redeploy',
+  asyncHandler(async (req, res) => {
+    const store = storeFromParams(req.params.id);
+    void runStoreProvisioning(store.id, store.admin_email);
+    res.json({ ok: true, message: `Redeployment triggered for ${store.name}` });
   }),
 );
 

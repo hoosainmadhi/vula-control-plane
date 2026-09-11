@@ -14,10 +14,9 @@ interface NavItem {
 
 /** Fleet apps the control plane operates. Business content lives elsewhere. */
 const NAV: NavItem[] = [
-  { to: '/', label: 'Stores' },
-  { to: '/head-offices', label: 'Head Offices' },
-  { to: '/companies', label: 'Companies' },
+  { to: '/', label: 'Clients' },
   { to: '/plans', label: 'Plans' },
+  { to: '/billing', label: 'Billing' },
 ];
 
 export default function Layout({ title, children }: LayoutProps) {

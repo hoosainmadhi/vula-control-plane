@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, Pencil, Plus } from 'lucide-react';
+import { Loader2, Pencil, Plus, Trash2 } from 'lucide-react';
 import { api, ApiError } from '../api';
 import ErrorBox from '../components/ErrorBox';
 import Modal from '../components/Modal';
@@ -100,6 +100,7 @@ export default function PlansPage() {
     setSaving(true);
     setFormError(null);
     const body = {
+      code: formCode.trim().toLowerCase(),
       name: formName.trim(),
       maxStores: Number(formStores),
       maxTerminalsPerStore: Number(formTerminals),
@@ -111,7 +112,7 @@ export default function PlansPage() {
       if (editing) {
         await api(`/plans/${editing.id}`, { method: 'PUT', body });
       } else {
-        await api('/plans', { method: 'POST', body: { ...body, code: formCode.trim().toLowerCase() } });
+        await api('/plans', { method: 'POST', body });
       }
       setEditing(null);
       setCreating(false);
@@ -120,6 +121,16 @@ export default function PlansPage() {
       setFormError(err instanceof ApiError ? err.message : 'Save failed');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDeletePlan = async (plan: Plan): Promise<void> => {
+    if (!confirm(`Delete plan "${plan.name}" (${plan.code})?`)) return;
+    try {
+      await api(`/plans/${plan.id}`, { method: 'DELETE' });
+      await load();
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : 'Delete failed');
     }
   };
 
@@ -199,12 +210,18 @@ export default function PlansPage() {
                     {plan.priceCents > 0 ? PERIOD_SUFFIX[plan.billingPeriod].trim() : ''}
                   </div>
                 </td>
-                <td className="px-4 py-3 text-right">
+                <td className="px-4 py-3 text-right space-x-1.5">
                   <button
                     onClick={() => openEdit(plan)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
                   >
                     <Pencil className="h-3.5 w-3.5" /> Edit
+                  </button>
+                  <button
+                    onClick={() => handleDeletePlan(plan)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-2.5 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50 cursor-pointer"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Delete
                   </button>
                 </td>
               </tr>
@@ -223,20 +240,18 @@ export default function PlansPage() {
         >
           <div className="space-y-4">
             {formError && <ErrorBox message={formError} />}
-            {!editing && (
-              <div>
-                <label className="mb-1 block text-sm font-semibold text-slate-700">Plan code</label>
-                <input
-                  value={formCode}
-                  onChange={(e) => setFormCode(e.target.value.toLowerCase())}
-                  placeholder="retail-plus"
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono focus:border-brand-500 focus:outline-none"
-                />
-                <p className="mt-1 text-xs text-slate-400">
-                  Lowercase letters, digits and dashes. Fixed after creation.
-                </p>
-              </div>
-            )}
+            <div>
+              <label className="mb-1 block text-sm font-semibold text-slate-700">Plan code</label>
+              <input
+                value={formCode}
+                onChange={(e) => setFormCode(e.target.value.toLowerCase())}
+                placeholder="retail-plus"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono focus:border-brand-500 focus:outline-none"
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                Lowercase letters, digits and dashes. Unique identifier.
+              </p>
+            </div>
             <div>
               <label className="mb-1 block text-sm font-semibold text-slate-700">Plan name</label>
               <input

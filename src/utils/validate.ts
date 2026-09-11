@@ -82,6 +82,48 @@ export const requireEmail = (body: unknown): string => {
 
 export const requirePassword = (body: unknown): string => requireString(body, 'password', 200);
 
+export const requireInt = (
+  body: unknown,
+  key: string,
+  options?: { min?: number; max?: number },
+): number => {
+  if (!isRecord(body) || body[key] === undefined || body[key] === null) {
+    throw new ValidationError(`${key} is required`);
+  }
+  const value = Number(body[key]);
+  if (!Number.isInteger(value)) {
+    throw new ValidationError(`${key} must be an integer`);
+  }
+  if (options?.min !== undefined && value < options.min) {
+    throw new ValidationError(`${key} must be at least ${options.min}`);
+  }
+  if (options?.max !== undefined && value > options.max) {
+    throw new ValidationError(`${key} must be at most ${options.max}`);
+  }
+  return value;
+};
+
+export const optionalInt = (
+  body: unknown,
+  key: string,
+  options?: { min?: number; max?: number },
+): number | undefined => {
+  if (!isRecord(body) || body[key] === undefined || body[key] === null || body[key] === '') {
+    return undefined;
+  }
+  const value = Number(body[key]);
+  if (!Number.isInteger(value)) {
+    throw new ValidationError(`${key} must be an integer`);
+  }
+  if (options?.min !== undefined && value < options.min) {
+    throw new ValidationError(`${key} must be at least ${options.min}`);
+  }
+  if (options?.max !== undefined && value > options.max) {
+    throw new ValidationError(`${key} must be at most ${options.max}`);
+  }
+  return value;
+};
+
 export const parseIdParam = (raw: string): number => {
   const id = Number(raw);
   if (!Number.isInteger(id) || id <= 0) throw new ValidationError('Invalid store id');

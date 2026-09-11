@@ -3,10 +3,13 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { getToken } from './api';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
+import ClientsPage from './pages/ClientsPage';
+import ClientDetailPage from './pages/ClientDetailPage';
 import StoresPage from './pages/StoresPage';
 import PanelsPage from './pages/PanelsPage';
 import CompaniesPage from './pages/CompaniesPage';
 import PlansPage from './pages/PlansPage';
+import BillingPage from './pages/BillingPage';
 
 function RequireOffice({ children }: { children: ReactNode }) {
   if (!getToken()) return <Navigate to="/login" replace />;
@@ -19,6 +22,26 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route
         path="/"
+        element={
+          <RequireOffice>
+            <Layout title="Clients">
+              <ClientsPage />
+            </Layout>
+          </RequireOffice>
+        }
+      />
+      <Route
+        path="/clients/:id"
+        element={
+          <RequireOffice>
+            <Layout title="Client Details">
+              <ClientDetailPage />
+            </Layout>
+          </RequireOffice>
+        }
+      />
+      <Route
+        path="/stores"
         element={
           <RequireOffice>
             <Layout title="Stores">
@@ -53,6 +76,16 @@ export default function App() {
           <RequireOffice>
             <Layout title="Plans">
               <PlansPage />
+            </Layout>
+          </RequireOffice>
+        }
+      />
+      <Route
+        path="/billing"
+        element={
+          <RequireOffice>
+            <Layout title="Billing & Invoicing">
+              <BillingPage />
             </Layout>
           </RequireOffice>
         }

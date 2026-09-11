@@ -100,6 +100,7 @@ const request = async (
 export const pushTerminals = async (
   store: Pick<StoreRecord, 'base_url' | 'control_plane_token' | 'terminal_count' | 'vertical'>,
   options: CallOptions = {},
+  extra: Record<string, unknown> = {},
 ): Promise<unknown> => {
   const { body } = await request(
     store,
@@ -109,6 +110,7 @@ export const pushTerminals = async (
       terminalCount: store.terminal_count,
       vertical: store.vertical,
       terminals: terminalNames(store.terminal_count),
+      ...extra,
     },
     options,
   );

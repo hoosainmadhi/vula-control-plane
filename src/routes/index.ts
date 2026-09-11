@@ -3,11 +3,16 @@ import { authRouter } from './auth.js';
 import { storesRouter } from './stores.js';
 import { companiesRouter, plansRouter } from './companies.js';
 import { panelsRouter } from './panels.js';
+import { billingRouter } from './billing.js';
+import { clientsRouter } from './clients.js';
 
 export const apiRouter = Router();
 
 apiRouter.use('/auth', authRouter);
+apiRouter.use('/clients', clientsRouter);
 apiRouter.use('/stores', storesRouter);
 apiRouter.use('/plans', plansRouter);
 apiRouter.use('/companies', companiesRouter);
 apiRouter.use('/panels', panelsRouter);
+apiRouter.use('/billing', billingRouter);
+

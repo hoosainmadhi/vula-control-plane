@@ -86,7 +86,7 @@ export interface Store {
   id: number;
   slug: string;
   name: string;
-  vatRegNo: string | null;
+  vatRegNo?: string | null;
   vertical: StoreVertical;
   terminalCount: number;
   baseUrl: string;
@@ -101,6 +101,9 @@ export interface Store {
   planName: string;
   billingState: string;
   entitlementNote: string;
+  deployStatus?: 'not_deployed' | 'provisioning' | 'deployed' | 'failed';
+  coolifyUuid?: string | null;
+  adminEmail?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -140,6 +143,7 @@ export interface LoginResponse {
 export interface CreateStoreResponse {
   store: Store;
   firstPush: PushOutcome | null;
+  provisioning?: boolean;
   /**
    * Present only when the control plane generated the token. Shown once so the
    * operator can install it in the deployment's env; never returned again.
@@ -156,11 +160,123 @@ export interface ResetAdminResponse {
 export interface StoreFormValues {
   name: string;
   slug: string;
-  vatRegNo: string;
+  vatRegNo?: string;
   vertical: StoreVertical;
   baseUrl: string;
   terminalCount: string;
   controlPlaneToken: string;
   /** Merchant this store belongs to; '' = unassigned. */
   companyId: string;
+  provision?: boolean;
+  adminEmail?: string;
 }
+
+export interface Invoice {
+  id: number;
+  companyId: number;
+  companyName: string;
+  invoiceNumber: string;
+  amountCents: number;
+  status: 'pending' | 'paid' | 'overdue' | 'cancelled';
+  dueDate: string | null;
+  paidDate: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Payment {
+  id: number;
+  invoiceId: number;
+  companyId: number;
+  amountCents: number;
+  method: string;
+  status: string;
+  transactionId: string | null;
+  createdAt: string;
+}
+
+export interface BillingSettings {
+  companyId: number;
+  autoRenew: boolean;
+  emailInvoice: boolean;
+  invoiceEmail: string;
+}
+
+export interface ClientListItem {
+  id: number;
+  name: string;
+  slug: string;
+  billingEmail: string;
+  topology: 'single_store' | 'multi_store';
+  planId: number | null;
+  planCode: string;
+  planName: string;
+  billingState: string;
+  paidThrough: string | null;
+  trialEndsAt: string | null;
+  status: 'active' | 'suspended';
+  headOffice: {
+    id: number;
+    name: string;
+    slug: string;
+    baseUrl: string;
+    health: string;
+    appVersion: string | null;
+  } | null;
+  storesCount: number;
+  healthyStoresCount: number;
+  totalTills: number;
+  latestJobStatus: string | null;
+  createdAt: string;
+}
+
+export interface DeploymentJobStep {
+  id: number;
+  job_id: number;
+  step_key: string;
+  resource_type: string;
+  resource_id: number | null;
+  status: 'pending' | 'running' | 'complete' | 'failed' | 'skipped';
+  attempts: number;
+  error: string | null;
+  metadata_json: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface DeploymentJob {
+  id: number;
+  type: string;
+  company_id: number;
+  status: 'pending' | 'running' | 'complete' | 'failed';
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  steps?: DeploymentJobStep[];
+}
+
+export interface ClientDetailResponse {
+  client: ClientListItem;
+  headOffice: Panel | null;
+  stores: Array<{
+    id: number;
+    name: string;
+    slug: string;
+    baseUrl: string;
+    terminalCount: number;
+    vertical: string;
+    health: string;
+    lastHealthAt: string | null;
+    deployStatus?: string;
+    coolifyUuid?: string | null;
+    adminEmail?: string | null;
+  }>;
+  latestDeployment: {
+    job: DeploymentJob;
+    steps: DeploymentJobStep[];
+  } | null;
+}
+
+

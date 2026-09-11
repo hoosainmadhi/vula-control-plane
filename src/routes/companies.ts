@@ -7,11 +7,13 @@ import {
   getCompanyById,
   getCompanyBySlug,
   getPlanById,
+  getPlanByCode,
   listCompanies,
   listPanelsForCompany,
   listPlans,
   createPlan,
   updatePlan,
+  deletePlan,
   planFeatures,
   PLAN_PERIODS,
   updateCompany,
@@ -168,13 +170,29 @@ plansRouter.put(
   '/:id',
   asyncHandler(async (req, res) => {
     const id = parseIdParam(req.params.id);
-    if (!getPlanById(id)) throw new HttpError(404, 'Plan not found');
+    const existingPlan = getPlanById(id);
+    if (!existingPlan) throw new HttpError(404, 'Plan not found');
     const body = req.body ?? {};
+
+    let codeToUpdate: string | undefined;
+    if (body.code !== undefined) {
+      const trimmed = requireString(body, 'code').toLowerCase();
+      if (!/^[a-z0-9][a-z0-9-]*$/.test(trimmed)) {
+        throw new ValidationError('code must be lowercase letters, digits and dashes');
+      }
+      const collision = getPlanByCode(trimmed);
+      if (collision && collision.id !== id) {
+        throw new HttpError(409, `A plan with code "${trimmed}" already exists`);
+      }
+      codeToUpdate = trimmed;
+    }
+
     const rawFeatures = body.features;
     if (rawFeatures !== undefined && !Array.isArray(rawFeatures)) {
       throw new ValidationError('features must be an array of strings');
     }
     const updated = updatePlan(id, {
+      ...(codeToUpdate !== undefined ? { code: codeToUpdate } : {}),
       ...(body.name !== undefined ? { name: requireString(body, 'name') } : {}),
       ...(body.maxStores !== undefined ? { maxStores: Number(body.maxStores) } : {}),
       ...(body.maxTerminalsPerStore !== undefined
@@ -188,6 +206,20 @@ plansRouter.put(
       ...(body.isActive !== undefined ? { isActive: Boolean(body.isActive) } : {}),
     });
     res.json(planToOut(updated!));
+  }),
+);
+
+plansRouter.delete(
+  '/:id',
+  asyncHandler(async (req, res) => {
+    const id = parseIdParam(req.params.id);
+    if (!getPlanById(id)) throw new HttpError(404, 'Plan not found');
+    try {
+      deletePlan(id);
+      res.json({ ok: true });
+    } catch (err: any) {
+      throw new HttpError(409, err?.message || 'Cannot delete plan');
+    }
   }),
 );
 

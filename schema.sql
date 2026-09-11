@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS stores (
   licence_push_status    TEXT    NOT NULL DEFAULT 'pending',
   licence_pushed_at      TEXT,
   company_id             INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+  deploy_status          TEXT    NOT NULL DEFAULT 'not_deployed'
+    CHECK (deploy_status IN ('not_deployed', 'provisioning', 'deployed', 'failed')),
+  coolify_uuid           TEXT,
+  volume_name            TEXT,
+  admin_email            TEXT,
   created_at             TEXT    NOT NULL DEFAULT (datetime('now')),
   updated_at             TEXT    NOT NULL DEFAULT (datetime('now'))
 );
@@ -88,3 +93,98 @@ CREATE TABLE IF NOT EXISTS panels (
   created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Subscription invoices
+CREATE TABLE IF NOT EXISTS invoices (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_id        INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  invoice_number    TEXT    NOT NULL UNIQUE,
+  amount_cents      INTEGER NOT NULL,
+  status            TEXT    NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'paid', 'overdue', 'cancelled')),
+  due_date          TEXT,
+  paid_date         TEXT,
+  created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Payments for invoices
+CREATE TABLE IF NOT EXISTS payments (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id        INTEGER REFERENCES invoices(id) ON DELETE CASCADE,
+  company_id        INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  amount_cents      INTEGER NOT NULL,
+  method            TEXT    NOT NULL
+    CHECK (method IN ('stripe', 'manual', 'bank_transfer', 'credit_card', 'paypal')),
+  status            TEXT    NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'refunded')),
+  transaction_id    TEXT,
+  created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Company billing settings
+CREATE TABLE IF NOT EXISTS billing_settings (
+  id                  INTEGER PRIMARY KEY CHECK (id = 1),
+  company_id          INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  auto_renew          INTEGER NOT NULL DEFAULT 1,
+  auto_renew_subscription_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+  email_invoice       INTEGER NOT NULL DEFAULT 1,
+  invoice_email       TEXT,
+  created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_invoices_company ON invoices(company_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
+CREATE INDEX IF NOT EXISTS idx_payments_company ON payments(company_id);
+CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
+
+-- Durable deployment jobs for client orchestration (§11, §27)
+CREATE TABLE IF NOT EXISTS deployment_jobs (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  type         TEXT NOT NULL,
+  company_id   INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  status       TEXT NOT NULL DEFAULT 'running'
+    CHECK (status IN ('pending', 'running', 'complete', 'failed')),
+  error        TEXT,
+  started_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Individual granular steps within a deployment job
+CREATE TABLE IF NOT EXISTS deployment_job_steps (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id        INTEGER NOT NULL REFERENCES deployment_jobs(id) ON DELETE CASCADE,
+  step_key      TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id   INTEGER,
+  status        TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'running', 'complete', 'failed', 'skipped')),
+  attempts      INTEGER NOT NULL DEFAULT 0,
+  error         TEXT,
+  metadata_json TEXT,
+  started_at    TEXT,
+  completed_at  TEXT
+);
+
+-- Privileged actions audit trail (§27, §30)
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor         TEXT NOT NULL,
+  action        TEXT NOT NULL,
+  target_type   TEXT NOT NULL,
+  target_id     INTEGER,
+  before_json   TEXT,
+  after_json    TEXT,
+  reason        TEXT,
+  result        TEXT NOT NULL DEFAULT 'ok',
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_deployment_jobs_company ON deployment_jobs(company_id);
+CREATE INDEX IF NOT EXISTS idx_deployment_job_steps_job ON deployment_job_steps(job_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id);
+

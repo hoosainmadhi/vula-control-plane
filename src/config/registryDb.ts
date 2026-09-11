@@ -43,6 +43,14 @@ export interface StoreRecord {
   licence_pushed_at: string | null;
   /** Owning merchant, if assigned. Nullable for rows predating companies. */
   company_id: number | null;
+  /** Deployment status for Coolify container provisioning */
+  deploy_status: 'not_deployed' | 'provisioning' | 'deployed' | 'failed';
+  coolify_uuid: string | null;
+  volume_name: string | null;
+  admin_email: string | null;
+  desired_config_version?: number;
+  applied_config_version?: number;
+  latency_ms?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -68,8 +76,101 @@ const STORES_DDL = `
     last_health_at         TEXT,
     last_health_status     TEXT    NOT NULL DEFAULT 'unknown'
       CHECK (last_health_status IN ('up', 'down', 'unknown')),
+    licence_push_status    TEXT    NOT NULL DEFAULT 'pending',
+    licence_pushed_at      TEXT,
+    company_id             INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+    deploy_status          TEXT    NOT NULL DEFAULT 'not_deployed'
+      CHECK (deploy_status IN ('not_deployed', 'provisioning', 'deployed', 'failed')),
+    coolify_uuid           TEXT,
+    volume_name            TEXT,
+    admin_email            TEXT,
     created_at             TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at             TEXT    NOT NULL DEFAULT (datetime('now'))
+  )`;
+
+const INVOICES_DDL = `
+  CREATE TABLE IF NOT EXISTS invoices (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id        INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    invoice_number    TEXT    NOT NULL UNIQUE,
+    amount_cents      INTEGER NOT NULL,
+    status            TEXT    NOT NULL DEFAULT 'pending'
+      CHECK (status IN ('pending', 'paid', 'overdue', 'cancelled')),
+    due_date          TEXT,
+    paid_date         TEXT,
+    created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+  )`;
+
+const PAYMENTS_DDL = `
+  CREATE TABLE IF NOT EXISTS payments (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id        INTEGER REFERENCES invoices(id) ON DELETE CASCADE,
+    company_id        INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    amount_cents      INTEGER NOT NULL,
+    method            TEXT    NOT NULL
+      CHECK (method IN ('stripe', 'manual', 'bank_transfer', 'credit_card', 'paypal')),
+    status            TEXT    NOT NULL DEFAULT 'pending'
+      CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'refunded')),
+    transaction_id    TEXT,
+    created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+  )`;
+
+const BILLING_SETTINGS_DDL = `
+  CREATE TABLE IF NOT EXISTS billing_settings (
+    id                  INTEGER PRIMARY KEY CHECK (id = 1),
+    company_id          INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    auto_renew          INTEGER NOT NULL DEFAULT 1,
+    auto_renew_subscription_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+    email_invoice       INTEGER NOT NULL DEFAULT 1,
+    invoice_email       TEXT,
+    created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+  )`;
+
+const DEPLOYMENT_JOBS_DDL = `
+  CREATE TABLE IF NOT EXISTS deployment_jobs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    type         TEXT NOT NULL,
+    company_id   INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    status       TEXT NOT NULL DEFAULT 'running'
+      CHECK (status IN ('pending', 'running', 'complete', 'failed')),
+    error        TEXT,
+    started_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  )`;
+
+const DEPLOYMENT_JOB_STEPS_DDL = `
+  CREATE TABLE IF NOT EXISTS deployment_job_steps (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id        INTEGER NOT NULL REFERENCES deployment_jobs(id) ON DELETE CASCADE,
+    step_key      TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id   INTEGER,
+    status        TEXT NOT NULL DEFAULT 'pending'
+      CHECK (status IN ('pending', 'running', 'complete', 'failed', 'skipped')),
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    error         TEXT,
+    metadata_json TEXT,
+    started_at    TEXT,
+    completed_at  TEXT
+  )`;
+
+const AUDIT_LOGS_DDL = `
+  CREATE TABLE IF NOT EXISTS audit_logs (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor         TEXT NOT NULL,
+    action        TEXT NOT NULL,
+    target_type   TEXT NOT NULL,
+    target_id     INTEGER,
+    before_json   TEXT,
+    after_json    TEXT,
+    reason        TEXT,
+    result        TEXT NOT NULL DEFAULT 'ok',
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
   )`;
 
 let registry: Database.Database | null = null;
@@ -210,6 +311,20 @@ export const getRegistryDb = (): Database.Database => {
   db.exec(PLANS_DDL);
   db.exec(COMPANIES_DDL);
   db.exec(PANELS_DDL);
+  db.exec(INVOICES_DDL);
+  db.exec(PAYMENTS_DDL);
+  db.exec(BILLING_SETTINGS_DDL);
+  db.exec(DEPLOYMENT_JOBS_DDL);
+  db.exec(DEPLOYMENT_JOB_STEPS_DDL);
+  db.exec(AUDIT_LOGS_DDL);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_invoices_company ON invoices(company_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_payments_company ON payments(company_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_deployment_jobs_company ON deployment_jobs(company_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_deployment_job_steps_job ON deployment_job_steps(job_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id)');
+
   // Lightweight auto-migrations for pre-existing databases.
   const storeCols = db.prepare('PRAGMA table_info(stores)').all() as Array<{ name: string }>;
   const addColumn = (name: string, ddl: string) => {
@@ -224,6 +339,13 @@ export const getRegistryDb = (): Database.Database => {
   addColumn('licence_pushed_at', 'licence_pushed_at TEXT');
   // A store belongs to a merchant. Nullable so pre-existing rows keep working.
   addColumn('company_id', 'company_id INTEGER REFERENCES companies(id) ON DELETE SET NULL');
+  addColumn('deploy_status', "deploy_status TEXT NOT NULL DEFAULT 'not_deployed'");
+  addColumn('coolify_uuid', 'coolify_uuid TEXT');
+  addColumn('volume_name', 'volume_name TEXT');
+  addColumn('admin_email', 'admin_email TEXT');
+  addColumn('desired_config_version', 'desired_config_version INTEGER NOT NULL DEFAULT 1');
+  addColumn('applied_config_version', 'applied_config_version INTEGER NOT NULL DEFAULT 0');
+  addColumn('latency_ms', 'latency_ms INTEGER');
 
   widenPlanBillingPeriod(db);
   seedPlans(db);
@@ -451,6 +573,25 @@ export const setStoreStatus = (id: number, status: StoreStatus): StoreRecord | n
   return getStoreById(id);
 };
 
+export const setStoreDeployStatus = (
+  id: number,
+  status: 'not_deployed' | 'provisioning' | 'deployed' | 'failed',
+  meta?: { coolifyUuid?: string; volumeName?: string; adminEmail?: string },
+): StoreRecord | null => {
+  getRegistryDb()
+    .prepare(
+      `UPDATE stores SET
+         deploy_status = ?,
+         coolify_uuid = COALESCE(?, coolify_uuid),
+         volume_name = COALESCE(?, volume_name),
+         admin_email = COALESCE(?, admin_email),
+         updated_at = datetime('now')
+       WHERE id = ?`,
+    )
+    .run(status, meta?.coolifyUuid ?? null, meta?.volumeName ?? null, meta?.adminEmail ?? null, id);
+  return getStoreById(id);
+};
+
 export interface ConfigResultRecord {
   status: 'ok' | 'failed';
   snapshot?: unknown;
@@ -477,15 +618,23 @@ export const recordConfigResult = (id: number, result: ConfigResultRecord): Stor
        last_config_status = ?,
        last_config_at = CASE WHEN ? THEN datetime('now') ELSE last_config_at END,
        last_config_snapshot_json = ?,
+       applied_config_version = CASE WHEN ? THEN COALESCE(desired_config_version, 1) ELSE applied_config_version END,
        updated_at = datetime('now')
      WHERE id = ?`,
   ).run(
     result.status,
     result.status === 'ok' ? 1 : 0,
     result.status === 'ok' ? JSON.stringify(result.snapshot ?? null) : null,
+    result.status === 'ok' ? 1 : 0,
     id,
   );
   return getStoreById(id);
+};
+
+export const advanceDesiredConfigVersion = (id: number): void => {
+  getRegistryDb()
+    .prepare('UPDATE stores SET desired_config_version = COALESCE(desired_config_version, 0) + 1, updated_at = datetime(\'now\') WHERE id = ?')
+    .run(id);
 };
 
 /** Reserve the next monotonic licence sequence for a store. */
@@ -586,6 +735,7 @@ export const updatePlan = (id: number, input: Partial<PlanInput> & { isActive?: 
   getRegistryDb()
     .prepare(
       `UPDATE plans SET
+         code = COALESCE(?, code),
          name = COALESCE(?, name),
          max_stores = COALESCE(?, max_stores),
          max_terminals_per_store = COALESCE(?, max_terminals_per_store),
@@ -597,6 +747,7 @@ export const updatePlan = (id: number, input: Partial<PlanInput> & { isActive?: 
        WHERE id = ?`,
     )
     .run(
+      input.code ?? null,
       input.name ?? null,
       input.maxStores ?? null,
       input.maxTerminalsPerStore ?? null,
@@ -607,6 +758,21 @@ export const updatePlan = (id: number, input: Partial<PlanInput> & { isActive?: 
       id,
     );
   return getPlanById(id);
+};
+
+export const countCompaniesForPlan = (planId: number): number =>
+  (getRegistryDb().prepare('SELECT COUNT(*) AS c FROM companies WHERE plan_id = ?').get(planId) as { c: number }).c;
+
+export const deletePlan = (id: number): boolean => {
+  const db = getRegistryDb();
+  const inUse = countCompaniesForPlan(id);
+  if (inUse > 0) {
+    throw new Error(
+      `Cannot delete plan: currently assigned to ${inUse} ${inUse === 1 ? 'company' : 'companies'}. Deactivate the plan instead.`,
+    );
+  }
+  const res = db.prepare('DELETE FROM plans WHERE id = ?').run(id);
+  return res.changes > 0;
 };
 
 export const planFeatures = (plan: PlanRecord | null): string[] => {
@@ -630,6 +796,41 @@ export interface CompanyRecord {
   paid_through: string | null;
   trial_ends_at: string | null;
   status: 'active' | 'suspended';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InvoiceRecord {
+  id: number;
+  company_id: number;
+  invoice_number: string;
+  amount_cents: number;
+  status: 'pending' | 'paid' | 'overdue' | 'cancelled';
+  due_date: string | null;
+  paid_date: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PaymentRecord {
+  id: number;
+  invoice_id: number;
+  company_id: number;
+  amount_cents: number;
+  method: 'stripe' | 'manual' | 'bank_transfer' | 'credit_card' | 'paypal';
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'refunded';
+  transaction_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BillingSettingsRecord {
+  id: number;
+  company_id: number;
+  auto_renew: number;
+  auto_renew_subscription_id: number | null;
+  email_invoice: number;
+  invoice_email: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -850,3 +1051,359 @@ export const recordPanelLicencePush = (id: number, status: ConfigStatus): PanelR
     .run(status, status === 'ok' ? 1 : 0, id);
   return getPanelById(id);
 };
+
+// --- Invoices -----------------------------------------------------------------
+
+export const listInvoices = (companyId?: number): InvoiceRecord[] => {
+  const db = getRegistryDb();
+  const query = companyId
+    ? db.prepare('SELECT * FROM invoices WHERE company_id = ? ORDER BY created_at DESC, id DESC').all(companyId)
+    : db.prepare('SELECT * FROM invoices ORDER BY created_at DESC, id DESC').all();
+  return query as InvoiceRecord[];
+};
+
+export const getInvoiceById = (id: number): InvoiceRecord | null => {
+  const row = getRegistryDb().prepare('SELECT * FROM invoices WHERE id = ?').get(id);
+  return row ? (row as InvoiceRecord) : null;
+};
+
+export const getInvoiceByNumber = (invoiceNumber: string): InvoiceRecord | null => {
+  const row = getRegistryDb().prepare('SELECT * FROM invoices WHERE invoice_number = ?').get(invoiceNumber);
+  return row ? (row as InvoiceRecord) : null;
+};
+
+export const createInvoice = (
+  companyId: number,
+  amountCents: number,
+  dueDate: Date,
+  invoiceNumber?: string,
+): InvoiceRecord => {
+  const db = getRegistryDb();
+  const info = db
+    .prepare(
+      `INSERT INTO invoices (company_id, invoice_number, amount_cents, due_date, status)
+       VALUES (?, ?, ?, ?, 'pending')`,
+    )
+    .run(
+      companyId,
+      invoiceNumber || `INV-${new Date().toISOString().slice(0, 10)}-${Math.floor(Math.random() * 10000)}`,
+      amountCents,
+      dueDate.toISOString().slice(0, 10),
+    );
+  return getInvoiceById(Number(info.lastInsertRowid))!;
+};
+
+export const updateInvoice = (
+  id: number,
+  updates: {
+    status?: 'pending' | 'paid' | 'overdue' | 'cancelled';
+    paidDate?: Date;
+  },
+): InvoiceRecord | null => {
+  if (!getInvoiceById(id)) return null;
+  const updatesList: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.status) {
+    updatesList.push('status = ?');
+    values.push(updates.status);
+  }
+
+  if (updates.paidDate) {
+    updatesList.push('paid_date = ?');
+    values.push(updates.paidDate.toISOString().slice(0, 10));
+  }
+
+  if (updatesList.length === 0) return getInvoiceById(id);
+
+  values.push(id);
+  getRegistryDb()
+    .prepare(`UPDATE invoices SET ${updatesList.join(', ')}, updated_at = datetime('now') WHERE id = ?`)
+    .run(...values);
+
+  return getInvoiceById(id);
+};
+
+// --- Payments -----------------------------------------------------------------
+
+export const listPayments = (companyId?: number): PaymentRecord[] => {
+  const db = getRegistryDb();
+  const query = companyId
+    ? db.prepare('SELECT * FROM payments WHERE company_id = ? ORDER BY created_at DESC, id DESC').all(companyId)
+    : db.prepare('SELECT * FROM payments ORDER BY created_at DESC, id DESC').all();
+  return query as PaymentRecord[];
+};
+
+export const getPaymentById = (id: number): PaymentRecord | null => {
+  const row = getRegistryDb().prepare('SELECT * FROM payments WHERE id = ?').get(id);
+  return row ? (row as PaymentRecord) : null;
+};
+
+export const createPayment = (
+  invoiceId: number,
+  companyId: number,
+  amountCents: number,
+  method: PaymentRecord['method'],
+  transactionId?: string,
+): PaymentRecord => {
+  const db = getRegistryDb();
+  const info = db
+    .prepare(
+      `INSERT INTO payments (invoice_id, company_id, amount_cents, method, status, transaction_id)
+       VALUES (?, ?, ?, ?, 'processing', ?)`,
+    )
+    .run(invoiceId, companyId, amountCents, method, transactionId || null);
+  return getPaymentById(Number(info.lastInsertRowid))!;
+};
+
+export const updatePayment = (id: number, updates: {
+  status?: PaymentRecord['status'];
+  transactionId?: string;
+}): PaymentRecord | null => {
+  if (!getPaymentById(id)) return null;
+  const updatesList: string[] = [];
+  const values: unknown[] = [];
+
+  if (updates.status) {
+    updatesList.push('status = ?');
+    values.push(updates.status);
+  }
+
+  if (updates.transactionId !== undefined) {
+    updatesList.push('transaction_id = ?');
+    values.push(updates.transactionId);
+  }
+
+  if (updatesList.length === 0) return getPaymentById(id);
+
+  values.push(id);
+  getRegistryDb()
+    .prepare(`UPDATE payments SET ${updatesList.join(', ')}, updated_at = datetime('now') WHERE id = ?`)
+    .run(...values);
+
+  return getPaymentById(id);
+};
+
+// --- Billing Settings ---------------------------------------------------------
+
+export const getBillingSettings = (companyId: number): BillingSettingsRecord | null => {
+  const row = getRegistryDb()
+    .prepare('SELECT * FROM billing_settings WHERE company_id = ?')
+    .get(companyId);
+  return row ? (row as BillingSettingsRecord) : null;
+};
+
+export const upsertBillingSettings = (
+  companyId: number,
+  settings: Partial<Pick<BillingSettingsRecord, 'auto_renew' | 'auto_renew_subscription_id' | 'email_invoice' | 'invoice_email'>>,
+): BillingSettingsRecord => {
+  const db = getRegistryDb();
+  const existing = getBillingSettings(companyId);
+
+  const autoRenew = settings.auto_renew !== undefined ? (settings.auto_renew ? 1 : 0) : existing?.auto_renew ?? 1;
+  const autoRenewSubId = settings.auto_renew_subscription_id !== undefined
+    ? settings.auto_renew_subscription_id
+    : existing?.auto_renew_subscription_id ?? null;
+  const emailInvoice = settings.email_invoice !== undefined ? (settings.email_invoice ? 1 : 0) : existing?.email_invoice ?? 1;
+  const invoiceEmail = settings.invoice_email ?? existing?.invoice_email ?? '';
+
+  if (existing) {
+    db.prepare(
+      `UPDATE billing_settings SET
+         auto_renew = ?, auto_renew_subscription_id = ?, email_invoice = ?, invoice_email = ?, updated_at = datetime('now')
+         WHERE company_id = ?`,
+    ).run(autoRenew, autoRenewSubId, emailInvoice, invoiceEmail, companyId);
+  } else {
+    db.prepare(
+      `INSERT INTO billing_settings (company_id, auto_renew, auto_renew_subscription_id, email_invoice, invoice_email)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run(companyId, autoRenew, autoRenewSubId, emailInvoice, invoiceEmail);
+  }
+
+  return getBillingSettings(companyId)!;
+};
+
+// --- Deployment Jobs & Steps (§11, §27) ---------------------------------------
+
+export interface DeploymentJobRecord {
+  id: number;
+  type: string;
+  company_id: number;
+  status: 'pending' | 'running' | 'complete' | 'failed';
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeploymentJobStepRecord {
+  id: number;
+  job_id: number;
+  step_key: string;
+  resource_type: string;
+  resource_id: number | null;
+  status: 'pending' | 'running' | 'complete' | 'failed' | 'skipped';
+  attempts: number;
+  error: string | null;
+  metadata_json: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface AuditLogRecord {
+  id: number;
+  actor: string;
+  action: string;
+  target_type: string;
+  target_id: number | null;
+  before_json: string | null;
+  after_json: string | null;
+  reason: string | null;
+  result: string;
+  created_at: string;
+}
+
+export const createDeploymentJob = (companyId: number, type: string): DeploymentJobRecord => {
+  const db = getRegistryDb();
+  const info = db
+    .prepare('INSERT INTO deployment_jobs (company_id, type, status) VALUES (?, ?, ?)')
+    .run(companyId, type, 'running');
+  return getDeploymentJobById(Number(info.lastInsertRowid))!;
+};
+
+export const updateDeploymentJob = (
+  id: number,
+  updates: {
+    status?: DeploymentJobRecord['status'];
+    error?: string | null;
+    completedAt?: string | null;
+  },
+): DeploymentJobRecord | null => {
+  const current = getDeploymentJobById(id);
+  if (!current) return null;
+  getRegistryDb()
+    .prepare(
+      `UPDATE deployment_jobs SET
+         status = COALESCE(?, status),
+         error = ?,
+         completed_at = COALESCE(?, completed_at),
+         updated_at = datetime('now')
+       WHERE id = ?`,
+    )
+    .run(
+      updates.status ?? null,
+      updates.error === undefined ? current.error : updates.error,
+      updates.completedAt ?? null,
+      id,
+    );
+  return getDeploymentJobById(id);
+};
+
+export const getDeploymentJobById = (id: number): DeploymentJobRecord | null =>
+  (getRegistryDb().prepare('SELECT * FROM deployment_jobs WHERE id = ?').get(id) as DeploymentJobRecord) ?? null;
+
+export const listDeploymentJobsForCompany = (companyId: number): DeploymentJobRecord[] =>
+  getRegistryDb()
+    .prepare('SELECT * FROM deployment_jobs WHERE company_id = ? ORDER BY id DESC')
+    .all(companyId) as DeploymentJobRecord[];
+
+export const createDeploymentStep = (
+  jobId: number,
+  stepKey: string,
+  resourceType: string,
+  resourceId?: number | null,
+  metadata?: unknown,
+): DeploymentJobStepRecord => {
+  const db = getRegistryDb();
+  const info = db
+    .prepare(
+      `INSERT INTO deployment_job_steps (job_id, step_key, resource_type, resource_id, metadata_json, status, started_at)
+       VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))`,
+    )
+    .run(jobId, stepKey, resourceType, resourceId ?? null, metadata ? JSON.stringify(metadata) : null);
+  return (
+    (db.prepare('SELECT * FROM deployment_job_steps WHERE id = ?').get(Number(info.lastInsertRowid)) as DeploymentJobStepRecord) ??
+    null
+  );
+};
+
+export const updateDeploymentStep = (
+  id: number,
+  updates: {
+    status?: DeploymentJobStepRecord['status'];
+    error?: string | null;
+    resourceId?: number | null;
+    metadata?: unknown;
+    attempts?: number;
+    completed?: boolean;
+  },
+): DeploymentJobStepRecord | null => {
+  const db = getRegistryDb();
+  const current = db.prepare('SELECT * FROM deployment_job_steps WHERE id = ?').get(id) as
+    | DeploymentJobStepRecord
+    | undefined;
+  if (!current) return null;
+
+  const metadataJson = updates.metadata !== undefined ? JSON.stringify(updates.metadata) : current.metadata_json;
+
+  db.prepare(
+    `UPDATE deployment_job_steps SET
+       status = COALESCE(?, status),
+       error = ?,
+       resource_id = COALESCE(?, resource_id),
+       metadata_json = ?,
+       attempts = COALESCE(?, attempts),
+       completed_at = CASE WHEN ? THEN datetime('now') ELSE completed_at END
+     WHERE id = ?`,
+  ).run(
+    updates.status ?? null,
+    updates.error === undefined ? current.error : updates.error,
+    updates.resourceId ?? null,
+    metadataJson,
+    updates.attempts ?? null,
+    updates.completed ? 1 : 0,
+    id,
+  );
+  return db.prepare('SELECT * FROM deployment_job_steps WHERE id = ?').get(id) as DeploymentJobStepRecord;
+};
+
+export const listStepsForJob = (jobId: number): DeploymentJobStepRecord[] =>
+  getRegistryDb()
+    .prepare('SELECT * FROM deployment_job_steps WHERE job_id = ? ORDER BY id ASC')
+    .all(jobId) as DeploymentJobStepRecord[];
+
+export const recordAuditLog = (
+  actor: string,
+  action: string,
+  targetType: string,
+  targetId?: number | null,
+  details?: {
+    before?: unknown;
+    after?: unknown;
+    reason?: string;
+    result?: string;
+  },
+): AuditLogRecord => {
+  const db = getRegistryDb();
+  const info = db
+    .prepare(
+      `INSERT INTO audit_logs (actor, action, target_type, target_id, before_json, after_json, reason, result)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      actor,
+      action,
+      targetType,
+      targetId ?? null,
+      details?.before ? JSON.stringify(details.before) : null,
+      details?.after ? JSON.stringify(details.after) : null,
+      details?.reason || null,
+      details?.result || 'ok',
+    );
+  return db.prepare('SELECT * FROM audit_logs WHERE id = ?').get(Number(info.lastInsertRowid)) as AuditLogRecord;
+};
+
+export const listAuditLogs = (limit = 100): AuditLogRecord[] =>
+  getRegistryDb().prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?').all(limit) as AuditLogRecord[];
+
