@@ -3,7 +3,13 @@
 export type StoreStatus = 'active' | 'paused';
 export type ConfigStatus = 'pending' | 'ok' | 'failed';
 export type HealthStatus = 'up' | 'down' | 'unknown';
-export type StoreVertical = 'general' | 'clothing' | 'spares' | 'hardware' | 'pharmacy';
+export type StoreVertical =
+  | 'general'
+  | 'clothing'
+  | 'spares'
+  | 'hardware'
+  | 'pharmacy'
+  | 'restaurant';
 
 export type PlanPeriod = 'monthly' | 'annual' | 'once-off';
 

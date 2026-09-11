@@ -85,6 +85,7 @@ const VERTICAL_LABELS: Record<StoreVertical, string> = {
   spares: 'Spares',
   hardware: 'Hardware',
   pharmacy: 'Pharmacy',
+  restaurant: 'Restaurant',
 };
 
 const VERTICAL_OPTIONS: Array<{ value: StoreVertical; label: string }> = [
@@ -93,6 +94,7 @@ const VERTICAL_OPTIONS: Array<{ value: StoreVertical; label: string }> = [
   { value: 'spares', label: 'Motor spares & parts' },
   { value: 'hardware', label: 'Hardware & building supplies' },
   { value: 'pharmacy', label: 'Pharmacy & wellness' },
+  { value: 'restaurant', label: 'Restaurant & quick service' },
 ];
 
 // --- Terminal roster ---------------------------------------------------------

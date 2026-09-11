@@ -15,7 +15,7 @@ import { logger } from '../src/utils/logger.js';
 const PORT = Number(process.env.STUB_PORT || 3299);
 const TOKEN = process.env.CONTROL_PLANE_TOKEN || 'smoke-token-1';
 
-const VERTICALS = ['general', 'clothing', 'spares', 'hardware', 'pharmacy'];
+const VERTICALS = ['general', 'clothing', 'spares', 'hardware', 'pharmacy', 'restaurant'];
 
 const app = express();
 app.use(express.json({ limit: '100kb' }));

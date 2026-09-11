@@ -2,6 +2,24 @@
 
 Dated log of the build.
 
+## 2026-09-11 — restaurant store type (tenant P4 mirror)
+
+- `restaurant` added to the CP vertical vocabulary, mirroring the tenant
+  (`~/apps/za-pos` shipped P4 the same day — menu starter pack,
+  starter-pack-only like hardware/pharmacy): `StoreVertical` union +
+  `STORE_VERTICALS` in `src/config/registryDb.ts`, mirrored union in
+  `frontend/src/types.ts`, `VERTICAL_COLORS` pill (`bg-rose-100
+  text-rose-700`) in `StatusBadge.tsx`, `StoresPage` chip label
+  "Restaurant" + form option "Restaurant & quick service", and the two
+  hard-coded POS-profile dropdowns (`ClientsPage` wizard +
+  `ClientDetailPage` edit modal) gained "Restaurant & Quick Service".
+  `scripts/dev-store-stub.ts` allow-list updated; the "rejects unknown
+  verticals" test regex now includes `restaurant` (still samples
+  `bakery` as the unknown value). CONTEXT vocabulary + configure-payload
+  rows updated; task_plan interplay note and tidbits struck.
+- Workstream note (owner): all work now happens on `dev`; order is
+  P4 → L4 (CP enforcement) → F1 (CP ops hardening) → backlog.
+
 ## 2026-09-11 — Consolidated Plan: Client-Centric Workflow, Durable Orchestration & Operations Hardening (Phases 0–5)
 
 - **Client-Centric Control Plane Architecture (`src/routes/clients.ts`, `services/clientOrchestrator.ts`)**:

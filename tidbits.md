@@ -62,9 +62,9 @@ into that plan.
 - Auto-re-push on PUT when terminal_count/base_url changes (deliberately
   explicit-only in v1 — F1 adds drift visibility; revisit auto-push if
   drift bites).
-- Restaurant vertical: add `restaurant` to the CP vocabulary when the
-  tenant lands P4 (starter-pack vertical; mirror = StoreVertical +
-  STORE_VERTICALS + UI/stub/tests, pharmacy precedent).
+- ~~Restaurant vertical: add `restaurant` to the CP vocabulary when the
+  tenant lands P4~~ **shipped 2026-09-11** (tenant P4 landed; mirror =
+  StoreVertical + STORE_VERTICALS + UI/stub/tests, pharmacy precedent).
 - Push this repo to GitHub (`gh repo create hoosainmadhi/za-pos-control-plane
 --private --source . --remote origin --push`) when asked.
 - CSP is minimal (`style-src 'unsafe-inline'`) — tighten if a CSP audit ever

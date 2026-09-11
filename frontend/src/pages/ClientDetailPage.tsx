@@ -761,6 +761,7 @@ export default function ClientDetailPage() {
                     <option value="spares">Auto Spares</option>
                     <option value="hardware">Hardware & Building</option>
                     <option value="pharmacy">Pharmacy & Wellness</option>
+                    <option value="restaurant">Restaurant & Quick Service</option>
                   </select>
                 </div>
               </div>

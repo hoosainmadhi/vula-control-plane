@@ -6,7 +6,13 @@ import { env } from './env.js';
 export type StoreStatus = 'active' | 'paused';
 export type ConfigStatus = 'pending' | 'ok' | 'failed';
 export type HealthStatus = 'up' | 'down' | 'unknown';
-export type StoreVertical = 'general' | 'clothing' | 'spares' | 'hardware' | 'pharmacy';
+export type StoreVertical =
+  | 'general'
+  | 'clothing'
+  | 'spares'
+  | 'hardware'
+  | 'pharmacy'
+  | 'restaurant';
 /** How a plan's price recurs. 'once-off' is a perpetual licence, not a subscription. */
 export type PlanPeriod = 'monthly' | 'annual' | 'once-off';
 
@@ -19,6 +25,7 @@ export const STORE_VERTICALS: readonly StoreVertical[] = [
   'spares',
   'hardware',
   'pharmacy',
+  'restaurant',
 ];
 
 export interface StoreRecord {

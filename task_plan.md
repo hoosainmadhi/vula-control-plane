@@ -238,6 +238,8 @@ health up, config ok.
     write audited stock_movements (reuse `kind 'adjustment'` with
     `IBT-…` reasons, or add kinds — decide at build; the CHECK rebuild
     pattern exists).
-- Interplay: tenant P4 (restaurant vertical) adds `restaurant` to this
-  repo's vertical vocabulary when it lands; tenant P2/P3 (returns) run
-  on the za-pos track independently.
+- Interplay: ~~tenant P4 (restaurant vertical) adds `restaurant` to this
+  repo's vertical vocabulary when it lands~~ **done 2026-09-11** —
+  `restaurant` mirrored across the vocabulary, UI, stub and tests
+  (pharmacy precedent); tenant P2/P3 (returns) run on the za-pos track
+  independently.
