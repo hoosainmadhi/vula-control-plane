@@ -2,6 +2,26 @@
 
 Dated log of the build.
 
+## 2026-09-12 — dev stub implements licence delivery; L4 verified end to end on a live stack
+
+- The dev store stub (`scripts/dev-store-stub.ts`) had **no
+  `POST /api/internal/licence`** — it predates L1, so every licence push to a
+  stub-backed store 404'd and `licence_push_status` stayed `failed`. Added the
+  route in stub style: token-guarded, tracks the monotonic sequence (409 on a
+  stale one, mirroring the tenant), logs the claims' plan + billing state. No
+  signature verification — the stub holds no key; the real store verifies
+  against `LEASE_PUBLIC_KEY`.
+- With that in place the whole L4 flow was verified against a throwaway
+  instance (`CP_DB_PATH=/tmp/... PORT=3242` + stub on :3299, live CP on :3240
+  untouched): vocabulary endpoint, unknown-key 400, suspended-company 402s,
+  suspension → `licence v2 accepted … billing state suspended` at the stub →
+  store row `registerState=suspended / tradingBlocked=true`, till increase
+  refused, multi-store wizard refused on Starter, resume → licence v3 active →
+  `ok`. Panel delivery failures reported, never fatal.
+- Stub note for demos: supply the same 64-hex token to both
+  (`CONTROL_PLANE_TOKEN=<hex>` on the stub, `controlPlaneToken` on store
+  create) or pushes 401.
+
 ## 2026-09-11 — L4 enforcement, control-plane authority side (plans stop being informational)
 
 - **Curated feature vocabulary (`src/services/features.ts`)**: the six locked

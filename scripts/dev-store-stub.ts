@@ -84,6 +84,39 @@ app.post('/api/internal/admin/reset', requireToken, (_req, res) => {
   res.json({ ok: true, tempPassword });
 });
 
+/**
+ * Licence delivery (L1 contract). The real store verifies the ES256 signature
+ * against LEASE_PUBLIC_KEY and refuses a sequence older than the one it holds;
+ * the stub has no key, so it tracks the monotonic sequence and records the
+ * claims' billing state — enough to demo L4 propagation end to end.
+ */
+let licenceSequence = 0;
+
+app.post('/api/internal/licence', requireToken, (req, res) => {
+  const body = req.body as { token?: unknown };
+  if (typeof body.token !== 'string' || !body.token.includes('.')) {
+    res.status(400).json({ error: 'token is required' });
+    return;
+  }
+  let claims: { sequence?: unknown; billingState?: unknown; planCode?: unknown };
+  try {
+    claims = JSON.parse(Buffer.from(body.token.split('.')[0], 'base64url').toString('utf8'));
+  } catch {
+    res.status(400).json({ error: 'Malformed licence payload' });
+    return;
+  }
+  const sequence = typeof claims.sequence === 'number' ? claims.sequence : 0;
+  if (sequence <= licenceSequence) {
+    res.status(409).json({ error: 'Stale licence sequence' });
+    return;
+  }
+  licenceSequence = sequence;
+  logger.info(
+    `stub: licence v${sequence} accepted (plan ${claims.planCode ?? '?'}, billing state ${claims.billingState ?? '?'})`,
+  );
+  res.json({ ok: true, sequence });
+});
+
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', app: 'za-pos-dev-store-stub' });
 });
