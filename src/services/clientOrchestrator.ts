@@ -3,11 +3,15 @@ import {
   getCompanyById,
   updateCompany,
   getPlanById,
+  getStoreById,
   listStores,
   createStore,
   setStoreCompany,
+  setStoreDeployStatus,
+  setStoreHeadOfficeToken,
   listPanelsForCompany,
   createPanel,
+  setPanelDeployStatus,
   createDeploymentJob,
   updateDeploymentJob,
   getDeploymentJobById,
@@ -21,10 +25,23 @@ import {
   type DeploymentJobRecord,
   type DeploymentJobStepRecord,
 } from '../config/registryDb.js';
-import { isCoolifyConfigured, createStoreDeployment } from './coolify.js';
-import { pushTerminals, pushLicence, pushLicenceToPanel, ping } from './storeClient.js';
+import {
+  isCoolifyConfigured,
+  createStoreDeployment,
+  createHeadOfficeDeployment,
+  triggerDeploy,
+} from './coolify.js';
+import {
+  pushTerminals,
+  pushLicence,
+  pushLicenceToPanel,
+  ping,
+  registerBranchWithPanel,
+  bootstrapHeadOfficeAdmin,
+} from './storeClient.js';
 import { issueLicence, licencePublicKey } from './licenceSigner.js';
 import { entitlementsFor } from './subscriptions.js';
+import { bootstrapStoreAdmin, generateAdminPassword } from './storeProvisioning.js';
 import { logger } from '../config/env.js';
 
 export interface StoreDeploymentInput {
@@ -112,6 +129,14 @@ export async function orchestrateClientDeployment(
 
 /**
  * Executes or resumes a deployment job's steps idempotently.
+ *
+ * Step truthfulness (production-readiness review, 2026-09-12): a REQUIRED
+ * operation — Coolify application creation, topology wiring — fails the step
+ * and the job. Best-effort operations that may legitimately fail while a
+ * container is still building (admin bootstrap, first config/licence push,
+ * health pings) record a warning on the completed step instead of pretending
+ * everything succeeded. Coolify application UUIDs are persisted immediately
+ * after creation, so a retry never creates a duplicate application.
  */
 export async function runJobSteps(jobId: number, autoDeploy = true): Promise<void> {
   const job = getDeploymentJobById(jobId);
@@ -127,6 +152,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
     if (step.status === 'complete' || step.status === 'skipped') continue;
 
     updateDeploymentStep(step.id, { status: 'running', attempts: step.attempts + 1 });
+    const warnings: string[] = [];
 
     try {
       const meta = step.metadata_json ? JSON.parse(step.metadata_json) : {};
@@ -150,22 +176,49 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
           });
         }
 
-        // Provision container if coolify enabled
+        // Provision the real Head Office image — REQUIRED. The Head Office is a
+        // different application (head-office/Dockerfile), not a store deploy.
         if (autoDeploy && isCoolifyConfigured()) {
-          try {
-            await createStoreDeployment({
+          if (panel.coolify_uuid) {
+            // Retry after a failed deploy: re-trigger the existing application.
+            if (panel.deploy_status === 'failed') {
+              await triggerDeploy(panel.coolify_uuid);
+            }
+          } else {
+            const result = await createHeadOfficeDeployment({
               slug: panel.slug,
               domain: panel.base_url,
               controlPlaneToken: panel.control_plane_token,
             });
-          } catch (cErr) {
-            logger.warn(`Coolify provisioning warning for panel ${panel.slug}: ${String(cErr)}`);
+            const updatedPanel = setPanelDeployStatus(panel.id, 'provisioning', {
+              coolifyUuid: result.coolifyUuid,
+              volumeName: result.volumeName,
+            });
+            if (updatedPanel) panel = updatedPanel;
+          }
+        }
+
+        // Bootstrap the panel's first admin — best-effort: the container is
+        // usually still building at this point. The generated password is
+        // discarded; the operator issues a login via the reveal-once reset.
+        if (meta.adminEmail) {
+          try {
+            await bootstrapHeadOfficeAdmin(panel, {
+              name: 'Head Office Administrator',
+              email: meta.adminEmail,
+              password: generateAdminPassword(),
+            });
+          } catch (aErr) {
+            const msg = `Head Office admin bootstrap pending for ${panel.slug}: ${String(aErr)}`;
+            warnings.push(msg);
+            logger.info(msg);
           }
         }
 
         updateDeploymentStep(step.id, {
           status: 'complete',
           resourceId: panel.id,
+          warnings,
           completed: true,
         });
         continue;
@@ -189,39 +242,56 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
           setStoreCompany(store.id, company.id);
         }
 
-        // Coolify container deployment if configured
+        // Coolify container deployment — REQUIRED. Idempotent: an application
+        // that already exists is never created twice.
         if (autoDeploy && isCoolifyConfigured()) {
-          try {
-            await createStoreDeployment({
+          if (store.coolify_uuid) {
+            if (store.deploy_status === 'failed') {
+              await triggerDeploy(store.coolify_uuid);
+            }
+          } else {
+            const result = await createStoreDeployment({
               slug: store.slug,
               domain: store.base_url,
               controlPlaneToken: store.control_plane_token,
             });
-          } catch (cErr) {
-            logger.warn(`Coolify provisioning warning for store ${store.slug}: ${String(cErr)}`);
+            store = setStoreDeployStatus(store.id, 'provisioning', {
+              coolifyUuid: result.coolifyUuid,
+              volumeName: result.volumeName,
+            })!;
           }
         }
 
-        // Bootstrap store admin over HTTP if adminEmail provided
+        // Bootstrap store admin over HTTP if adminEmail provided — best-effort
+        // (container likely still building). Random credential, never persisted.
         if (meta.adminEmail) {
           try {
-            const { bootstrapStoreAdmin } = await import('./storeProvisioning.js');
-            await bootstrapStoreAdmin(store, meta.adminEmail, 'AdminPassword@123');
+            const adminOk = await bootstrapStoreAdmin(store, meta.adminEmail, generateAdminPassword());
+            if (!adminOk) {
+              const msg = `Store admin init pending for ${store.slug}: store not accepting yet`;
+              warnings.push(msg);
+              logger.info(msg);
+            }
           } catch (aErr) {
-            logger.info(`Store admin init notice for ${store.slug}: ${String(aErr)}`);
+            const msg = `Store admin init pending for ${store.slug}: ${String(aErr)}`;
+            warnings.push(msg);
+            logger.info(msg);
           }
         }
 
-        // Push initial terminal configuration
+        // Push initial terminal configuration — best-effort while warming.
         try {
           await pushTerminals(store);
         } catch (tErr) {
-          logger.info(`Initial terminal push notice for ${store.slug}: ${String(tErr)}`);
+          const msg = `Initial terminal push pending for ${store.slug}: ${String(tErr)}`;
+          warnings.push(msg);
+          logger.info(msg);
         }
 
         updateDeploymentStep(step.id, {
           status: 'complete',
           resourceId: store.id,
+          warnings,
           completed: true,
         });
         continue;
@@ -230,27 +300,49 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
       if (step.step_key === 'wire_topology') {
         const panels = listPanelsForCompany(company.id);
         const ho = panels[0];
-        if (ho) {
-          const stores = listStores().filter((s) => s.company_id === company.id);
-          for (const s of stores) {
-            try {
-              // Push Head Office URL & token explicitly to the store (§14)
-              const count = s.terminal_count || 1;
-              const terminals = Array.from({ length: count }, (_, i) => ({
-                till: i + 1,
-                name: `Till ${i + 1}`,
-              }));
-              await pushTerminals(s, {}, {
-                headOffice: {
-                  enabled: true,
-                  url: ho.base_url,
-                  token: ho.control_plane_token,
-                },
-              });
-            } catch (wErr) {
-              logger.info(`Topology wiring notice for store ${s.slug}: ${String(wErr)}`);
+        if (!ho) {
+          throw new Error('Topology wiring requires a Head Office panel; none exists for this company');
+        }
+
+        const stores = listStores().filter((s) => s.company_id === company.id);
+        const failures: string[] = [];
+        for (const s of stores) {
+          try {
+            // Per-branch Head Office credential — distinct from the vendor CP
+            // token by design (§8 of the production-readiness review).
+            const headOfficeToken = s.head_office_token ?? crypto.randomBytes(32).toString('hex');
+            if (headOfficeToken !== s.head_office_token) {
+              setStoreHeadOfficeToken(s.id, headOfficeToken);
             }
+
+            // Direction 1: tell the branch where its Head Office is.
+            const count = s.terminal_count || 1;
+            const terminals = Array.from({ length: count }, (_, i) => ({
+              till: i + 1,
+              name: `Till ${i + 1}`,
+            }));
+            await pushTerminals(s, {}, {
+              headOffice: {
+                enabled: true,
+                url: ho.base_url,
+                token: headOfficeToken,
+              },
+            });
+
+            // Direction 2: register the branch in the Head Office roster.
+            await registerBranchWithPanel(ho, {
+              slug: s.slug,
+              name: s.name,
+              baseUrl: s.base_url,
+              headOfficeToken,
+              vertical: s.vertical,
+            });
+          } catch (wErr) {
+            failures.push(`Topology wiring failed for store ${s.slug}: ${String(wErr)}`);
           }
+        }
+        if (failures.length > 0) {
+          throw new Error(failures.join('; '));
         }
         updateDeploymentStep(step.id, { status: 'complete', completed: true });
         continue;
@@ -278,7 +370,9 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
             });
             await pushLicence(store, signed.token);
           } catch (lErr) {
-            logger.info(`Initial licence push notice for store ${store.slug}: ${String(lErr)}`);
+            const msg = `Initial licence push pending for store ${store.slug}: ${String(lErr)}`;
+            warnings.push(msg);
+            logger.info(msg);
           }
         }
 
@@ -305,11 +399,13 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
               signed.token,
             );
           } catch (lpErr) {
-            logger.info(`Initial licence push notice for panel ${panel.slug}: ${String(lpErr)}`);
+            const msg = `Initial licence push pending for panel ${panel.slug}: ${String(lpErr)}`;
+            warnings.push(msg);
+            logger.info(msg);
           }
         }
 
-        updateDeploymentStep(step.id, { status: 'complete', completed: true });
+        updateDeploymentStep(step.id, { status: 'complete', warnings, completed: true });
         continue;
       }
 

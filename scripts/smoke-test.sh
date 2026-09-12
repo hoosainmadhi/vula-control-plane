@@ -52,7 +52,7 @@ TOKEN=$(printf '%s' "$BODY" | jget token)
 [ -n "$TOKEN" ] && ok "got office token" || fail "no token in login response"
 
 say "Create store (terminalCount 2, token supplied) pointed at the stub -> first push"
-call POST /api/stores "{\"name\":\"Smoke Store\",\"slug\":\"$SLUG\",\"vatRegNo\":\"4530211828\",\"terminalCount\":2,\"baseUrl\":\"$STUB_URL\",\"controlPlaneToken\":\"$STUB_TOKEN\"}"
+call POST /api/stores "{\"name\":\"Smoke Store\",\"slug\":\"$SLUG\",\"terminalCount\":2,\"baseUrl\":\"$STUB_URL\",\"controlPlaneToken\":\"$STUB_TOKEN\"}"
 [ "$STATUS" = "201" ] || fail "create: HTTP $STATUS — $BODY"
 ID=$(printf '%s' "$BODY" | jget store.id)
 [ "$(printf '%s' "$BODY" | jget firstPush.ok)" = "true" ] && ok "store $ID created and first push ok" || fail "first push not ok: $BODY"

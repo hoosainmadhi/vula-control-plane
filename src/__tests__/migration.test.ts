@@ -82,6 +82,16 @@ const OLD_SCHEMA = `
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+  CREATE TABLE billing_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    auto_renew INTEGER NOT NULL DEFAULT 1,
+    auto_renew_subscription_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+    email_invoice INTEGER NOT NULL DEFAULT 1,
+    invoice_email TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `;
 
 describe('plans billing_period migration', () => {
@@ -101,6 +111,7 @@ describe('plans billing_period migration', () => {
       .prepare(
         `INSERT INTO plans (id, code, name, max_stores, max_terminals_per_store, features_json, billing_period, sort_order)
          VALUES (1, 'starter', 'Starter', 1, 2, '[]', 'monthly', 1),
+                (2, 'retail', 'Retail', 1, 8, '["customer_credit"]', 'monthly', 2),
                 (3, 'multi-store', 'Multi-Store', 10, 25, '["multi_store"]', 'annual', 3)`,
       )
       .run();
@@ -108,6 +119,13 @@ describe('plans billing_period migration', () => {
       .prepare(
         `INSERT INTO companies (id, name, slug, plan_id, paid_through)
          VALUES (1, 'Urban Threads Retail Group', 'urban-threads', 3, '2026-12-31')`,
+      )
+      .run();
+
+    seed
+      .prepare(
+        `INSERT INTO billing_settings (company_id, auto_renew, email_invoice, invoice_email)
+         VALUES (1, 0, 1, 'accounts@urban-threads.co.za')`,
       )
       .run();
     seed
@@ -241,5 +259,43 @@ describe('plans billing_period migration', () => {
     expect(() => getRegistryDb().prepare('SELECT 1 AS ok').get()).not.toThrow();
     expect(ddlFor('companies')).not.toContain('plans_old');
     expect(ddlFor('companies')).toMatch(/REFERENCES\s+"?plans"?\s*\(id\)/i);
+  });
+
+  it('migrates billing_settings from the singleton shape to per-company rows', () => {
+    getRegistryDb();
+    const ddl = ddlFor('billing_settings');
+    expect(ddl).not.toContain('CHECK (id = 1)');
+
+    // The existing merchant's settings survived the rebuild.
+    const settings = getRegistryDb()
+      .prepare('SELECT company_id, auto_renew, invoice_email FROM billing_settings')
+      .all() as Array<{ company_id: number; auto_renew: number; invoice_email: string }>;
+    expect(settings).toEqual([
+      { company_id: 1, auto_renew: 0, invoice_email: 'accounts@urban-threads.co.za' },
+    ]);
+
+    // A SECOND company can now have settings — the original bug.
+    const db = getRegistryDb();
+    const second = db
+      .prepare('INSERT INTO companies (name, slug) VALUES (?, ?)')
+      .run('PharmaCrest', 'pharmacrest');
+    expect(() =>
+      db
+        .prepare(
+          'INSERT INTO billing_settings (company_id, auto_renew, email_invoice, invoice_email) VALUES (?, 1, 0, NULL)',
+        )
+        .run(Number(second.lastInsertRowid)),
+    ).not.toThrow();
+  });
+
+  it('renames the Retail tier to Business and leaves the rest alone', () => {
+    getRegistryDb();
+    const codes = getRegistryDb()
+      .prepare('SELECT code, name FROM plans ORDER BY sort_order')
+      .all() as Array<{ code: string; name: string }>;
+    expect(codes.map((p) => p.code)).toContain('business');
+    expect(codes.map((p) => p.code)).not.toContain('retail');
+    const business = codes.find((p) => p.code === 'business')!;
+    expect(business.name).toBe('Business');
   });
 });

@@ -17,7 +17,6 @@ type StoreBody = Record<string, unknown>;
 const createPayload = (over: StoreBody = {}): StoreBody => ({
   name: 'Gardens Mall',
   slug: 'gardens-mall',
-  vatRegNo: '4530211828',
   terminalCount: 3,
   baseUrl: 'http://localhost:3299/',
   ...over,
@@ -76,7 +75,6 @@ describe('POST /api/stores — create + first push', () => {
     expect(store).toMatchObject({
       slug: 'gardens-mall',
       name: 'Gardens Mall',
-      vatRegNo: '4530211828',
       vertical: 'general',
       terminalCount: 3,
       baseUrl: 'http://localhost:3299',
@@ -276,11 +274,10 @@ describe('PUT /api/stores/:id — edit', () => {
     const res = await request(app)
       .put(`/api/stores/${id}`)
       .set(auth())
-      .send({ name: 'Gardens Mall East', vatRegNo: '', vertical: 'clothing', terminalCount: 4 });
+      .send({ name: 'Gardens Mall East', vertical: 'clothing', terminalCount: 4 });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       name: 'Gardens Mall East',
-      vatRegNo: null,
       vertical: 'clothing',
       terminalCount: 4,
       slug: 'gardens-mall',

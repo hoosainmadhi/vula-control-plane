@@ -1,5 +1,83 @@
 # Findings
 
+## 2026-09-12 — external production-readiness review received and code-verified
+
+A deep-dive review of both repos landed (full text:
+`~/Downloads/vula-subscription-and-platform-deep-dive-report.md`). Per house
+rule, **every claim was verified against the code before being recorded** —
+none is taken on trust. All check out. Grouped by repo.
+
+**za-pos-control-plane (this repo):**
+
+- **`head_office_deploy` deploys a store image, not a Head Office.**
+  `src/services/clientOrchestrator.ts:156` (panel path) calls
+  `createStoreDeployment()` from `services/coolify.ts` — the same call the
+  store path makes at :195. za-pos has no `head-office/Dockerfile`; the root
+  Dockerfile CMD is `node dist/server.js` (the store POS). An orchestrated
+  "Head Office deployment" currently cannot boot the HO app.
+- **Failed prerequisites still mark steps complete.** In the same file, the
+  Coolify failure is caught → `logger.warn` (:161-163, :200-202); admin
+  bootstrap (:210-212), terminal push (:218-220), topology wiring (:250-252)
+  and licence pushes (:280-282, :307-309) are "notice"-level; the step is
+  then unconditionally marked `complete`. A job can go green with no
+  container, no admin, no config and no licence.
+- **Coolify UUIDs are never persisted by the orchestrator.** The result of
+  `createStoreDeployment()` is discarded — no `coolify_uuid`/`volume_name`
+  write anywhere in clientOrchestrator.ts. `storeProvisioning.ts` persists
+  them, but the wizard path does not, so a retry can create a duplicate
+  Coolify application.
+- **`wire_topology` is one-directional.** It pushes
+  `headOffice.{enabled,url,token}` into branch stores (:230-254) but never
+  registers the branches in the Head Office's own `branch_stores` — the HO
+  side of the topology is still hand-entered.
+- **Hard-coded store admin password** `AdminPassword@123` at
+  clientOrchestrator.ts:209. `storeProvisioning.ts` already has a generator;
+  the orchestrator doesn't use it.
+- **`billing_settings` is a singleton wearing multi-tenant clothes.** DDL is
+  `id INTEGER PRIMARY KEY CHECK (id = 1)` beside a separate `company_id`
+  (registryDb.ts:128-137) while `upsertBillingSettings` inserts without
+  `id`. Company #1 works; company #2's insert violates the CHECK — a real
+  bug, not a style issue.
+- **Automated renewal fabricates settlement.** `runAutomatedRenewals`
+  (billing.ts:332-333) records `method: 'manual'` with
+  `transactionId: auto-<ts>` and marks the invoice paid — no real payment
+  confirmation anywhere in the path.
+- **Plans are flat-priced and a tier is named `Retail`.** Single
+  `plans.price_cents` (registryDb.ts:199), seed tier `Retail` (:269). The
+  recommended Multi-Store pricing (base incl. HO + first 2 stores, then a
+  recurring per-additional-store charge) cannot be expressed yet.
+- **Docs vs code disagreement (flagged per house rule):** progress.md's
+  2026-09-11 entry claims `vat_reg_no` was "removed from store creation/edit
+  forms and DTOs (§21)". It was not: the column (registryDb.ts:70), the
+  `StoreOut` field (routes/stores.ts:141) and the StoresPage form fields are
+  all still present, and `git log -S vatRegNo -- src/routes/stores.ts` shows
+  the route unchanged since the initial commit. **Decision needed:** remove
+  it from the CP surface (the review recommends it; §40 leans that way) or
+  correct the progress note.
+
+**za-pos (tenant + Head Office):**
+
+- **No Head Office production image.** `head-office/Dockerfile` does not
+  exist; the root Dockerfile builds and starts only the store app.
+- **Credential separation still has the migration fallback** —
+  `src/routes/internal.ts:64`: without `HEAD_OFFICE_TOKEN`,
+  `CONTROL_PLANE_TOKEN` is accepted on HO routes; the HO branch schema still
+  names the credential `control_plane_token`.
+- **HO seeds a demo executive + demo data with no env guard** —
+  `head-office/src/db.ts:137-147` creates `executive@urban-threads.co.za` /
+  `Admin@12345` whenever the users table is empty.
+- **`/api/internal/control/status` returns `vatRegNo`** (internal.ts:87) —
+  merchant tax data reaching the vendor plane.
+
+**Recommendations to confirm with the owner before implementation** (the
+review's §34 priority list): orchestration truthfulness + a real HO
+deployment first, then the subscription/commercial model (Retail → Business;
+base + per-additional-store pricing; subscription snapshots so plan edits
+never silently rewrite a signed deal), then the privacy boundary. Target
+catalogue: Starter / Business / Multi-Store / Enterprise, with Multi-Store
+priced as base incl. HO + first 2 stores plus a recurring per-additional-
+store charge.
+
 ## 2026-09-11 — L4 enforcement notes
 
 - **The §40 privacy-boundary test guards field NAMES, not just values.** Naming

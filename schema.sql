@@ -7,13 +7,13 @@ CREATE TABLE IF NOT EXISTS stores (
   id                     INTEGER PRIMARY KEY AUTOINCREMENT,
   slug                   TEXT    NOT NULL UNIQUE,
   name                   TEXT    NOT NULL,
-  vat_reg_no             TEXT,
   vertical               TEXT    NOT NULL DEFAULT 'general',
   terminal_count         INTEGER NOT NULL DEFAULT 1
     CHECK (terminal_count BETWEEN 1 AND 99),
   base_url               TEXT    NOT NULL
     CHECK (base_url LIKE 'http://%' OR base_url LIKE 'https://%'),
   control_plane_token    TEXT    NOT NULL,
+  head_office_token      TEXT,
   status                 TEXT    NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'paused')),
   last_config_status     TEXT    NOT NULL DEFAULT 'pending'
@@ -90,6 +90,10 @@ CREATE TABLE IF NOT EXISTS panels (
   licence_issued_at   TEXT,
   licence_push_status TEXT    NOT NULL DEFAULT 'pending',
   licence_pushed_at   TEXT,
+  deploy_status       TEXT    NOT NULL DEFAULT 'not_deployed'
+    CHECK (deploy_status IN ('not_deployed', 'provisioning', 'deployed', 'failed')),
+  coolify_uuid        TEXT,
+  volume_name         TEXT,
   created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
 );
@@ -123,16 +127,14 @@ CREATE TABLE IF NOT EXISTS payments (
   updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
--- Company billing settings
+-- Company billing settings — one row per merchant (company_id is the natural key).
 CREATE TABLE IF NOT EXISTS billing_settings (
-  id                  INTEGER PRIMARY KEY CHECK (id = 1),
-  company_id          INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  auto_renew          INTEGER NOT NULL DEFAULT 1,
-  auto_renew_subscription_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
-  email_invoice       INTEGER NOT NULL DEFAULT 1,
-  invoice_email       TEXT,
-  created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
-  updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+  company_id        INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+  auto_renew        INTEGER NOT NULL DEFAULT 1,
+  email_invoice     INTEGER NOT NULL DEFAULT 1,
+  invoice_email     TEXT,
+  created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_invoices_company ON invoices(company_id);
@@ -165,6 +167,7 @@ CREATE TABLE IF NOT EXISTS deployment_job_steps (
     CHECK (status IN ('pending', 'running', 'complete', 'failed', 'skipped')),
   attempts      INTEGER NOT NULL DEFAULT 0,
   error         TEXT,
+  warnings_json TEXT,
   metadata_json TEXT,
   started_at    TEXT,
   completed_at  TEXT

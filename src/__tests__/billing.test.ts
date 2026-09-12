@@ -41,7 +41,7 @@ const planIdByCode = async (code: string): Promise<number> => {
 };
 
 const makeCompany = async (over: Record<string, unknown> = {}) => {
-  const planId = await planIdByCode('retail');
+  const planId = await planIdByCode('business');
   const res = await request(app)
     .post('/api/companies')
     .set(auth())
@@ -210,7 +210,7 @@ describe('L3 Billing & Invoicing', () => {
     expect(putRes.body.invoiceEmail).toBe('accounts@urban-threads.co.za');
   });
 
-  it('executes automated renewal cycle for expiring subscriptions', async () => {
+  it('generates a renewal invoice without settling it — entitlement never extends on the sweep alone', async () => {
     // Set paid_through to today so renewal is due
     const todayStr = new Date().toISOString().slice(0, 10);
     const company = await makeCompany({
@@ -225,13 +225,49 @@ describe('L3 Billing & Invoicing', () => {
 
     expect(renewRes.body.ok).toBe(true);
     expect(renewRes.body.summary.companiesEvaluated).toBeGreaterThanOrEqual(1);
-    expect(renewRes.body.summary.renewalsProcessed).toBeGreaterThanOrEqual(1);
+    // The invoice is generated but NOT paid: no synthetic settlement.
+    expect(renewRes.body.summary.invoicesCreated).toBeGreaterThanOrEqual(1);
+    expect(renewRes.body.summary.renewalsProcessed).toBe(0);
 
-    // Check company paid_through date was extended
+    const invoices = await request(app)
+      .get('/api/billing/invoices')
+      .set(auth())
+      .expect(200);
+    const allInvoices = (invoices.body.invoices ?? invoices.body) as Array<{
+      companyId: number;
+      status: string;
+    }>;
+    const pending = allInvoices.filter((inv) => inv.companyId === company.id);
+    expect(pending.length).toBeGreaterThanOrEqual(1);
+    expect(pending.every((inv) => inv.status !== 'paid')).toBe(true);
+
+    // paid_through untouched — the subscription was not extended.
     const updatedComp = await request(app)
       .get(`/api/companies/${company.id}`)
       .set(auth())
       .expect(200);
-    expect(updatedComp.body.paidThrough).not.toBe(todayStr);
+    expect(updatedComp.body.paidThrough).toBe(todayStr);
+  });
+
+  it('settles automatically only when BILLING_SIMULATE_RENEWAL_SETTLEMENT is enabled (demo mode)', async () => {
+    process.env.BILLING_SIMULATE_RENEWAL_SETTLEMENT = 'true';
+    try {
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const company = await makeCompany({ paidThrough: todayStr });
+
+      const renewRes = await request(app)
+        .post('/api/billing/renew-check')
+        .set(auth())
+        .expect(200);
+
+      expect(renewRes.body.summary.renewalsProcessed).toBeGreaterThanOrEqual(1);
+      const updatedComp = await request(app)
+        .get(`/api/companies/${company.id}`)
+        .set(auth())
+        .expect(200);
+      expect(updatedComp.body.paidThrough).not.toBe(todayStr);
+    } finally {
+      delete process.env.BILLING_SIMULATE_RENEWAL_SETTLEMENT;
+    }
   });
 });

@@ -159,6 +159,9 @@ plansRouter.post(
     if (!/^[a-z0-9][a-z0-9-]*$/.test(code)) {
       throw new ValidationError('code must be lowercase letters, digits and dashes');
     }
+    if (getPlanByCode(code)) {
+      throw new HttpError(409, `A plan with code "${code}" already exists`);
+    }
     const maxStores = Number(req.body?.maxStores ?? 1);
     const maxTerminalsPerStore = Number(req.body?.maxTerminalsPerStore ?? 1);
     if (!Number.isInteger(maxStores) || maxStores < 1 || maxStores > 500) {
@@ -200,17 +203,13 @@ plansRouter.put(
     if (!existingPlan) throw new HttpError(404, 'Plan not found');
     const body = req.body ?? {};
 
-    let codeToUpdate: string | undefined;
+    // `code` is the technical identifier licences and integrations depend on —
+    // immutable after creation (2026-09-12). A provided code must match.
     if (body.code !== undefined) {
-      const trimmed = requireString(body, 'code').toLowerCase();
-      if (!/^[a-z0-9][a-z0-9-]*$/.test(trimmed)) {
-        throw new ValidationError('code must be lowercase letters, digits and dashes');
+      const requested = requireString(body, 'code').toLowerCase();
+      if (requested !== existingPlan.code) {
+        throw new HttpError(400, 'Plan code is immutable after creation');
       }
-      const collision = getPlanByCode(trimmed);
-      if (collision && collision.id !== id) {
-        throw new HttpError(409, `A plan with code "${trimmed}" already exists`);
-      }
-      codeToUpdate = trimmed;
     }
 
     const rawFeatures = body.features;
@@ -218,7 +217,6 @@ plansRouter.put(
       throw new ValidationError('features must be an array of strings');
     }
     const updated = updatePlan(id, {
-      ...(codeToUpdate !== undefined ? { code: codeToUpdate } : {}),
       ...(body.name !== undefined ? { name: requireString(body, 'name') } : {}),
       ...(body.maxStores !== undefined ? { maxStores: Number(body.maxStores) } : {}),
       ...(body.maxTerminalsPerStore !== undefined
@@ -273,8 +271,16 @@ companiesRouter.post(
     }
     const planIdRaw = req.body?.planId;
     const planId = planIdRaw === undefined || planIdRaw === null ? null : Number(planIdRaw);
-    if (planId !== null && !getPlanById(planId)) {
-      throw new ValidationError('planId does not match a known plan');
+    if (planId !== null) {
+      const chosenPlan = getPlanById(planId);
+      if (!chosenPlan) {
+        throw new ValidationError('planId does not match a known plan');
+      }
+      if (!chosenPlan.is_active) {
+        throw new ValidationError(
+          `Plan "${chosenPlan.name}" is inactive and cannot be used for a new company`,
+        );
+      }
     }
     res.status(201).json(
       companyToOut(
@@ -335,8 +341,17 @@ companiesRouter.put(
   asyncHandler(async (req, res) => {
     const company = companyFromParams(req.params.id);
     const body = req.body ?? {};
-    if (body.planId !== undefined && body.planId !== null && !getPlanById(Number(body.planId))) {
-      throw new ValidationError('planId does not match a known plan');
+    if (body.planId !== undefined && body.planId !== null) {
+      const chosenPlan = getPlanById(Number(body.planId));
+      if (!chosenPlan) {
+        throw new ValidationError('planId does not match a known plan');
+      }
+      // A company may stay on an archived plan, but switching onto one is refused.
+      if (!chosenPlan.is_active && Number(body.planId) !== company.plan_id) {
+        throw new ValidationError(
+          `Plan "${chosenPlan.name}" is inactive and cannot be assigned to a company`,
+        );
+      }
     }
     if (body.status !== undefined && !['active', 'suspended'].includes(String(body.status))) {
       throw new ValidationError('status must be active or suspended');

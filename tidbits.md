@@ -2,6 +2,36 @@
 
 > Prioritised for the next workspace. ~~Struck~~ items are done.
 
+## Deferred from the production-readiness review (2026-09-12)
+
+Source: the deep-dive report (see findings.md, 2026-09-12) — items too
+small/late for the P0–P2 phase set in task_plan.md.
+
+- **Invoice numbers** — date + random 4 digits; a UNIQUE collision surfaces
+  as a raw DB error instead of a retry. Move to a monotonic sequence
+  (`VULA-2026-000001`).
+- **VAT treatment of Vula's own billing** — decide incl./excl. and document
+  it before real customer invoices; the invoice model eventually needs
+  subtotal / VAT / total + seller VAT number (separate from the merchant's
+  POS VAT, which must stay off this plane — see P2).
+- **Annual pricing** — prefer monthly × 10 (~two months free) over a
+  separate annual catalogue.
+- **Plan edits vs grandfathering** — subscription snapshots (P1) before
+  changing any price on a live customer; plan changes get an explicit
+  effective date, never silent retroactive edits.
+- **Archived plans UI** — `plans.is_active` toggle + Active/Archived split;
+  never delete a plan that has been billed.
+- **Deployment secrets at rest** — encrypt stored CP credentials
+  (AES-256-GCM under a `VULA_SECRET_ENCRYPTION_KEY` master key).
+- **CP auth hardening** — RBAC roles (platform owner / support / billing /
+  read-only) and shorter sessions (HttpOnly cookies) before wider
+  operational use; today it is one week-long `office` JWT in localStorage.
+- **HO menu fallback (za-pos)** — the hostname-derived Head Office URL in
+  `frontend/src/config.ts` must never be authoritative in production;
+  runtime config wins, and the menu is role-gated.
+- **Activation flow** — prefer first-login activation links over delivering
+  temp passwords long-term; the reveal-once-never-stored posture stays.
+
 ## Deferred from the licensing work (2026-09-10)
 
 - ~~**Billing recording (L3)**~~ **shipped 2026-09-11** — invoices, payments,

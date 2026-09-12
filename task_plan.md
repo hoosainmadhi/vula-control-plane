@@ -38,8 +38,14 @@ gate nothing. Shipped in this repo:
 - **Contract authored in CONTEXT.md §2b** — the store side is the za-pos
   workstream (below). Previous phase — restaurant vertical mirror (2026-09-11).
 
-**Next step:** F1 CP ops hardening (the phase set below) — L4 is complete on
-both sides as of 2026-09-12.
+**Current phase — production-readiness fixes (2026-09-12, owner: "fix first
+before continuing").** The review's P0 set plus the cheap P1/P2 items shipped
+the same day (see progress.md): truthful deployment steps with persisted
+Coolify UUIDs, a real Head Office deployment path, the hard-coded admin
+password gone, `billing_settings` rebuilt per-company, two-way topology
+wiring with per-branch `HEAD_OFFICE_TOKEN`s, Retail → Business, plan-code
+immutability + active-plan filtering, settlement-gated auto-renewal, and
+`vat_reg_no` dropped from the CP surface. **Next step:** F1 CP ops hardening.
 
 Previous Phase — **Subscription licensing & multi-tenant fleet (2026-09-10).** CP v1 (stores CRUD +
 terminal provisioning) shipped 2026-09-03; the licensing/commercial layer landed
@@ -264,3 +270,58 @@ health up, config ok.
   `restaurant` mirrored across the vocabulary, UI, stub and tests
   (pharmacy precedent); tenant P2/P3 (returns) run on the za-pos track
   independently.
+
+## Phase set (planned 2026-09-12): production-safe Multi-Store provisioning + subscription foundation
+
+Source: external production-readiness review
+(`~/Downloads/vula-subscription-and-platform-deep-dive-report.md`); every
+claim code-verified the same day — see the findings.md entry at the top.
+Proposed to sequence **ahead of F1** (orchestration truthfulness blocks
+trusting any automated deployment), but F1-vs-this order is the owner's
+call. za-pos-side items (HO Dockerfile, demo-seed guard, token fallback)
+run as the tenant workstream in parallel.
+
+- [x] **P0 Orchestration truthfulness** (2026-09-12) — required Coolify
+      operations fail the step; best-effort ops (admin bootstrap, first
+      config/licence push) complete with recorded `warnings_json`; the
+      orchestrator persists `coolify_uuid`/`volume_name` immediately and skips
+      creation when the UUID exists (retry never duplicates). A generic
+      `deployments` table is deferred — the store/panel columns cover it for now.
+- [x] **P0 Real Head Office deployment** (2026-09-12) — `head-office/Dockerfile`
+      in za-pos + `createHeadOfficeDeployment()` in `services/coolify.ts`
+      (`dockerfile_location: head-office/Dockerfile`); `head_office_deploy`
+      uses it. Image build verified locally.
+- [x] **P0 Security** (2026-09-12) — `AdminPassword@123` replaced with the
+      storeProvisioning CSPRNG generator (password used once, never persisted
+      or shown; the operator issues a login via the existing reveal-once
+      reset); za-pos HO demo seeding gated by `SEED_DEMO_DATA`
+      (default off in production), plus a new CP-driven
+      `POST /api/internal/admin/init` on the panel.
+- [x] **P0 billing_settings schema fix** (2026-09-12) — rebuilt with
+      `company_id` as the natural key; the unused `auto_renew_subscription_id`
+      dropped; migration test added.
+- [x] **P0 wire_topology both directions** (2026-09-12) — per-branch
+      `HEAD_OFFICE_TOKEN` generated and stored (`stores.head_office_token`),
+      pushed via configure, and registered in the panel via
+      `POST /api/internal/branches`; wiring failures fail the step.
+- [x] **P1 (partial) Subscription foundation** (2026-09-12) — seeded plan
+      `Retail` → `Business` (code migrated once, immutable via API
+      thereafter); inactive plans refused at onboarding/company assignment;
+      auto-renewal no longer records a synthetic payment — the sweep only
+      creates the invoice, settlement is explicit
+      (`BILLING_SIMULATE_RENEWAL_SETTLEMENT=true` restores demo behaviour).
+      **Still deferred:** per-store pricing (`plan_prices`), subscription
+      snapshots, annual discount mechanics.
+- [x] **P2 (partial) Privacy boundary** (2026-09-12) — `vat_reg_no` dropped
+      from the CP stores DDL/DTOs/forms (with a DROP COLUMN migration) and
+      from za-pos `/api/internal/control/status`; the CP-token fallback on
+      Head Office routes is now env-gated
+      (`ALLOW_CONTROL_PLANE_TOKEN_FALLBACK`, default OFF). **Still deferred:**
+      renaming the legacy `branch_stores.control_plane_token` column in za-pos
+      (additive `head_office_token` shipped first).
+- [ ] **Integration tests** (per the review's §38): single-store onboarding,
+      multi-store onboarding, retry-without-duplicates, single→multi upgrade
+      preserving the original store, expire→grace→suspend→resume, and
+      CP-vs-HO token isolation suites. *Partially covered:* the new
+      orchestration suite covers fail-truthfully, UUID persistence +
+      retry-without-duplicates, two-way wiring, and warnings-not-fake-success.

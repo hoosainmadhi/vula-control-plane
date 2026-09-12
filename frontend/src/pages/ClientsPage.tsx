@@ -400,7 +400,8 @@ export default function ClientsPage() {
                       onChange={(e) => setPlanId(e.target.value)}
                       className="mt-1 w-full rounded-lg border border-slate-300 p-2.5 text-sm"
                     >
-                      {plans.map((p) => (
+                      {/* Archived plans stay on existing clients but are not offered to new ones. */}
+                      {plans.filter((p) => p.isActive).map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name}
                         </option>

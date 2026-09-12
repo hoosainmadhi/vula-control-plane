@@ -44,7 +44,6 @@ app.get('/api/internal/status', requireToken, (_req, res) => {
   res.json({
     ok: true,
     storeName: process.env.STUB_STORE_NAME || 'Stub Demo Store',
-    vatRegNo: process.env.STUB_VAT_REG_NO || '4530211828',
     vertical: configuredVertical,
     version: '0.0.0-stub',
     terminalCount: configuredTerminals.length,

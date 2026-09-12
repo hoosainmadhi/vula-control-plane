@@ -85,21 +85,25 @@ export interface CreateServiceResult {
   jwtSecret: string;
 }
 
-/**
- * Provisions a new store container deployment in Coolify.
- */
-export async function createStoreDeployment(input: {
+interface DeploymentSpec {
   slug: string;
   domain: string;
   controlPlaneToken?: string;
   jwtSecret?: string;
-}): Promise<CreateServiceResult> {
+  /** App name prefix and volume prefix (`za-pos-<slug>` vs `vula-ho-<slug>`). */
+  appName: string;
+  /** Dockerfile inside the za-pos repo; both images come from the same repo. */
+  dockerfileLocation: string;
+  envVars: Array<{ key: string; value: string }>;
+}
+
+const deployFromSpec = async (spec: DeploymentSpec): Promise<CreateServiceResult> => {
   const config = readCoolifyConfig();
   if (!config) throw new CoolifyError('Coolify is not configured');
 
-  const { slug, domain } = input;
-  const controlPlaneToken = input.controlPlaneToken || generateSecureSecret(32);
-  const jwtSecret = input.jwtSecret || generateSecureSecret(32);
+  const { slug, domain } = spec;
+  const controlPlaneToken = spec.controlPlaneToken || generateSecureSecret(32);
+  const jwtSecret = spec.jwtSecret || generateSecureSecret(32);
 
   const cleanDomain = domain.replace(/^https?:\/\//, '');
 
@@ -115,9 +119,10 @@ export async function createStoreDeployment(input: {
       git_repository: ZA_POS_REPO_URL,
       git_branch: ZA_POS_REPO_BRANCH,
       build_pack: 'dockerfile',
+      dockerfile_location: spec.dockerfileLocation,
       ports_exposes: STORE_INTERNAL_PORT,
       domains: `https://${cleanDomain}`,
-      name: `za-pos-${slug}`,
+      name: `${spec.appName}-${slug}`,
       is_auto_deploy_enabled: true,
     },
   )) as { uuid: string };
@@ -125,13 +130,8 @@ export async function createStoreDeployment(input: {
   const coolifyUuid = created.uuid;
   if (!coolifyUuid) throw new CoolifyError('Coolify create application returned no uuid');
 
-  // Injected environment variables for the store
   const envVars = [
-    { key: 'PORT', value: '3000' },
-    { key: 'NODE_ENV', value: 'production' },
-    { key: 'DB_PATH', value: '/data/za-pos.db' },
-    { key: 'JWT_SECRET', value: jwtSecret },
-    { key: 'CONTROL_PLANE_TOKEN', value: controlPlaneToken },
+    ...spec.envVars,
     { key: 'LEASE_PUBLIC_KEY', value: licencePublicKey() },
     { key: 'LEASE_KEY_ID', value: licenceKeyId() },
     { key: 'APP_URL', value: `https://${cleanDomain}` },
@@ -147,7 +147,7 @@ export async function createStoreDeployment(input: {
   }
 
   // Persistent volume mount
-  const volumeName = `za-pos-${slug}-data`;
+  const volumeName = `${spec.appName}-${slug}-data`;
   await request(config, 'POST', `${API_VERSION_PATH}/applications/${coolifyUuid}/storages`, {
     type: 'persistent',
     name: volumeName,
@@ -163,8 +163,71 @@ export async function createStoreDeployment(input: {
     { force: false },
   );
 
-  logger.info(`Provisioned Coolify store deployment ${coolifyUuid} for ${slug} (${cleanDomain})`);
+  logger.info(`Provisioned Coolify deployment ${coolifyUuid} for ${slug} (${cleanDomain})`);
   return { coolifyUuid, volumeName, controlPlaneToken, jwtSecret };
+};
+
+/**
+ * Provisions a new store container deployment in Coolify (the store POS image,
+ * built from the repo-root Dockerfile).
+ */
+export async function createStoreDeployment(input: {
+  slug: string;
+  domain: string;
+  controlPlaneToken?: string;
+  jwtSecret?: string;
+}): Promise<CreateServiceResult> {
+  const { slug, domain } = input;
+  const controlPlaneToken = input.controlPlaneToken || generateSecureSecret(32);
+  const jwtSecret = input.jwtSecret || generateSecureSecret(32);
+
+  return deployFromSpec({
+    slug,
+    domain,
+    appName: 'za-pos',
+    dockerfileLocation: 'Dockerfile',
+    controlPlaneToken,
+    jwtSecret,
+    envVars: [
+      { key: 'PORT', value: '3000' },
+      { key: 'NODE_ENV', value: 'production' },
+      { key: 'DB_PATH', value: '/data/za-pos.db' },
+      { key: 'JWT_SECRET', value: jwtSecret },
+      { key: 'CONTROL_PLANE_TOKEN', value: controlPlaneToken },
+    ],
+  });
+}
+
+/**
+ * Provisions the merchant's Head Office container (built from
+ * head-office/Dockerfile in the same za-pos repo — a different application from
+ * the store POS, with its own database and env).
+ */
+export async function createHeadOfficeDeployment(input: {
+  slug: string;
+  domain: string;
+  controlPlaneToken?: string;
+  jwtSecret?: string;
+}): Promise<CreateServiceResult> {
+  const { slug, domain } = input;
+  const controlPlaneToken = input.controlPlaneToken || generateSecureSecret(32);
+  const jwtSecret = input.jwtSecret || generateSecureSecret(32);
+
+  return deployFromSpec({
+    slug,
+    domain,
+    appName: 'vula-ho',
+    dockerfileLocation: 'head-office/Dockerfile',
+    controlPlaneToken,
+    jwtSecret,
+    envVars: [
+      { key: 'PORT', value: '3000' },
+      { key: 'NODE_ENV', value: 'production' },
+      { key: 'HO_DB_PATH', value: '/data/head-office.db' },
+      { key: 'HO_JWT_SECRET', value: jwtSecret },
+      { key: 'CONTROL_PLANE_TOKEN', value: controlPlaneToken },
+    ],
+  });
 }
 
 /** Re-triggers deployment for an existing application. */

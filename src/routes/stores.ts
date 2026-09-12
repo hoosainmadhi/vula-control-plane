@@ -71,7 +71,6 @@ export interface StoreOut {
   id: number;
   slug: string;
   name: string;
-  vatRegNo: string | null;
   vertical: StoreVertical;
   terminalCount: number;
   baseUrl: string;
@@ -138,7 +137,6 @@ const storeToOut = (store: StoreRecord): StoreOut => ({
   id: store.id,
   slug: store.slug,
   name: store.name,
-  vatRegNo: store.vat_reg_no,
   vertical: store.vertical,
   terminalCount: store.terminal_count,
   baseUrl: store.base_url,
@@ -312,7 +310,6 @@ storesRouter.post(
   asyncHandler(async (req, res) => {
     const name = requireString(req.body, 'name');
     const slug = requireSlug(req.body);
-    const vatRegNo = optionalString(req.body, 'vatRegNo', 20) ?? null;
     const vertical = optionalVertical(req.body);
     const terminalCount = requireTerminalCount(req.body);
     const baseUrl = requireBaseUrl(req.body);
@@ -392,7 +389,7 @@ storesRouter.post(
     }
 
     const store = createStore(
-      { name, slug, vatRegNo, vertical, terminalCount, baseUrl },
+      { name, slug, vertical, terminalCount, baseUrl },
       controlPlaneToken,
     );
     if (companyId !== null) setStoreCompany(store.id, companyId);
@@ -467,15 +464,12 @@ storesRouter.put(
     const store = storeFromParams(req.params.id);
     const input: {
       name?: string;
-      vatRegNo?: string | null;
       vertical?: StoreVertical;
       terminalCount?: number;
       baseUrl?: string;
     } = {};
     const body = req.body as Record<string, unknown>;
     if (body['name'] !== undefined) input.name = requireString(body, 'name');
-    if (body['vatRegNo'] !== undefined)
-      input.vatRegNo = optionalString(body, 'vatRegNo', 20) ?? null;
     if (body['vertical'] !== undefined) input.vertical = optionalVertical(body);
     if (body['terminalCount'] !== undefined) input.terminalCount = requireTerminalCount(body);
     if (body['baseUrl'] !== undefined) input.baseUrl = requireBaseUrl(body);

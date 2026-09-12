@@ -221,6 +221,16 @@ clientsRouter.post(
       req.body?.deploymentType === 'multi_store' ? 'multi_store' : 'single_store';
     const autoDeploy = req.body?.autoDeploy !== false;
 
+    // Inactive (archived) plans stay visible on existing subscriptions but are
+    // not offered to new clients.
+    if (planId !== null) {
+      const chosenPlan = getPlanById(planId);
+      if (!chosenPlan) throw new HttpError(400, 'planId does not match a known plan');
+      if (!chosenPlan.is_active) {
+        throw new HttpError(400, `Plan "${chosenPlan.name}" is inactive and cannot be used for a new client`);
+      }
+    }
+
     // Check slug uniqueness
     if (getCompanyBySlug(slug)) {
       throw new HttpError(409, `A client with slug '${slug}' already exists`);
@@ -330,8 +340,14 @@ clientsRouter.post(
     // Gate on the plan that will be in force when the topology lands: the one
     // being upgraded to when supplied, otherwise the company's current plan.
     const requestedPlanId = optionalInt(req.body, 'planId');
-    if (requestedPlanId && !getPlanById(requestedPlanId)) {
-      throw new HttpError(400, 'planId does not match a known plan');
+    if (requestedPlanId) {
+      const requestedPlan = getPlanById(requestedPlanId);
+      if (!requestedPlan) {
+        throw new HttpError(400, 'planId does not match a known plan');
+      }
+      if (!requestedPlan.is_active) {
+        throw new HttpError(400, `Plan "${requestedPlan.name}" is inactive and cannot be selected`);
+      }
     }
     const effectivePlan = requestedPlanId
       ? getPlanById(requestedPlanId)

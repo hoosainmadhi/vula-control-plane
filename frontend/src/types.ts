@@ -98,7 +98,6 @@ export interface Store {
   id: number;
   slug: string;
   name: string;
-  vatRegNo?: string | null;
   vertical: StoreVertical;
   terminalCount: number;
   baseUrl: string;
@@ -176,7 +175,6 @@ export interface ResetAdminResponse {
 export interface StoreFormValues {
   name: string;
   slug: string;
-  vatRegNo?: string;
   vertical: StoreVertical;
   baseUrl: string;
   terminalCount: string;
@@ -255,6 +253,8 @@ export interface DeploymentJobStep {
   status: 'pending' | 'running' | 'complete' | 'failed' | 'skipped';
   attempts: number;
   error: string | null;
+  /** Best-effort operations that did not succeed; the step still completed. */
+  warnings_json: string | null;
   metadata_json: string | null;
   started_at: string | null;
   completed_at: string | null;

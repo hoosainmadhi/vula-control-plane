@@ -511,7 +511,18 @@ export default function ClientDetailPage() {
 
               {/* Step progression */}
               <div className="space-y-2">
-                {latestDeployment.steps.map((st, i) => (
+                {latestDeployment.steps.map((st, i) => {
+                  const warnings: string[] = (() => {
+                    if (!st.warnings_json) return [];
+                    try {
+                      const parsed = JSON.parse(st.warnings_json);
+                      return Array.isArray(parsed) ? (parsed as string[]) : [];
+                    } catch {
+                      return [];
+                    }
+                  })();
+                  const doneWithWarnings = st.status === 'complete' && warnings.length > 0;
+                  return (
                   <div
                     key={st.id}
                     className="flex items-center justify-between rounded-xl border border-slate-200 p-3 text-xs"
@@ -525,6 +536,13 @@ export default function ClientDetailPage() {
                           {st.step_key.replace(/_/g, ' ')}
                         </div>
                         <div className="text-[10px] text-slate-400">Resource: {st.resource_type}</div>
+                        {warnings.length > 0 && (
+                          <div className="mt-1 space-y-0.5">
+                            {warnings.map((w, wi) => (
+                              <div key={wi} className="text-[10px] text-amber-600">⚠ {w}</div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -533,17 +551,20 @@ export default function ClientDetailPage() {
                       <span
                         className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
                           st.status === 'complete'
-                            ? 'bg-emerald-50 text-emerald-700'
+                            ? doneWithWarnings
+                              ? 'bg-amber-50 text-amber-700'
+                              : 'bg-emerald-50 text-emerald-700'
                             : st.status === 'failed'
                             ? 'bg-rose-50 text-rose-700'
                             : 'bg-amber-50 text-amber-700'
                         }`}
                       >
-                        {st.status}
+                        {doneWithWarnings ? 'complete · warnings' : st.status}
                       </span>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ) : (

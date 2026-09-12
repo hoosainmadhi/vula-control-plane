@@ -31,5 +31,5 @@ export const jsonResponse = (status: number, body: unknown): Response =>
   });
 
 export const CONFIGURE_OK = { ok: true, applied: { terminalCount: 2 } };
-export const STATUS_OK = { storeName: 'Demo Store', vatRegNo: '1234567890', version: '1.0.0' };
+export const STATUS_OK = { storeName: 'Demo Store', version: '1.0.0' };
 export const RESET_OK = { ok: true, tempPassword: 'Kx9!mQ2z-abc' };

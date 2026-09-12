@@ -268,13 +268,21 @@ export async function processPaymentAndRenew(input: {
 
 /**
  * Automated renewal cycle: checks all active companies with paid plans.
- * If renewal is due, auto-renews or generates an invoice.
+ * If renewal is due, generates (or reuses) the invoice.
+ *
+ * Settlement truthfulness (production-readiness review, 2026-09-12): the sweep
+ * NEVER records a payment by itself — a subscription is only extended by an
+ * explicitly confirmed settlement (an office user recording the payment, or a
+ * payment-provider webhook once a gateway is integrated). The synthetic
+ * `manual` completion is available ONLY behind
+ * BILLING_SIMULATE_RENEWAL_SETTLEMENT=true for disposable demo environments.
  */
 export async function runAutomatedRenewals(options?: {
   now?: Date;
 }): Promise<AutomatedRenewalSummary> {
   const now = options?.now ?? new Date();
   const nowDateStr = formatDateOnly(now);
+  const simulateSettlement = process.env.BILLING_SIMULATE_RENEWAL_SETTLEMENT === 'true';
   const summary: AutomatedRenewalSummary = {
     companiesEvaluated: 0,
     invoicesCreated: 0,
@@ -324,13 +332,14 @@ export async function runAutomatedRenewals(options?: {
       summary.invoicesCreated++;
     }
 
-    // If auto_renew is enabled, process automatic renewal
-    if (autoRenewEnabled) {
+    // Entitlement is never extended just because the sweep ran. Without a real
+    // settlement the invoice stays open for the office user to confirm.
+    if (autoRenewEnabled && simulateSettlement) {
       try {
         await processPaymentAndRenew({
           invoiceId: invoiceToPay.id,
           method: 'manual',
-          transactionId: `auto-${Date.now()}`,
+          transactionId: `simulated-${Date.now()}`,
           now,
         });
         summary.renewalsProcessed++;
@@ -341,6 +350,10 @@ export async function runAutomatedRenewals(options?: {
         logger.error(msg);
         summary.errors.push(msg);
       }
+    } else if (autoRenewEnabled) {
+      logger.info(
+        `Renewal invoice ${invoiceToPay.invoice_number} for ${company.slug} is awaiting settlement; paid_through unchanged`,
+      );
     }
   }
 

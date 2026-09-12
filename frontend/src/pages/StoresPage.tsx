@@ -40,7 +40,6 @@ import type {
 const EMPTY_FORM: StoreFormValues = {
   name: '',
   slug: '',
-  vatRegNo: '',
   vertical: 'general',
   baseUrl: '',
   terminalCount: '1',
@@ -203,7 +202,6 @@ function StoreFormModal({ modal, saving, error, companies, onClose, onSubmit }: 
       ? {
           name: editing.name,
           slug: editing.slug,
-          vatRegNo: editing.vatRegNo ?? '',
           vertical: editing.vertical,
           baseUrl: editing.baseUrl,
           terminalCount: String(editing.terminalCount),
@@ -488,7 +486,6 @@ export default function StoresPage() {
     try {
       const body = {
         name: values.name.trim(),
-        vatRegNo: values.vatRegNo ? values.vatRegNo.trim() : null,
         vertical: values.vertical,
         baseUrl: values.baseUrl.trim(),
         terminalCount: Number(values.terminalCount),

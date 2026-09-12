@@ -79,7 +79,7 @@ describe('plans', () => {
   it('seeds four editable tiers', async () => {
     const res = await request(app).get('/api/plans').set(auth()).expect(200);
     const codes = (res.body as Array<{ code: string }>).map((p) => p.code);
-    expect(codes).toEqual(['starter', 'retail', 'multi-store', 'enterprise']);
+    expect(codes).toEqual(['starter', 'business', 'multi-store', 'enterprise']);
   });
 
   it('carries the per-store terminal ceiling and feature set', async () => {
@@ -102,6 +102,31 @@ describe('plans', () => {
       .expect(200);
     expect(res.body.maxTerminalsPerStore).toBe(4);
     expect(res.body.features).toEqual(['advanced_reports']);
+  });
+
+  it('refuses to change a plan code — it is immutable after creation', async () => {
+    const planId = await planIdByCode('business');
+    const res = await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ code: 'renamed-tier' })
+      .expect(400);
+    expect(res.body.error).toContain('immutable');
+  });
+
+  it('refuses assigning an inactive (archived) plan to a new company', async () => {
+    const planId = await planIdByCode('starter');
+    await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ isActive: false })
+      .expect(200);
+    const res = await request(app)
+      .post('/api/companies')
+      .set(auth())
+      .send({ name: 'Frozen Foods', slug: 'frozen-foods', planId })
+      .expect(400);
+    expect(res.body.error).toContain('inactive');
   });
 });
 

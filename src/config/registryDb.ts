@@ -32,11 +32,12 @@ export interface StoreRecord {
   id: number;
   slug: string;
   name: string;
-  vat_reg_no: string | null;
   vertical: StoreVertical;
   terminal_count: number;
   base_url: string;
   control_plane_token: string;
+  /** Per-branch credential the merchant's Head Office uses to call this store. */
+  head_office_token: string | null;
   status: StoreStatus;
   last_config_status: ConfigStatus;
   last_config_at: string | null;
@@ -67,13 +68,13 @@ const STORES_DDL = `
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
     slug                   TEXT    NOT NULL UNIQUE,
     name                   TEXT    NOT NULL,
-    vat_reg_no             TEXT,
     vertical               TEXT    NOT NULL DEFAULT 'general',
     terminal_count         INTEGER NOT NULL DEFAULT 1
       CHECK (terminal_count BETWEEN 1 AND 99),
     base_url               TEXT    NOT NULL
       CHECK (base_url LIKE 'http://%' OR base_url LIKE 'https://%'),
     control_plane_token    TEXT    NOT NULL,
+    head_office_token      TEXT,
     status                 TEXT    NOT NULL DEFAULT 'active'
       CHECK (status IN ('active', 'paused')),
     last_config_status     TEXT    NOT NULL DEFAULT 'pending'
@@ -126,15 +127,17 @@ const PAYMENTS_DDL = `
 
 const BILLING_SETTINGS_DDL = `
   CREATE TABLE IF NOT EXISTS billing_settings (
-    id                  INTEGER PRIMARY KEY CHECK (id = 1),
-    company_id          INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-    auto_renew          INTEGER NOT NULL DEFAULT 1,
-    auto_renew_subscription_id INTEGER REFERENCES companies(id) ON DELETE SET NULL,
-    email_invoice       INTEGER NOT NULL DEFAULT 1,
-    invoice_email       TEXT,
-    created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
+    company_id        INTEGER PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+    auto_renew        INTEGER NOT NULL DEFAULT 1,
+    email_invoice     INTEGER NOT NULL DEFAULT 1,
+    invoice_email     TEXT,
+    created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
   )`;
+
+/** Columns carried across the billing_settings singleton→per-company rebuild. */
+const BILLING_SETTINGS_COLUMNS =
+  'company_id, auto_renew, email_invoice, invoice_email, created_at, updated_at';
 
 const DEPLOYMENT_JOBS_DDL = `
   CREATE TABLE IF NOT EXISTS deployment_jobs (
@@ -161,6 +164,7 @@ const DEPLOYMENT_JOB_STEPS_DDL = `
       CHECK (status IN ('pending', 'running', 'complete', 'failed', 'skipped')),
     attempts      INTEGER NOT NULL DEFAULT 0,
     error         TEXT,
+    warnings_json TEXT,
     metadata_json TEXT,
     started_at    TEXT,
     completed_at  TEXT
@@ -250,6 +254,10 @@ const PANELS_DDL = `
     licence_issued_at   TEXT,
     licence_push_status TEXT    NOT NULL DEFAULT 'pending',
     licence_pushed_at   TEXT,
+    deploy_status       TEXT    NOT NULL DEFAULT 'not_deployed'
+      CHECK (deploy_status IN ('not_deployed', 'provisioning', 'deployed', 'failed')),
+    coolify_uuid        TEXT,
+    volume_name         TEXT,
     created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
   )`;
@@ -265,8 +273,8 @@ const SEED_PLANS: Array<{
 }> = [
   { code: 'starter', name: 'Starter', maxStores: 1, maxTerminals: 2, features: [], sortOrder: 1 },
   {
-    code: 'retail',
-    name: 'Retail',
+    code: 'business',
+    name: 'Business',
     maxStores: 1,
     maxTerminals: 8,
     features: ['customer_credit', 'advanced_reports'],
@@ -337,9 +345,15 @@ export const getRegistryDb = (): Database.Database => {
   const addColumn = (name: string, ddl: string) => {
     if (!storeCols.some((c) => c.name === name)) db.exec(`ALTER TABLE stores ADD COLUMN ${ddl}`);
   };
-  addColumn('vat_reg_no', 'vat_reg_no TEXT');
+  // §40 privacy: the merchant's VAT registration never belonged on the vendor
+  // surface — dropped from the DDL and from existing databases.
+  if (storeCols.some((c) => c.name === 'vat_reg_no')) {
+    db.exec('ALTER TABLE stores DROP COLUMN vat_reg_no');
+  }
   addColumn('vertical', "vertical TEXT NOT NULL DEFAULT 'general'");
   addColumn('control_plane_token', `control_plane_token TEXT NOT NULL DEFAULT ''`);
+  // Per-branch Head Office credential — distinct from the vendor CP token.
+  addColumn('head_office_token', 'head_office_token TEXT');
   addColumn('licence_sequence', 'licence_sequence INTEGER NOT NULL DEFAULT 0');
   addColumn('licence_issued_at', 'licence_issued_at TEXT');
   addColumn('licence_push_status', "licence_push_status TEXT NOT NULL DEFAULT 'pending'");
@@ -354,8 +368,25 @@ export const getRegistryDb = (): Database.Database => {
   addColumn('applied_config_version', 'applied_config_version INTEGER NOT NULL DEFAULT 0');
   addColumn('latency_ms', 'latency_ms INTEGER');
 
+  const panelCols = db.prepare('PRAGMA table_info(panels)').all() as Array<{ name: string }>;
+  const addPanelColumn = (name: string, ddl: string) => {
+    if (!panelCols.some((c) => c.name === name)) db.exec(`ALTER TABLE panels ADD COLUMN ${ddl}`);
+  };
+  addPanelColumn('deploy_status', "deploy_status TEXT NOT NULL DEFAULT 'not_deployed'");
+  addPanelColumn('coolify_uuid', 'coolify_uuid TEXT');
+  addPanelColumn('volume_name', 'volume_name TEXT');
+
+  const stepCols = db
+    .prepare('PRAGMA table_info(deployment_job_steps)')
+    .all() as Array<{ name: string }>;
+  if (!stepCols.some((c) => c.name === 'warnings_json')) {
+    db.exec('ALTER TABLE deployment_job_steps ADD COLUMN warnings_json TEXT');
+  }
+
   widenPlanBillingPeriod(db);
+  renameRetailPlanToBusiness(db);
   seedPlans(db);
+  migrateBillingSettingsToPerCompany(db);
   return registry;
 };
 
@@ -481,6 +512,43 @@ const widenPlanBillingPeriod = (db: Database.Database): void => {
   repairPlanReferences(db);
 };
 
+/**
+ * Retail → Business (2026-09-12). "Retail" names a vertical, not a commercial
+ * tier — Vula serves clothing, spares, pharmacy, restaurant and general retail,
+ * so the tier must not imply one. `code` is the technical identifier licences
+ * carry, so the rename migrates existing rows once and the code is immutable
+ * from the API afterwards.
+ */
+const renameRetailPlanToBusiness = (db: Database.Database): void => {
+  if (!tableExists(db, 'plans')) return;
+  const hasRetail = db.prepare('SELECT 1 FROM plans WHERE code = ?').get('retail');
+  if (!hasRetail) return;
+  const hasBusiness = db.prepare('SELECT 1 FROM plans WHERE code = ?').get('business');
+  if (hasBusiness) {
+    // A business tier already exists (operator-created): keep it, retire retail quietly.
+    db.prepare('UPDATE plans SET name = ?, updated_at = datetime(\'now\') WHERE code = ?').run(
+      'Business',
+      'retail',
+    );
+    return;
+  }
+  db.prepare("UPDATE plans SET code = 'business', name = 'Business', updated_at = datetime('now') WHERE code = 'retail'").run();
+};
+
+/**
+ * billing_settings was modelled as a singleton (`CHECK (id = 1)`) but used as
+ * per-company data — the second company's settings save violated the CHECK.
+ * Rebuilt with company_id as the natural key; the unused
+ * auto_renew_subscription_id column is dropped. Idempotent.
+ */
+const migrateBillingSettingsToPerCompany = (db: Database.Database): void => {
+  if (!tableExists(db, 'billing_settings')) return;
+  const ddl = storedDdl(db, 'billing_settings');
+  if (ddl && ddl.includes('CHECK (id = 1)')) {
+    rebuildTable(db, 'billing_settings', BILLING_SETTINGS_COLUMNS, BILLING_SETTINGS_DDL);
+  }
+};
+
 /** Test helper: close and drop the singleton so the next getRegistryDb() call reopens (e.g. :memory:). */
 export const resetRegistryDb = (): void => {
   if (registry) {
@@ -510,7 +578,6 @@ export const getStoreBySlug = (slug: string): StoreRecord | null => {
 export interface CreateStoreInput {
   name: string;
   slug: string;
-  vatRegNo?: string | null;
   vertical?: StoreVertical;
   terminalCount: number;
   baseUrl: string;
@@ -521,13 +588,12 @@ export const createStore = (input: CreateStoreInput, controlPlaneToken: string):
   const insert = db.transaction(() => {
     const info = db
       .prepare(
-        `INSERT INTO stores (name, slug, vat_reg_no, vertical, terminal_count, base_url, control_plane_token)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO stores (name, slug, vertical, terminal_count, base_url, control_plane_token)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.name,
         input.slug,
-        input.vatRegNo ?? null,
         input.vertical ?? 'general',
         input.terminalCount,
         input.baseUrl,
@@ -541,21 +607,18 @@ export const createStore = (input: CreateStoreInput, controlPlaneToken: string):
 
 export interface UpdateStoreInput {
   name?: string;
-  vatRegNo?: string | null;
   vertical?: StoreVertical;
   terminalCount?: number;
   baseUrl?: string;
 }
 
-/** Absent = keep; explicit null clears (vatRegNo only). */
+/** Absent = keep. */
 export const updateStore = (id: number, input: UpdateStoreInput): StoreRecord | null => {
   const db = getRegistryDb();
-  const current = getStoreById(id);
-  if (!current) return null;
+  if (!getStoreById(id)) return null;
   db.prepare(
     `UPDATE stores SET
        name = COALESCE(?, name),
-       vat_reg_no = ?,
        vertical = COALESCE(?, vertical),
        terminal_count = COALESCE(?, terminal_count),
        base_url = COALESCE(?, base_url),
@@ -563,7 +626,6 @@ export const updateStore = (id: number, input: UpdateStoreInput): StoreRecord | 
      WHERE id = ?`,
   ).run(
     input.name ?? null,
-    input.vatRegNo === undefined ? current.vat_reg_no : input.vatRegNo,
     input.vertical ?? null,
     input.terminalCount ?? null,
     input.baseUrl ?? null,
@@ -739,10 +801,11 @@ export const createPlan = (input: PlanInput): PlanRecord => {
 export const updatePlan = (id: number, input: Partial<PlanInput> & { isActive?: boolean }): PlanRecord | null => {
   const existing = getPlanById(id);
   if (!existing) return null;
+  // `code` is the technical identifier licences and integrations depend on —
+  // immutable after creation (2026-09-12). Edit the display name instead.
   getRegistryDb()
     .prepare(
       `UPDATE plans SET
-         code = COALESCE(?, code),
          name = COALESCE(?, name),
          max_stores = COALESCE(?, max_stores),
          max_terminals_per_store = COALESCE(?, max_terminals_per_store),
@@ -754,7 +817,6 @@ export const updatePlan = (id: number, input: Partial<PlanInput> & { isActive?: 
        WHERE id = ?`,
     )
     .run(
-      input.code ?? null,
       input.name ?? null,
       input.maxStores ?? null,
       input.maxTerminalsPerStore ?? null,
@@ -832,10 +894,8 @@ export interface PaymentRecord {
 }
 
 export interface BillingSettingsRecord {
-  id: number;
   company_id: number;
   auto_renew: number;
-  auto_renew_subscription_id: number | null;
   email_invoice: number;
   invoice_email: string | null;
   created_at: string;
@@ -937,6 +997,10 @@ export interface PanelRecord {
   licence_issued_at: string | null;
   licence_push_status: ConfigStatus;
   licence_pushed_at: string | null;
+  /** Deployment status for Coolify container provisioning (Head Office image) */
+  deploy_status: 'not_deployed' | 'provisioning' | 'deployed' | 'failed';
+  coolify_uuid: string | null;
+  volume_name: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1057,6 +1121,38 @@ export const recordPanelLicencePush = (id: number, status: ConfigStatus): PanelR
     )
     .run(status, status === 'ok' ? 1 : 0, id);
   return getPanelById(id);
+};
+
+export const setPanelDeployStatus = (
+  id: number,
+  status: 'not_deployed' | 'provisioning' | 'deployed' | 'failed',
+  meta?: { coolifyUuid?: string; volumeName?: string },
+): PanelRecord | null => {
+  getRegistryDb()
+    .prepare(
+      `UPDATE panels SET
+         deploy_status = ?,
+         coolify_uuid = COALESCE(?, coolify_uuid),
+         volume_name = COALESCE(?, volume_name),
+         updated_at = datetime('now')
+       WHERE id = ?`,
+    )
+    .run(status, meta?.coolifyUuid ?? null, meta?.volumeName ?? null, id);
+  return getPanelById(id);
+};
+
+/**
+ * Stores a branch's dedicated Head Office credential. Generated by the control
+ * plane during topology wiring; the merchant's Head Office registers the same
+ * value so the two always agree. Distinct from the vendor CP token by design.
+ */
+export const setStoreHeadOfficeToken = (id: number, token: string): StoreRecord | null => {
+  getRegistryDb()
+    .prepare(
+      `UPDATE stores SET head_office_token = ?, updated_at = datetime('now') WHERE id = ?`,
+    )
+    .run(token, id);
+  return getStoreById(id);
 };
 
 // --- Invoices -----------------------------------------------------------------
@@ -1202,30 +1298,24 @@ export const getBillingSettings = (companyId: number): BillingSettingsRecord | n
 
 export const upsertBillingSettings = (
   companyId: number,
-  settings: Partial<Pick<BillingSettingsRecord, 'auto_renew' | 'auto_renew_subscription_id' | 'email_invoice' | 'invoice_email'>>,
+  settings: Partial<Pick<BillingSettingsRecord, 'auto_renew' | 'email_invoice' | 'invoice_email'>>,
 ): BillingSettingsRecord => {
   const db = getRegistryDb();
   const existing = getBillingSettings(companyId);
 
   const autoRenew = settings.auto_renew !== undefined ? (settings.auto_renew ? 1 : 0) : existing?.auto_renew ?? 1;
-  const autoRenewSubId = settings.auto_renew_subscription_id !== undefined
-    ? settings.auto_renew_subscription_id
-    : existing?.auto_renew_subscription_id ?? null;
   const emailInvoice = settings.email_invoice !== undefined ? (settings.email_invoice ? 1 : 0) : existing?.email_invoice ?? 1;
   const invoiceEmail = settings.invoice_email ?? existing?.invoice_email ?? '';
 
-  if (existing) {
-    db.prepare(
-      `UPDATE billing_settings SET
-         auto_renew = ?, auto_renew_subscription_id = ?, email_invoice = ?, invoice_email = ?, updated_at = datetime('now')
-         WHERE company_id = ?`,
-    ).run(autoRenew, autoRenewSubId, emailInvoice, invoiceEmail, companyId);
-  } else {
-    db.prepare(
-      `INSERT INTO billing_settings (company_id, auto_renew, auto_renew_subscription_id, email_invoice, invoice_email)
-       VALUES (?, ?, ?, ?, ?)`,
-    ).run(companyId, autoRenew, autoRenewSubId, emailInvoice, invoiceEmail);
-  }
+  db.prepare(
+    `INSERT INTO billing_settings (company_id, auto_renew, email_invoice, invoice_email)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT (company_id) DO UPDATE SET
+       auto_renew = excluded.auto_renew,
+       email_invoice = excluded.email_invoice,
+       invoice_email = excluded.invoice_email,
+       updated_at = datetime('now')`,
+  ).run(companyId, autoRenew, emailInvoice, invoiceEmail);
 
   return getBillingSettings(companyId)!;
 };
@@ -1253,6 +1343,8 @@ export interface DeploymentJobStepRecord {
   status: 'pending' | 'running' | 'complete' | 'failed' | 'skipped';
   attempts: number;
   error: string | null;
+  /** Best-effort operations that did not succeed — the step still completed. */
+  warnings_json: string | null;
   metadata_json: string | null;
   started_at: string | null;
   completed_at: string | null;
@@ -1340,6 +1432,7 @@ export const updateDeploymentStep = (
   updates: {
     status?: DeploymentJobStepRecord['status'];
     error?: string | null;
+    warnings?: string[];
     resourceId?: number | null;
     metadata?: unknown;
     attempts?: number;
@@ -1353,11 +1446,13 @@ export const updateDeploymentStep = (
   if (!current) return null;
 
   const metadataJson = updates.metadata !== undefined ? JSON.stringify(updates.metadata) : current.metadata_json;
+  const warningsJson = updates.warnings !== undefined ? JSON.stringify(updates.warnings) : current.warnings_json;
 
   db.prepare(
     `UPDATE deployment_job_steps SET
        status = COALESCE(?, status),
        error = ?,
+       warnings_json = ?,
        resource_id = COALESCE(?, resource_id),
        metadata_json = ?,
        attempts = COALESCE(?, attempts),
@@ -1366,6 +1461,7 @@ export const updateDeploymentStep = (
   ).run(
     updates.status ?? null,
     updates.error === undefined ? current.error : updates.error,
+    warningsJson,
     updates.resourceId ?? null,
     metadataJson,
     updates.attempts ?? null,

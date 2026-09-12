@@ -2,6 +2,92 @@
 
 Dated log of the build.
 
+## 2026-09-12 (night) — production-readiness P0 set shipped ("fix first before continuing")
+
+Owner made the sequencing call: the review's fixes come before F1. Shipped in
+one pass across both repos; **no commits made** (house rule: commit only when
+instructed).
+
+- **Orchestration truthfulness** (`clientOrchestrator.ts`): required
+  operations (Coolify application create) fail the step and job; best-effort
+  operations (admin bootstrap, first config/licence push) complete the step
+  with recorded `warnings_json` (new column; amber "complete · warnings" in
+  the stepper UI). The orchestrator now persists `coolify_uuid`/`volume_name`
+  immediately after creation and skips creation when the UUID already exists —
+  a retry re-triggers deploy instead of duplicating the application.
+- **Real Head Office deployment**: `createHeadOfficeDeployment()` in
+  `services/coolify.ts` (name `vula-ho-<slug>`, `dockerfile_location:
+  head-office/Dockerfile`, env `HO_DB_PATH`/`HO_JWT_SECRET` + lease keys); the
+  new `head-office/Dockerfile` in za-pos builds and starts the actual HO app
+  (build verified locally with docker). `panels` gained
+  `deploy_status`/`coolify_uuid`/`volume_name`.
+- **Credentials**: `AdminPassword@123` is gone — the orchestrator uses the
+  storeProvisioning CSPRNG generator and discards the password (operator
+  issues a login via the reveal-once reset, house D4 posture). The panel got
+  `POST /api/internal/admin/init` (one-time, 409 once a user exists) so the CP
+  can bootstrap HO admins. za-pos demo seeding (executive account + Urban
+  Threads categories) is now gated by `SEED_DEMO_DATA` — default off in
+  production, on in dev/test.
+- **Topology both ways**: `stores.head_office_token` (new column) holds a
+  per-branch credential generated at wiring time; `wire_topology` pushes it to
+  the branch via the configure payload AND registers the branch in the panel's
+  roster via the new `POST /api/internal/branches` (upsert by slug, panel-token
+  guarded). The old behaviour (pushing the panel's vendor CP token to branches)
+  is gone. za-pos `branch_stores` gained `head_office_token` and its store
+  client prefers it when calling branches.
+- **billing_settings rebuilt per-company** (`company_id` is now the natural
+  key; the unused `auto_renew_subscription_id` dropped) — the second company's
+  settings save no longer violates `CHECK (id = 1)`.
+- **Auto-renewal is settlement-gated**: the sweep creates the renewal invoice
+  but never records a payment by itself; `paid_through` moves only on an
+  explicit settlement (office-recorded payment now, provider webhook later).
+  `BILLING_SIMULATE_RENEWAL_SETTLEMENT=true` restores the demo behaviour.
+- **Plans**: seeded `Retail` → `Business` (one-time code migration),
+  `plan.code` immutable via the API (400 otherwise), inactive plans refused at
+  onboarding/company assignment and filtered from the wizard dropdown.
+- **Privacy**: `vat_reg_no` dropped from the CP stores DDL, DTOs, forms, tests,
+  stub and smoke script (DROP COLUMN migration for live DBs) and `vatRegNo`
+  removed from za-pos `/api/internal/control/status`; the store's Head Office
+  routes accept the vendor CP token only with
+  `ALLOW_CONTROL_PLANE_TOKEN_FALLBACK=true` (migration-only, default OFF).
+- **Tests**: CP **129 green across 12 suites** (+8 new: orchestration
+  truthfulness ×4, billing_settings/Retail migrations ×2, plan immutability +
+  inactive-plan ×2); za-pos **311 green across 31 suites** (+12: vendor
+  branches ×5, admin-init/no-demo-seed ×5, CP-token-fallback gating ×2).
+  Both repos typecheck clean and both production builds pass.
+- **Deferred to the next milestone** (deliberately): `plan_prices` per-store
+  pricing, subscription snapshots, the legacy
+  `branch_stores.control_plane_token` column rename in za-pos, and the §38
+  full lifecycle suites.
+
+## 2026-09-12 (evening) — external production-readiness review received, code-verified and captured
+
+- Owner shared a deep-dive review of both repos (full text:
+  `~/Downloads/vula-subscription-and-platform-deep-dive-report.md`). Per
+  house rule every claim was verified against the code before recording —
+  **all of them check out**, including the headline: `head_office_deploy`
+  calls `createStoreDeployment()` (clientOrchestrator.ts:156) and za-pos has
+  no `head-office/Dockerfile` (root CMD `node dist/server.js` = store app
+  only), so orchestrated "HO deployment" cannot boot the HO app today.
+- Also confirmed in this repo: steps marked complete despite swallowed
+  failures; `createStoreDeployment` results discarded (no coolify_uuid
+  persistence in the orchestrator path); one-directional `wire_topology`
+  (branches never registered in the HO); `AdminPassword@123`
+  (clientOrchestrator.ts:209); `billing_settings` `CHECK (id = 1)` singleton
+  vs per-company inserts (the second company's save will throw); renewal's
+  synthetic `manual` payment (billing.ts:332); flat `price_cents` plans with
+  a seeded tier named `Retail`.
+- **Docs vs code disagreement flagged (findings.md):** progress claimed
+  `vat_reg_no` was removed from CP forms/DTOs on 2026-09-11 — it is still in
+  the DDL, `StoreOut` and the StoresPage forms; the route has never changed
+  since the initial commit. Decision needed: remove the field or fix the note.
+- Captured: verified findings → findings.md; proposed phase set
+  "production-safe Multi-Store provisioning + subscription foundation" →
+  task_plan.md (P0/P1/P2 + integration tests; sequencing vs F1 is the
+  owner's call — noted in Current Phase); smaller commercial/ops items →
+  tidbits.md. **No implementation started** — awaiting the owner's go-ahead
+  and sequencing decision.
+
 ## 2026-09-12 (later) — L4 store side shipped in za-pos; L4 complete on both sides
 
 - The za-pos workstream implemented the store half of the §2b contract the same
