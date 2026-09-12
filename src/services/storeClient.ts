@@ -1,4 +1,4 @@
-import type { StoreRecord } from '../config/registryDb.js';
+import { terminalRoster, type StoreRecord } from '../config/registryDb.js';
 import { env } from '../config/env.js';
 
 /**
@@ -98,7 +98,10 @@ const request = async (
  * POST /api/internal/configure.
  */
 export const pushTerminals = async (
-  store: Pick<StoreRecord, 'base_url' | 'control_plane_token' | 'terminal_count' | 'vertical'>,
+  store: Pick<
+    StoreRecord,
+    'base_url' | 'control_plane_token' | 'terminal_count' | 'vertical' | 'terminal_names_json'
+  >,
   options: CallOptions = {},
   extra: Record<string, unknown> = {},
 ): Promise<unknown> => {
@@ -109,7 +112,7 @@ export const pushTerminals = async (
     {
       terminalCount: store.terminal_count,
       vertical: store.vertical,
-      terminals: terminalNames(store.terminal_count),
+      terminals: terminalRoster(store),
       ...extra,
     },
     options,

@@ -142,6 +142,10 @@ export async function runStoreProvisioning(
       const cfgBody = await pushTerminals(store);
       recordConfigResult(store.id, { status: 'ok', snapshot: cfgBody });
     } catch (e) {
+      recordConfigResult(store.id, {
+        status: 'failed',
+        error: e instanceof Error ? e.message : String(e),
+      });
       logger.warn(`Initial terminal push for ${store.slug} pending: ${e}`);
     }
 

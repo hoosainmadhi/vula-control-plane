@@ -2,6 +2,30 @@
 
 Dated log of the build.
 
+## 2026-09-12 (later) — F1 CP ops hardening complete
+
+The phase is now fully closed. Three items were still open after the
+production-readiness pass; all shipped:
+
+- **Last errors persist**: `last_config_error` / `last_health_error` columns
+  (DDL + ensureColumns + schema.sql). Every outcome site records the reason —
+  the push route, health route, the automated sweep and store provisioning —
+  and recovery clears it. The fleet card shows the message under the Health
+  and Config badges (truncated with a full-text title), so a red state
+  explains itself across refreshes.
+- **Custom till names**: `terminal_names_json` on the stores row;
+  `terminalRoster()` resolves names (blank slot → "Till N") and feeds EVERY
+  configure push — including `wire_topology`, which previously regenerated
+  "Till N" and would have clobbered custom names. The edit modal gains
+  per-till inputs (prefilled via `StoreOut.terminalNames`), the roster tiles
+  show custom names, and `PUT /stores/:id { terminalNames: null }` reverts.
+- **Plans deactivate toggle**: Deactivate/Re-activate row action with
+  Active/Archived pills; the plan-code field is read-only in edit mode since
+  codes are immutable now.
+
+Tests: **130 green across 12 suites** (+1 till-name lifecycle, +error
+persistence assertions); typecheck and production build clean.
+
 ## 2026-09-12 (night) — production-readiness P0 set shipped ("fix first before continuing")
 
 Owner made the sequencing call: the review's fixes come before F1. Shipped in

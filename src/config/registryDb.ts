@@ -42,9 +42,15 @@ export interface StoreRecord {
   last_config_status: ConfigStatus;
   last_config_at: string | null;
   last_config_snapshot_json: string | null;
+  /** Why the last push failed — survives refresh so a red badge explains itself. */
+  last_config_error: string | null;
   last_health_at: string | null;
   last_health_status: HealthStatus;
+  /** Why the last health check went down — survives refresh (F1). */
+  last_health_error: string | null;
   /** Monotonic licence counter — a store rejects a licence older than the one it holds. */
+  /** Custom per-till names (Till 1..N when null) — pushed on every configure. */
+  terminal_names_json: string | null;
   licence_sequence: number;
   licence_issued_at: string | null;
   licence_push_status: ConfigStatus;
@@ -81,9 +87,12 @@ const STORES_DDL = `
       CHECK (last_config_status IN ('pending', 'ok', 'failed')),
     last_config_at         TEXT,
     last_config_snapshot_json TEXT,
+    last_config_error      TEXT,
     last_health_at         TEXT,
     last_health_status     TEXT    NOT NULL DEFAULT 'unknown'
       CHECK (last_health_status IN ('up', 'down', 'unknown')),
+    last_health_error      TEXT,
+    terminal_names_json    TEXT,
     licence_push_status    TEXT    NOT NULL DEFAULT 'pending',
     licence_pushed_at      TEXT,
     company_id             INTEGER REFERENCES companies(id) ON DELETE SET NULL,
@@ -364,6 +373,9 @@ export const getRegistryDb = (): Database.Database => {
   addColumn('coolify_uuid', 'coolify_uuid TEXT');
   addColumn('volume_name', 'volume_name TEXT');
   addColumn('admin_email', 'admin_email TEXT');
+  addColumn('last_config_error', 'last_config_error TEXT');
+  addColumn('last_health_error', 'last_health_error TEXT');
+  addColumn('terminal_names_json', 'terminal_names_json TEXT');
   addColumn('desired_config_version', 'desired_config_version INTEGER NOT NULL DEFAULT 1');
   addColumn('applied_config_version', 'applied_config_version INTEGER NOT NULL DEFAULT 0');
   addColumn('latency_ms', 'latency_ms INTEGER');
@@ -610,18 +622,22 @@ export interface UpdateStoreInput {
   vertical?: StoreVertical;
   terminalCount?: number;
   baseUrl?: string;
+  /** Custom per-till names; null reverts to "Till N" defaults. */
+  terminalNames?: string[] | null;
 }
 
 /** Absent = keep. */
 export const updateStore = (id: number, input: UpdateStoreInput): StoreRecord | null => {
   const db = getRegistryDb();
-  if (!getStoreById(id)) return null;
+  const current = getStoreById(id);
+  if (!current) return null;
   db.prepare(
     `UPDATE stores SET
        name = COALESCE(?, name),
        vertical = COALESCE(?, vertical),
        terminal_count = COALESCE(?, terminal_count),
        base_url = COALESCE(?, base_url),
+       terminal_names_json = ?,
        updated_at = datetime('now')
      WHERE id = ?`,
   ).run(
@@ -629,6 +645,11 @@ export const updateStore = (id: number, input: UpdateStoreInput): StoreRecord | 
     input.vertical ?? null,
     input.terminalCount ?? null,
     input.baseUrl ?? null,
+    input.terminalNames === undefined
+      ? current.terminal_names_json
+      : input.terminalNames === null
+        ? null
+        : JSON.stringify(input.terminalNames.map((n) => n.trim())),
     id,
   );
   return getStoreById(id);
@@ -664,6 +685,8 @@ export const setStoreDeployStatus = (
 export interface ConfigResultRecord {
   status: 'ok' | 'failed';
   snapshot?: unknown;
+  /** Failure reason recorded on 'failed'; cleared on 'ok'. */
+  error?: string | null;
 }
 
 /** Records the outcome of a terminal-config push. Snapshot is only kept on success. */
@@ -687,6 +710,7 @@ export const recordConfigResult = (id: number, result: ConfigResultRecord): Stor
        last_config_status = ?,
        last_config_at = CASE WHEN ? THEN datetime('now') ELSE last_config_at END,
        last_config_snapshot_json = ?,
+       last_config_error = ?,
        applied_config_version = CASE WHEN ? THEN COALESCE(desired_config_version, 1) ELSE applied_config_version END,
        updated_at = datetime('now')
      WHERE id = ?`,
@@ -694,6 +718,7 @@ export const recordConfigResult = (id: number, result: ConfigResultRecord): Stor
     result.status,
     result.status === 'ok' ? 1 : 0,
     result.status === 'ok' ? JSON.stringify(result.snapshot ?? null) : null,
+    result.status === 'ok' ? null : (result.error ?? 'push failed').slice(0, 500),
     result.status === 'ok' ? 1 : 0,
     id,
   );
@@ -729,16 +754,48 @@ export const recordLicencePush = (id: number, status: ConfigStatus): StoreRecord
   return getStoreById(id);
 };
 
-export const recordHealthResult = (id: number, status: 'up' | 'down'): StoreRecord | null => {
+export const recordHealthResult = (
+  id: number,
+  status: 'up' | 'down',
+  error?: string | null,
+): StoreRecord | null => {
   const db = getRegistryDb();
   const store = getStoreById(id);
   if (!store) return null;
   db.prepare(
     `UPDATE stores SET
-       last_health_status = ?, last_health_at = datetime('now'), updated_at = datetime('now')
+       last_health_status = ?,
+       last_health_at = datetime('now'),
+       last_health_error = ?,
+       updated_at = datetime('now')
      WHERE id = ?`,
-  ).run(status, id);
+  ).run(status, status === 'up' ? null : (error ?? 'unreachable').slice(0, 500), id);
   return getStoreById(id);
+};
+
+/**
+ * The per-till roster this store should be pushed with: custom names when the
+ * operator set them (padded/truncated to the terminal count), "Till N"
+ * otherwise. Names live on the registry row so topology re-pushes and health
+ * rides never clobber them.
+ */
+export const terminalRoster = (store: {
+  terminal_count: number;
+  terminal_names_json: string | null;
+}): Array<{ till: number; name: string }> => {
+  let custom: string[] = [];
+  if (store.terminal_names_json) {
+    try {
+      const parsed = JSON.parse(store.terminal_names_json);
+      if (Array.isArray(parsed)) custom = parsed.filter((n): n is string => typeof n === 'string');
+    } catch {
+      // Corrupt JSON falls back to defaults.
+    }
+  }
+  return Array.from({ length: store.terminal_count }, (_, i) => ({
+    till: i + 1,
+    name: custom[i]?.trim() || `Till ${i + 1}`,
+  }));
 };
 
 // --- Plans -------------------------------------------------------------------

@@ -20,9 +20,11 @@ CREATE TABLE IF NOT EXISTS stores (
     CHECK (last_config_status IN ('pending', 'ok', 'failed')),
   last_config_at         TEXT,
   last_config_snapshot_json TEXT,
+  last_config_error      TEXT,
   last_health_at         TEXT,
   last_health_status     TEXT    NOT NULL DEFAULT 'unknown'
     CHECK (last_health_status IN ('up', 'down', 'unknown')),
+  last_health_error      TEXT,
   licence_sequence       INTEGER NOT NULL DEFAULT 0,
   licence_issued_at      TEXT,
   licence_push_status    TEXT    NOT NULL DEFAULT 'pending',
@@ -33,6 +35,7 @@ CREATE TABLE IF NOT EXISTS stores (
   coolify_uuid           TEXT,
   volume_name            TEXT,
   admin_email            TEXT,
+  terminal_names_json    TEXT,
   created_at             TEXT    NOT NULL DEFAULT (datetime('now')),
   updated_at             TEXT    NOT NULL DEFAULT (datetime('now'))
 );

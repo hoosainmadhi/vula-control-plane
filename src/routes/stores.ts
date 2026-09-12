@@ -18,6 +18,7 @@ import {
   setStoreCompany,
   recordConfigResult,
   recordHealthResult,
+  terminalRoster,
   recordLicencePush,
   setStoreStatus,
   updateStore,
@@ -77,6 +78,10 @@ export interface StoreOut {
   status: StoreRecord['status'];
   lastConfigStatus: ConfigStatus;
   lastConfigAt: string | null;
+  lastConfigError: string | null;
+  lastHealthError: string | null;
+  /** Resolved per-till names ("Till N" where unset) — for the edit modal. */
+  terminalNames: string[];
   lastHealthAt: string | null;
   lastHealthStatus: HealthStatus;
   licenceSequence: number;
@@ -143,6 +148,9 @@ const storeToOut = (store: StoreRecord): StoreOut => ({
   status: store.status,
   lastConfigStatus: store.last_config_status,
   lastConfigAt: store.last_config_at,
+  lastConfigError: store.last_config_error,
+  lastHealthError: store.last_health_error,
+  terminalNames: terminalRoster(store).map((t) => t.name),
   lastHealthAt: store.last_health_at,
   lastHealthStatus: store.last_health_status,
   licenceSequence: store.licence_sequence,
@@ -186,9 +194,9 @@ const snapshotTerminalCount = (store: StoreRecord): number => {
 
 const terminalsFor = (store: StoreRecord): TerminalPreview[] => {
   const applied = store.last_config_status === 'ok' ? snapshotTerminalCount(store) : 0;
-  return Array.from({ length: store.terminal_count }, (_, i) => ({
-    till: i + 1,
-    name: `Till ${i + 1}`,
+  return terminalRoster(store).map((t, i) => ({
+    till: t.till,
+    name: t.name,
     configured: i < applied,
   }));
 };
@@ -227,7 +235,10 @@ const attemptPush = async (store: StoreRecord): Promise<PushOutcome> => {
       snapshot: body,
     };
   } catch (err) {
-    recordConfigResult(store.id, { status: 'failed' });
+    recordConfigResult(store.id, {
+      status: 'failed',
+      error: err instanceof Error ? err.message : String(err),
+    });
     if (!(err instanceof StoreClientError))
       logger.error(`Push to store ${store.id} failed unexpectedly: ${String(err)}`);
     return {
@@ -467,12 +478,37 @@ storesRouter.put(
       vertical?: StoreVertical;
       terminalCount?: number;
       baseUrl?: string;
+      terminalNames?: string[] | null;
     } = {};
     const body = req.body as Record<string, unknown>;
     if (body['name'] !== undefined) input.name = requireString(body, 'name');
     if (body['vertical'] !== undefined) input.vertical = optionalVertical(body);
     if (body['terminalCount'] !== undefined) input.terminalCount = requireTerminalCount(body);
     if (body['baseUrl'] !== undefined) input.baseUrl = requireBaseUrl(body);
+    if (body['terminalNames'] !== undefined) {
+      if (body['terminalNames'] === null) {
+        input.terminalNames = null;
+      } else {
+        if (!Array.isArray(body['terminalNames'])) {
+          throw new ValidationError('terminalNames must be an array of strings or null');
+        }
+        const names = (body['terminalNames'] as unknown[]).map((n) => {
+          if (typeof n !== 'string') {
+            throw new ValidationError('terminalNames must be an array of strings or null');
+          }
+          const trimmed = n.trim();
+          if (trimmed.length > 60) {
+            throw new ValidationError('terminal names must be 60 characters or fewer');
+          }
+          return trimmed;
+        });
+        const count = input.terminalCount ?? store.terminal_count;
+        if (names.length > count) {
+          throw new ValidationError(`terminalNames must hold at most ${count} entries`);
+        }
+        input.terminalNames = names;
+      }
+    }
 
     // Raising the till count is new capacity: refused while the owning company
     // is suspended, exactly like a new store. Same-count pushes stay allowed so
@@ -612,7 +648,11 @@ storesRouter.post(
       };
       res.json(outcome);
     } catch (err) {
-      const updated = recordHealthResult(store.id, 'down');
+      const updated = recordHealthResult(
+        store.id,
+        'down',
+        err instanceof Error ? err.message : String(err),
+      );
       const outcome: HealthOutcome = {
         ok: false,
         healthStatus: 'down',

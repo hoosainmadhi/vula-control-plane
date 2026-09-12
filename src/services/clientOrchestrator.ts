@@ -315,12 +315,8 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
               setStoreHeadOfficeToken(s.id, headOfficeToken);
             }
 
-            // Direction 1: tell the branch where its Head Office is.
-            const count = s.terminal_count || 1;
-            const terminals = Array.from({ length: count }, (_, i) => ({
-              till: i + 1,
-              name: `Till ${i + 1}`,
-            }));
+            // Direction 1: tell the branch where its Head Office is (the push
+            // carries the store's own per-till roster, not regenerated names).
             await pushTerminals(s, {}, {
               headOffice: {
                 enabled: true,

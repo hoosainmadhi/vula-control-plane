@@ -322,6 +322,51 @@ describe('PUT /api/stores/:id — edit', () => {
 });
 
 describe('POST /api/stores/:id/push — retry', () => {
+  it('stores custom till names, pushes them on every configure, and reverts on null', async () => {
+    mockConfigureOk();
+    const created = await request(app)
+      .post('/api/stores')
+      .set(auth())
+      .send(createPayload({ terminalCount: 2 }));
+    const id = (created.body as { store: { id: number } }).store.id;
+    fetchMock.mockClear();
+
+    const edited = await request(app)
+      .put(`/api/stores/${id}`)
+      .set(auth())
+      .send({ terminalNames: ['Front counter', 'Drive-through'] });
+    expect(edited.status).toBe(200);
+    expect((edited.body as { terminalNames: string[] }).terminalNames).toEqual([
+      'Front counter',
+      'Drive-through',
+    ]);
+
+    // The next push carries the custom roster instead of regenerated "Till N".
+    await request(app).post(`/api/stores/${id}/push`).set(auth());
+    const configureBody = JSON.parse(
+      (fetchMock.mock.calls.find((c) => String(c[0]).endsWith('/api/internal/configure'))?.[1] as {
+        body: string;
+      }).body,
+    ) as { terminals: Array<{ till: number; name: string }> };
+    expect(configureBody.terminals).toEqual([
+      { till: 1, name: 'Front counter' },
+      { till: 2, name: 'Drive-through' },
+    ]);
+
+    // Detail preview shows the custom names too.
+    const detail = await request(app).get(`/api/stores/${id}`).set(auth());
+    const terminals = (detail.body as { terminals: Array<{ till: number; name: string }> })
+      .terminals;
+    expect(terminals.map((t) => t.name)).toEqual(['Front counter', 'Drive-through']);
+
+    // null reverts to the defaults.
+    await request(app).put(`/api/stores/${id}`).set(auth()).send({ terminalNames: null });
+    const reverted = await request(app).get(`/api/stores/${id}`).set(auth());
+    expect(
+      (reverted.body as { terminalNames: string[] }).terminalNames,
+    ).toEqual(['Till 1', 'Till 2']);
+  });
+
   it('marks failed then ok across retries', async () => {
     mockConfigureOk();
     const created = await request(app).post('/api/stores').set(auth()).send(createPayload());
@@ -334,7 +379,13 @@ describe('POST /api/stores/:id/push — retry', () => {
     expect(failed.body).toMatchObject({ ok: false, lastConfigStatus: 'failed' });
 
     const afterFail = await request(app).get(`/api/stores/${id}`).set(auth());
-    expect((afterFail.body as { lastConfigStatus: string }).lastConfigStatus).toBe('failed');
+    const afterFailBody = afterFail.body as {
+      lastConfigStatus: string;
+      lastConfigError: string | null;
+    };
+    expect(afterFailBody.lastConfigStatus).toBe('failed');
+    // The reason survives refresh so a red badge explains itself (F1).
+    expect(afterFailBody.lastConfigError).toMatch(/fetch failed/i);
 
     mockConfigureOk();
     const retried = await request(app).post(`/api/stores/${id}/push`).set(auth());
@@ -344,6 +395,9 @@ describe('POST /api/stores/:id/push — retry', () => {
       lastConfigStatus: 'ok',
       pushedAt: expect.any(String),
     });
+    // Recovery clears the recorded reason.
+    const recovered = await request(app).get(`/api/stores/${id}`).set(auth());
+    expect((recovered.body as { lastConfigError: string | null }).lastConfigError).toBeNull();
   });
 });
 
@@ -396,6 +450,10 @@ describe('POST /api/stores/:id/health', () => {
     const res = await request(app).post(`/api/stores/${id}/health`).set(auth());
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ok: false, healthStatus: 'down', error: expect.any(String) });
+    const detail = await request(app).get(`/api/stores/${id}`).set(auth());
+    expect((detail.body as { lastHealthError: string | null }).lastHealthError).toMatch(
+      /fetch failed/i,
+    );
   });
 });
 

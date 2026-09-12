@@ -124,6 +124,18 @@ export default function PlansPage() {
     }
   };
 
+  const handleToggleActive = async (plan: Plan): Promise<void> => {
+    try {
+      await api(`/plans/${plan.id}`, {
+        method: 'PUT',
+        body: { isActive: !plan.isActive },
+      });
+      await load();
+    } catch (err) {
+      alert(err instanceof ApiError ? err.message : 'Failed to update plan');
+    }
+  };
+
   const handleDeletePlan = async (plan: Plan): Promise<void> => {
     if (!confirm(`Delete plan "${plan.name}" (${plan.code})?`)) return;
     try {
@@ -178,7 +190,21 @@ export default function PlansPage() {
             {plans.map((plan) => (
               <tr key={plan.id} className="align-top hover:bg-slate-50">
                 <td className="px-4 py-3">
-                  <div className="font-bold text-slate-900">{plan.name}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-900">{plan.name}</span>
+                    {plan.isActive ? (
+                      <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-700">
+                        Active
+                      </span>
+                    ) : (
+                      <span
+                        className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-500"
+                        title="Archived — existing companies stay on it, but it is not offered to new clients"
+                      >
+                        Archived
+                      </span>
+                    )}
+                  </div>
                   <div className="font-mono text-xs text-slate-400">{plan.code}</div>
                 </td>
                 <td className="px-4 py-3 text-right font-mono tabular-nums">{plan.maxStores}</td>
@@ -218,6 +244,17 @@ export default function PlansPage() {
                     <Pencil className="h-3.5 w-3.5" /> Edit
                   </button>
                   <button
+                    onClick={() => handleToggleActive(plan)}
+                    title={
+                      plan.isActive
+                        ? 'Archive: not offered to new clients; existing companies keep it'
+                        : 'Re-activate: offered to new clients again'
+                    }
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 px-2.5 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-50 cursor-pointer"
+                  >
+                    {plan.isActive ? 'Deactivate' : 'Re-activate'}
+                  </button>
+                  <button
                     onClick={() => handleDeletePlan(plan)}
                     className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-2.5 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50 cursor-pointer"
                   >
@@ -246,10 +283,15 @@ export default function PlansPage() {
                 value={formCode}
                 onChange={(e) => setFormCode(e.target.value.toLowerCase())}
                 placeholder="retail-plus"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono focus:border-brand-500 focus:outline-none"
+                readOnly={Boolean(editing)}
+                className={`w-full rounded-lg border border-slate-300 px-3 py-2 font-mono focus:border-brand-500 focus:outline-none ${
+                  editing ? 'bg-slate-100 text-slate-500' : ''
+                }`}
               />
               <p className="mt-1 text-xs text-slate-400">
-                Lowercase letters, digits and dashes. Unique identifier.
+                {editing
+                  ? 'The code is immutable after creation — licences and integrations depend on it.'
+                  : 'Lowercase letters, digits and dashes. Unique identifier; immutable once created.'}
               </p>
             </div>
             <div>

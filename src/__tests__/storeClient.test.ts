@@ -13,6 +13,7 @@ const store = {
   control_plane_token: 'tok-123',
   terminal_count: 2,
   vertical: 'general',
+  terminal_names_json: null,
 } as const;
 
 interface FetchInit {

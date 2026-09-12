@@ -46,7 +46,7 @@ export async function runHealthSweep(): Promise<HealthSweepSummary> {
         .run(latencyMs, store.id);
       summary.upCount++;
     } catch (err) {
-      recordHealthResult(store.id, 'down');
+      recordHealthResult(store.id, 'down', err instanceof Error ? err.message : String(err));
       getRegistryDb()
         .prepare('UPDATE stores SET latency_ms = NULL WHERE id = ?')
         .run(store.id);

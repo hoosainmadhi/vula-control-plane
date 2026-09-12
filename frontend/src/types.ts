@@ -98,6 +98,9 @@ export interface Store {
   id: number;
   slug: string;
   name: string;
+  terminalNames: string[];
+  lastConfigError?: string | null;
+  lastHealthError?: string | null;
   vertical: StoreVertical;
   terminalCount: number;
   baseUrl: string;
@@ -176,6 +179,8 @@ export interface StoreFormValues {
   name: string;
   slug: string;
   vertical: StoreVertical;
+  /** Per-till names; '' reverts that till to its "Till N" default. */
+  tillNames?: string[];
   baseUrl: string;
   terminalCount: string;
   controlPlaneToken: string;

@@ -106,20 +106,25 @@ const VERTICAL_OPTIONS: Array<{ value: StoreVertical; label: string }> = [
  */
 function TerminalRoster({ store }: { store: Store }) {
   const configured = store.lastConfigStatus === 'ok';
+  const names = store.terminalNames ?? [];
   const tills = Array.from({ length: store.terminalCount }, (_, i) => i + 1);
   return (
     <div className="flex flex-wrap gap-1">
-      {tills.map((till) => (
-        <span
-          key={till}
-          title={`Till ${till} — ${configured ? 'configured' : 'pending'}`}
-          className={`flex h-7 w-9 items-center justify-center rounded-md text-[11px] font-bold tabular-nums ${
-            configured ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
-          }`}
-        >
-          {till}
-        </span>
-      ))}
+      {tills.map((till) => {
+        const name = names[till - 1]?.trim();
+        const custom = Boolean(name) && name !== `Till ${till}`;
+        return (
+          <span
+            key={till}
+            title={`Till ${till}${custom ? ` — “${name}”` : ''} — ${configured ? 'configured' : 'pending'}`}
+            className={`flex h-7 items-center justify-center rounded-md px-1.5 text-[11px] font-bold tabular-nums ${
+              configured ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
+            } ${custom ? 'w-auto min-w-9' : 'w-9'}`}
+          >
+            {custom ? name : till}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -205,6 +210,7 @@ function StoreFormModal({ modal, saving, error, companies, onClose, onSubmit }: 
           vertical: editing.vertical,
           baseUrl: editing.baseUrl,
           terminalCount: String(editing.terminalCount),
+          tillNames: editing.terminalNames ?? [],
           controlPlaneToken: '',
           companyId: editing.companyId === null ? '' : String(editing.companyId),
         }
@@ -308,6 +314,34 @@ function StoreFormModal({ modal, saving, error, companies, onClose, onSubmit }: 
             className={inputCls}
           />
         </div>
+        {editing && (
+          <div>
+            <label className={labelCls}>
+              Till names <span className="font-normal text-slate-400">(optional — blank keeps “Till N”)</span>
+            </label>
+            <div className="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {Array.from({ length: Number(form.terminalCount) || 0 }, (_, i) => (
+                <input
+                  key={i}
+                  type="text"
+                  maxLength={60}
+                  placeholder={`Till ${i + 1}`}
+                  value={form.tillNames?.[i] ?? ''}
+                  onChange={(e) => {
+                    const next = [...(form.tillNames ?? [])];
+                    while (next.length < (Number(form.terminalCount) || 0)) next.push('');
+                    next[i] = e.target.value;
+                    setForm({ ...form, tillNames: next });
+                  }}
+                  className="w-full rounded-lg border border-slate-300 p-2 text-xs"
+                />
+              ))}
+            </div>
+            <p className="mt-1 text-[11px] text-slate-400">
+              Custom names ride on every config push and show on the roster.
+            </p>
+          </div>
+        )}
         {!editing && (
           <div className="space-y-3 rounded-lg border border-teal-200 bg-teal-50/50 p-3">
             <label className="flex items-center gap-2.5 text-xs font-bold text-teal-950 cursor-pointer">
@@ -484,7 +518,7 @@ export default function StoresPage() {
     setSaving(true);
     setFormError(null);
     try {
-      const body = {
+      const body: Record<string, unknown> = {
         name: values.name.trim(),
         vertical: values.vertical,
         baseUrl: values.baseUrl.trim(),
@@ -492,6 +526,7 @@ export default function StoresPage() {
         companyId: values.companyId === '' ? null : Number(values.companyId),
       };
       if (modal?.mode === 'edit') {
+        if (values.tillNames) body.terminalNames = values.tillNames;
         await api<Store>(`/stores/${modal.store.id}`, { method: 'PUT', body });
         notify('ok', `${values.name.trim()} updated — changes apply on the next push`);
       } else {
@@ -843,6 +878,14 @@ export default function StoresPage() {
                           ? 'Never checked'
                           : fmtTime(store.lastHealthAt)}
                       </div>
+                      {store.lastHealthStatus === 'down' && store.lastHealthError && (
+                        <div
+                          className="max-w-[16rem] truncate text-[11px] text-rose-500"
+                          title={store.lastHealthError}
+                        >
+                          {store.lastHealthError}
+                        </div>
+                      )}
                     </div>
 
                     <div>
@@ -859,6 +902,14 @@ export default function StoresPage() {
                       <div className="mt-0.5 text-[11px] text-slate-400">
                         {fmtTime(store.lastConfigAt)}
                       </div>
+                      {store.lastConfigStatus === 'failed' && store.lastConfigError && (
+                        <div
+                          className="max-w-[16rem] truncate text-[11px] text-rose-500"
+                          title={store.lastConfigError}
+                        >
+                          {store.lastConfigError}
+                        </div>
+                      )}
                     </div>
 
                     <div>

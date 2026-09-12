@@ -99,8 +99,9 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       (app/schema/config version, heartbeat, per-terminal last-seen, sync events)
       before Version / Sync / terminal-online / Diagnostics can show real values.
       Do this **before** designing the store card, or the card gets designed twice.
-- [ ] **Plans: deactivate in the UI** (`is_active` exists, no toggle) and an
-      **audit trail** (§38) — every privileged action is currently unattributed.
+- [x] **Plans: deactivate in the UI** (2026-09-12 — Deactivate/Re-activate
+      action + Active/Archived pills; code field read-only in edit mode) and
+      the **audit trail** (shipped 2026-09-11, §38).
 
 ## Phases
 
@@ -223,21 +224,22 @@ green, docs updated and one commit. Settle the uncommitted working tree
 before F1 starts. Fleet verified from the registry (2026-09-10: 8 stores,
 health up, config ok.
 
-- [ ] **F1 CP ops hardening** (this repo)
-  - Automated health sweep (env-gated interval, default 10 min): ping
-    every active store, update `last_health_status`/`_at`.
-  - Persist last errors: `last_config_error`/`last_health_error`
-    columns (ensureColumns) recorded by storeClient; badges and the
-    detail view show the message so failures survive refresh.
-  - `store_audit` table (house spec, deferred from v1): create/edit/
-    push/health/reset/pause/resume rows with the acting office admin;
-    `GET /api/stores/:id/audit` + a detail UI panel.
-  - Store delete/teardown: pause-first policy, confirm by slug, hard
-    delete + token revoked; blocked while status is active.
-  - Custom terminal names per till (configure payload already carries
-    a `name` per terminal — surface it in the edit modal).
-  - Fleet header strip on the dashboard: total stores, up/down, config
-    drift count.
+- [x] **F1 CP ops hardening** (this repo — complete 2026-09-12; the sweep,
+      audit table and teardown had already shipped with the consolidated-plan
+      and licensing work, see progress 2026-09-11 / 2026-09-10)
+  - Automated health sweep — shipped 2026-09-11 (`services/healthSweep.ts`,
+    `POST /api/stores/health-sweep`, latency recorded).
+  - Persist last errors — **shipped 2026-09-12**:
+    `last_config_error`/`last_health_error` recorded by every outcome site
+    (push, health, sweep, provisioning), cleared on recovery; shown under the
+    Health/Config badges on the fleet card so a red state explains itself.
+  - Audit table — shipped 2026-09-11 (`audit_logs`, §27).
+  - Store delete/teardown — shipped 2026-09-10 (pause-first, §21).
+  - Custom terminal names per till — **shipped 2026-09-12**:
+    `terminal_names_json` on the registry row, `terminalRoster()` feeds every
+    configure push (topology wiring included, so re-pushes never clobber
+    names), edit modal gains per-till inputs, roster tiles show custom names.
+  - Fleet header strip — shipped 2026-09-10 (SummaryTiles + search + filter).
 - [ ] **F2 Coolify auto-provisioning** (this repo; prerequisite: the
       vula-app.co.za DNS wildcard live + a Coolify instance)
   - Env-gated Coolify API client (`COOLIFY_API_URL`/`COOLIFY_API_TOKEN`):
