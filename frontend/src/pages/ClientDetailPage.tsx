@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
-import type { ClientDetailResponse, Plan } from '../types';
+import { StoreCard } from '../components/StoreCard';
+import { AdminPasswordModal, DiagnosticsModal, StoreFormModal, SupportModal } from '../components/storeModals';
+import { useStoreActions } from '../hooks/useStoreActions';
+import type { ClientDetailResponse, Company, Plan, Store, StoreFormValues } from '../types';
+import type { Notice } from '../lib/storeVocab';
 
 export default function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -28,13 +32,21 @@ export default function ClientDetailPage() {
   const [upgradePlanId, setUpgradePlanId] = useState<string>('');
   const [upgrading, setUpgrading] = useState(false);
 
-  // Edit Store modal state
-  const [editingStore, setEditingStore] = useState<any | null>(null);
-  const [editStoreName, setEditStoreName] = useState('');
-  const [editStoreUrl, setEditStoreUrl] = useState('');
-  const [editStoreTills, setEditStoreTills] = useState('1');
-  const [editStoreVertical, setEditStoreVertical] = useState('general');
+  // Shared store-card action state (Configure/Diagnostics/Support/More)
+  const [notice, setNotice] = useState<Notice>(null);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [configureStore, setConfigureStore] = useState<Store | null>(null);
   const [savingStore, setSavingStore] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [diagnosticsStore, setDiagnosticsStore] = useState<Store | null>(null);
+  const [supportStore, setSupportStore] = useState<Store | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [moreMenuId, setMoreMenuId] = useState<number | null>(null);
+  const [adminPassword, setAdminPassword] = useState<{
+    storeName: string;
+    tempPassword: string;
+    note: string;
+  } | null>(null);
 
   // Add Store modal state
   const [addStoreOpen, setAddStoreOpen] = useState(false);
@@ -51,12 +63,14 @@ export default function ClientDetailPage() {
     if (!id) return;
     setLoading(true);
     try {
-      const [res, pList] = await Promise.all([
+      const [res, pList, companiesList] = await Promise.all([
         api<ClientDetailResponse>(`/clients/${id}`),
         api<Plan[]>('/plans'),
+        api<Company[]>('/companies'),
       ]);
       setData(res);
       setPlans(pList);
+      setCompanies(companiesList);
 
       const client = res.client;
       setUpgradeHoName(`${client.name} Head Office`);
@@ -153,33 +167,53 @@ export default function ClientDetailPage() {
     }
   };
 
-  const handleOpenEditStore = (s: any) => {
-    setEditingStore(s);
-    setEditStoreName(s.name);
-    setEditStoreUrl(s.baseUrl);
-    setEditStoreTills(String(s.terminalCount || 1));
-    setEditStoreVertical(s.vertical || 'general');
+  const notify = (kind: 'ok' | 'error', text: string): void => setNotice({ kind, text });
+
+  const actions = useStoreActions({
+    notify,
+    reload: async () => {
+      await loadData();
+    },
+    onAdminPassword: setAdminPassword,
+  });
+  const {
+    busyId,
+    pushNow,
+    healthCheck,
+    togglePause,
+    removeStore,
+    startSupport,
+    supportIssuePassword,
+    supportBusy,
+    supportError,
+    setSupportError,
+  } = actions;
+
+  const runDiagnostics = (store: Store): void => {
+    setDiagnosticsStore(store);
+    void healthCheck(store);
   };
 
-  const handleSaveStore = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingStore) return;
+  const handleSaveStore = async (values: StoreFormValues): Promise<void> => {
+    if (!configureStore) return;
     setSavingStore(true);
-    setError(null);
+    setFormError(null);
     try {
-      await api(`/stores/${editingStore.id}`, {
-        method: 'PUT',
-        body: {
-          name: editStoreName.trim(),
-          baseUrl: editStoreUrl.trim(),
-          terminalCount: Number(editStoreTills) || 1,
-          vertical: editStoreVertical,
-        },
-      });
-      setEditingStore(null);
-      loadData();
+      const body: Record<string, unknown> = {
+        name: values.name.trim(),
+        vertical: values.vertical,
+        baseUrl: values.baseUrl.trim(),
+        terminalCount: Number(values.terminalCount),
+        environment: values.environment,
+        companyId: values.companyId === '' ? null : Number(values.companyId),
+      };
+      if (values.tillNames) body.terminalNames = values.tillNames;
+      await api(`/stores/${configureStore.id}`, { method: 'PUT', body });
+      notify('ok', `${values.name.trim()} updated — changes apply on the next push`);
+      setConfigureStore(null);
+      await loadData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update store');
+      setFormError(err instanceof Error ? err.message : 'Failed to update store');
     } finally {
       setSavingStore(false);
     }
@@ -376,49 +410,39 @@ export default function ClientDetailPage() {
               + Add Store to Fleet
             </button>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-500 uppercase tracking-wide text-[11px] font-bold border-b border-slate-200">
-                <tr>
-                  <th className="px-5 py-3">Store Name</th>
-                  <th className="px-5 py-3">Slug</th>
-                  <th className="px-5 py-3">Base URL</th>
-                  <th className="px-5 py-3 text-center">Tills</th>
-                  <th className="px-5 py-3">Health</th>
-                  <th className="px-5 py-3">Deploy Status</th>
-                  <th className="px-5 py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {stores.map((s) => (
-                  <tr key={s.id}>
-                    <td className="px-5 py-3.5 font-bold text-slate-900">{s.name}</td>
-                    <td className="px-5 py-3.5 font-mono text-slate-500">{s.slug}</td>
-                    <td className="px-5 py-3.5 font-mono text-slate-600">
-                      <a href={s.baseUrl} target="_blank" rel="noreferrer" className="text-brand-600 hover:underline">
-                        {s.baseUrl}
-                      </a>
-                    </td>
-                    <td className="px-5 py-3.5 text-center font-bold">{s.terminalCount}</td>
-                    <td className="px-5 py-3.5">
-                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${s.health === 'up' ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
-                        {s.health}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3.5 text-slate-600 capitalize">{s.deployStatus || 'Active'}</td>
-                    <td className="px-5 py-3.5 text-right space-x-1.5">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEditStore(s)}
-                        className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700 hover:bg-slate-200 cursor-pointer"
-                      >
-                        Edit
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="space-y-3 p-4">
+            {stores.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-300 p-6 text-center text-xs text-slate-400">
+                No stores on this client yet — add one above.
+              </div>
+            ) : (
+              stores.map((store) => (
+                <StoreCard
+                  key={store.id}
+                  store={store}
+                  busy={busyId === store.id}
+                  confirmRemove={confirmDeleteId === store.id}
+                  moreOpen={moreMenuId === store.id}
+                  nameHref={`/stores/${store.id}`}
+                  onConfigure={() => {
+                    setFormError(null);
+                    setConfigureStore(store);
+                  }}
+                  onPush={() => void pushNow(store)}
+                  onDiagnostics={() => runDiagnostics(store)}
+                  onSupport={() => {
+                    setSupportError(null);
+                    setSupportStore(store);
+                  }}
+                  onPauseResume={() => void togglePause(store)}
+                  onRequestRemove={() => setConfirmDeleteId(store.id)}
+                  onConfirmRemove={() => void removeStore(store, () => setConfirmDeleteId(null))}
+                  onCancelRemove={() => setConfirmDeleteId(null)}
+                  onToggleMore={() => setMoreMenuId(moreMenuId === store.id ? null : store.id)}
+                  onCloseMore={() => setMoreMenuId(null)}
+                />
+              ))
+            )}
           </div>
         </div>
       )}
@@ -426,7 +450,7 @@ export default function ClientDetailPage() {
       {/* 3. Head Office */}
       {activeTab === 'head_office' && (
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs space-y-4">
-          <h4 className="text-sm font-bold text-slate-900">Merchant Head Office Panel</h4>
+          <h4 className="text-sm font-bold text-slate-900">Client Head Office Panel</h4>
           {headOffice ? (
             <div className="space-y-3 text-xs">
               <div className="flex justify-between py-2 border-b border-slate-100">
@@ -730,82 +754,6 @@ export default function ClientDetailPage() {
         </div>
       )}
 
-      {/* Edit Store Modal */}
-      {editingStore && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-2xs">
-          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-slate-200">
-            <h3 className="text-lg font-bold text-slate-900">Edit Store Deployment</h3>
-            <p className="mt-1 text-xs text-slate-500">Update configuration for {editingStore.slug}</p>
-            <form onSubmit={handleSaveStore} className="mt-4 space-y-3.5">
-              <div>
-                <label className="block text-xs font-bold text-slate-700">Store Name</label>
-                <input
-                  type="text"
-                  required
-                  value={editStoreName}
-                  onChange={(e) => setEditStoreName(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-700">Store Base URL</label>
-                <input
-                  type="text"
-                  required
-                  value={editStoreUrl}
-                  onChange={(e) => setEditStoreUrl(e.target.value)}
-                  className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm font-mono text-xs"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700">Tills Count (1–99)</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="99"
-                    required
-                    value={editStoreTills}
-                    onChange={(e) => setEditStoreTills(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm text-center font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700">POS Profile</label>
-                  <select
-                    value={editStoreVertical}
-                    onChange={(e) => setEditStoreVertical(e.target.value)}
-                    className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm"
-                  >
-                    <option value="general">General Retail</option>
-                    <option value="clothing">Clothing & Apparel</option>
-                    <option value="spares">Auto Spares</option>
-                    <option value="hardware">Hardware & Building</option>
-                    <option value="pharmacy">Pharmacy & Wellness</option>
-                    <option value="restaurant">Restaurant & Quick Service</option>
-                  </select>
-                </div>
-              </div>
-              <div className="flex justify-end gap-2 pt-3">
-                <button
-                  type="button"
-                  onClick={() => setEditingStore(null)}
-                  className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-600"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={savingStore}
-                  className="rounded-lg bg-brand-600 px-5 py-2 text-xs font-bold text-white shadow-xs hover:bg-brand-700 disabled:opacity-50"
-                >
-                  {savingStore ? 'Saving…' : 'Save Changes'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* Add Store to Fleet Modal */}
       {addStoreOpen && (
@@ -882,6 +830,68 @@ export default function ClientDetailPage() {
             </form>
           </div>
         </div>
+      )}
+      {notice && (
+        <div
+          className={`flex items-center justify-between rounded-lg px-4 py-2.5 text-sm ${
+            notice.kind === 'ok'
+              ? 'border border-green-200 bg-green-50 text-green-800'
+              : 'border border-red-200 bg-red-50 text-red-700'
+          }`}
+        >
+          <span>{notice.text}</span>
+          <button onClick={() => setNotice(null)} className="text-xs text-slate-400 hover:text-slate-600" aria-label="Dismiss">
+            ✕
+          </button>
+        </div>
+      )}
+
+      {configureStore && (
+        <StoreFormModal
+          modal={{ mode: 'edit', store: configureStore }}
+          saving={savingStore}
+          error={formError}
+          companies={companies}
+          onClose={() => setConfigureStore(null)}
+          onSubmit={(values) => void handleSaveStore(values)}
+        />
+      )}
+
+      {diagnosticsStore && (
+        <DiagnosticsModal
+          store={stores.find((x) => x.id === diagnosticsStore.id) ?? diagnosticsStore}
+          running={busyId === diagnosticsStore.id}
+          onClose={() => setDiagnosticsStore(null)}
+          onRerun={() => runDiagnostics(diagnosticsStore)}
+        />
+      )}
+
+      {supportStore && (
+        <SupportModal
+          store={supportStore}
+          busy={supportBusy}
+          error={supportError}
+          onClose={() => setSupportStore(null)}
+          onStart={(reason) => {
+            void startSupport(supportStore, reason).then((ok) => {
+              if (ok) setSupportStore(null);
+            });
+          }}
+          onIssuePassword={() => {
+            void supportIssuePassword(supportStore).then((ok) => {
+              if (ok) setSupportStore(null);
+            });
+          }}
+        />
+      )}
+
+      {adminPassword && (
+        <AdminPasswordModal
+          storeName={adminPassword.storeName}
+          tempPassword={adminPassword.tempPassword}
+          note={adminPassword.note}
+          onClose={() => setAdminPassword(null)}
+        />
       )}
     </div>
   );

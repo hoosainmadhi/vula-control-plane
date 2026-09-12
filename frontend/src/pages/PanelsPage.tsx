@@ -8,7 +8,7 @@ import StatusBadge, { CONFIG_COLORS, HealthDot, STORE_COLORS } from '../componen
 import type { Company, Panel, PanelPushOutcome, Plan } from '../types';
 
 /**
- * Company Control Panels — one per merchant.
+ * Company Control Panels — one per client.
  *
  * The control plane deploys, monitors and licences these, and is forbidden to
  * read inside them. So this screen shows operational metadata only: where it is,
@@ -38,10 +38,10 @@ export default function PanelsPage() {
   const [newName, setNewName] = useState('');
   const [newSlug, setNewSlug] = useState('');
   const [newCompanyId, setNewCompanyId] = useState('');
-  const [newMerchantMode, setNewMerchantMode] = useState(false);
-  const [newMerchantName, setNewMerchantName] = useState('');
-  const [newMerchantSlug, setNewMerchantSlug] = useState('');
-  const [newMerchantPlanId, setNewMerchantPlanId] = useState('');
+  const [newClientMode, setNewClientMode] = useState(false);
+  const [newClientName, setNewClientName] = useState('');
+  const [newClientSlug, setNewClientSlug] = useState('');
+  const [newClientPlanId, setNewClientPlanId] = useState('');
   const [plans, setPlans] = useState<Plan[]>([]);
   const [newBaseUrl, setNewBaseUrl] = useState('https://');
   const [creating, setCreating] = useState(false);
@@ -112,12 +112,12 @@ export default function PanelsPage() {
     setNewSlug('');
     setNewCompanyId(companies.length > 0 ? String(companies[0]!.id) : '');
     setNewBaseUrl('');
-    // With no merchants yet, go straight to creating one — otherwise the operator
+    // With no clients yet, go straight to creating one — otherwise the operator
     // is stuck looking at an empty dropdown.
-    setNewMerchantMode(companies.length === 0);
-    setNewMerchantName('');
-    setNewMerchantSlug('');
-    setNewMerchantPlanId(plans.length > 0 ? String(plans[0]!.id) : '');
+    setNewClientMode(companies.length === 0);
+    setNewClientName('');
+    setNewClientSlug('');
+    setNewClientPlanId(plans.length > 0 ? String(plans[0]!.id) : '');
     setCreateError(null);
     setCreateOpen(true);
   };
@@ -127,18 +127,18 @@ export default function PanelsPage() {
     setCreateError(null);
     try {
       // Onboarding a brand-new client must not require leaving this screen:
-      // create the merchant, then hang the Head Office off it.
+      // create the client, then hang the Head Office off it.
       let companyId = Number(newCompanyId);
-      if (newMerchantMode) {
-        const merchant = await api<Company>('/companies', {
+      if (newClientMode) {
+        const client = await api<Company>('/companies', {
           method: 'POST',
           body: {
-            name: newMerchantName.trim(),
-            slug: newMerchantSlug.trim().toLowerCase(),
-            planId: newMerchantPlanId === '' ? null : Number(newMerchantPlanId),
+            name: newClientName.trim(),
+            slug: newClientSlug.trim().toLowerCase(),
+            planId: newClientPlanId === '' ? null : Number(newClientPlanId),
           },
         });
-        companyId = merchant.id;
+        companyId = client.id;
       }
       await api('/panels', {
         method: 'POST',
@@ -151,8 +151,8 @@ export default function PanelsPage() {
       });
       setCreateOpen(false);
       setNotice(
-        newMerchantMode
-          ? `${newMerchantName.trim()} created and ${newName.trim()} registered and licensed`
+        newClientMode
+          ? `${newClientName.trim()} created and ${newName.trim()} registered and licensed`
           : `${newName.trim()} registered and licensed`,
       );
       await load();
@@ -235,7 +235,7 @@ export default function PanelsPage() {
 
       <div className="flex items-center justify-between gap-3">
         <p className="text-sm text-slate-500">
-          A Head Office is the merchant's own multi-store application. You deploy, monitor and licence it;
+          A Head Office is the client's own multi-store application. You deploy, monitor and licence it;
           the customer reaches it at its own URL with their own login.
         </p>
         <button
@@ -257,7 +257,7 @@ export default function PanelsPage() {
 
       {panels.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
-          No Company Control Panels registered yet. A panel is created for a merchant and reached at its own
+          No Company Control Panels registered yet. A panel is created for a client and reached at its own
           URL — the control plane monitors it, it does not host it.
         </div>
       ) : (
@@ -397,7 +397,7 @@ export default function PanelsPage() {
       )}
 
       <p className="text-xs text-slate-400">
-        Each panel is one merchant's multi-store application. The control plane deploys, monitors and licences
+        Each panel is one client's multi-store application. The control plane deploys, monitors and licences
         it, and never reads its business content.
       </p>
 
@@ -407,27 +407,27 @@ export default function PanelsPage() {
             {createError && <ErrorBox message={createError} />}
             <div>
               <div className="mb-1 flex items-center justify-between">
-                <label className="block text-sm font-semibold text-slate-700">Merchant</label>
+                <label className="block text-sm font-semibold text-slate-700">Client</label>
                 {companies.length > 0 && (
                   <button
                     type="button"
-                    onClick={() => setNewMerchantMode(!newMerchantMode)}
+                    onClick={() => setNewClientMode(!newClientMode)}
                     className="text-xs font-bold text-brand-700 hover:underline"
                   >
-                    {newMerchantMode ? 'Choose existing' : '+ New merchant'}
+                    {newClientMode ? 'Choose existing' : '+ New client'}
                   </button>
                 )}
               </div>
 
-              {newMerchantMode ? (
+              {newClientMode ? (
                 <div className="space-y-3 rounded-lg border border-brand-100 bg-brand-50/40 p-3">
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-600">
-                      New merchant name
+                      New client name
                     </label>
                     <input
-                      value={newMerchantName}
-                      onChange={(e) => setNewMerchantName(e.target.value)}
+                      value={newClientName}
+                      onChange={(e) => setNewClientName(e.target.value)}
                       placeholder="Street Gym"
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none"
                     />
@@ -435,8 +435,8 @@ export default function PanelsPage() {
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-600">Slug</label>
                     <input
-                      value={newMerchantSlug}
-                      onChange={(e) => setNewMerchantSlug(e.target.value.toLowerCase())}
+                      value={newClientSlug}
+                      onChange={(e) => setNewClientSlug(e.target.value.toLowerCase())}
                       placeholder="street-gym"
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-brand-500 focus:outline-none"
                     />
@@ -444,8 +444,8 @@ export default function PanelsPage() {
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-600">Plan</label>
                     <select
-                      value={newMerchantPlanId}
-                      onChange={(e) => setNewMerchantPlanId(e.target.value)}
+                      value={newClientPlanId}
+                      onChange={(e) => setNewClientPlanId(e.target.value)}
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none"
                     >
                       <option value="">No plan</option>
@@ -472,8 +472,8 @@ export default function PanelsPage() {
               )}
 
               <p className="mt-1 text-xs text-slate-400">
-                A Head Office belongs to one merchant, and its licence comes from that merchant's plan.
-                Creating the merchant here does not require leaving this screen.
+                A Head Office belongs to one client, and its licence comes from that client's plan.
+                Creating the client here does not require leaving this screen.
               </p>
             </div>
             <div>
@@ -520,8 +520,8 @@ export default function PanelsPage() {
                   creating ||
                   !newName.trim() ||
                   !newSlug.trim() ||
-                  (newMerchantMode
-                    ? !newMerchantName.trim() || !newMerchantSlug.trim()
+                  (newClientMode
+                    ? !newClientName.trim() || !newClientSlug.trim()
                     : !newCompanyId)
                 }
                 className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-brand-700 disabled:opacity-50"

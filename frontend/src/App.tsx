@@ -6,6 +6,7 @@ import LoginPage from './pages/LoginPage';
 import ClientsPage from './pages/ClientsPage';
 import ClientDetailPage from './pages/ClientDetailPage';
 import StoresPage from './pages/StoresPage';
+import StoreDetailPage from './pages/StoreDetailPage';
 import PanelsPage from './pages/PanelsPage';
 import CompaniesPage from './pages/CompaniesPage';
 import PlansPage from './pages/PlansPage';
@@ -36,6 +37,16 @@ export default function App() {
           <RequireOffice>
             <Layout title="Client Details">
               <ClientDetailPage />
+            </Layout>
+          </RequireOffice>
+        }
+      />
+      <Route
+        path="/stores/:id"
+        element={
+          <RequireOffice>
+            <Layout title="Store">
+              <StoreDetailPage />
             </Layout>
           </RequireOffice>
         }

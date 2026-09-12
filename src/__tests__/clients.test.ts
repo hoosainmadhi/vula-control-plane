@@ -85,6 +85,11 @@ describe('Client-Centric Management & Orchestration (§1, §5, §6, §7)', () =>
     expect(detail.body.client.name).toBe('Gardens Pharmacy');
     expect(detail.body.stores.length).toBe(1);
     expect(detail.body.stores[0].slug).toBe('gardens-pharmacy-main');
+    // Full SPOG shape embedded (same as GET /api/stores) so the client's
+    // Stores tab renders the shared store cards.
+    expect(detail.body.stores[0].healthState).toBeDefined();
+    expect(detail.body.stores[0].configState).toBeDefined();
+    expect(detail.body.stores[0].terminalNames).toBeDefined();
     expect(detail.body.headOffice).toBeNull();
   });
 
@@ -272,5 +277,30 @@ describe('Client-Centric Management & Orchestration (§1, §5, §6, §7)', () =>
     // Verify detail reflects the updated name
     const detail = await request(app).get(`/api/clients/${clientId}`).set(auth()).expect(200);
     expect(detail.body.client.name).toBe('Kloof Auto Spares');
+  });
+});
+
+describe('per-store audit trail', () => {
+  it('returns audited actions for a single store, newest first', async () => {
+    const createRes = await request(app)
+      .post('/api/stores')
+      .set(auth())
+      .send({
+        name: 'Audit Trail Store',
+        slug: 'audit-trail',
+        terminalCount: 1,
+        baseUrl: 'http://localhost:3245',
+      });
+    expect(createRes.status).toBe(201);
+    const storeId = (createRes.body as { store: { id: number } }).store.id;
+
+    // A privileged action that records an audit entry.
+    await request(app).post(`/api/stores/${storeId}/support`).set(auth()).send({ reason: 'test session' });
+
+    const res = await request(app).get(`/api/stores/${storeId}/audit`).set(auth()).expect(200);
+    const logs = res.body.logs as Array<{ target_type: string; target_id: number; action: string }>;
+    expect(logs.length).toBeGreaterThanOrEqual(1);
+    expect(logs.every((l) => l.target_type === 'store' && l.target_id === storeId)).toBe(true);
+    expect(logs.some((l) => l.action === 'support_session_started')).toBe(true);
   });
 });

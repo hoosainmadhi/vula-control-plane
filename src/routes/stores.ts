@@ -183,7 +183,7 @@ const configStateFor = (store: StoreRecord): 'current' | 'pending' | 'failed' | 
   return desired === applied ? 'current' : 'pending';
 };
 
-const storeToOut = (store: StoreRecord): StoreOut => {
+export const storeToOut = (store: StoreRecord): StoreOut => {
   const ent = entitlementsForStore(store);
   const enforcement = registerEnforcementFor(ent);
   return {
@@ -416,6 +416,18 @@ storesRouter.get(
   '/audit-logs',
   asyncHandler(async (_req, res) => {
     const logs = listAuditLogs(100);
+    res.json({ ok: true, logs });
+  }),
+);
+
+/** Recent audited actions for ONE store (target_type 'store'), newest first. */
+storesRouter.get(
+  '/:id/audit',
+  asyncHandler(async (req, res) => {
+    const store = storeFromParams(req.params.id);
+    const logs = listAuditLogs(200).filter(
+      (l) => l.target_type === 'store' && l.target_id === store.id,
+    );
     res.json({ ok: true, logs });
   }),
 );

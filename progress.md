@@ -2,6 +2,34 @@
 
 Dated log of the build.
 
+## 2026-09-12 (away-session 2) — SPOG navigation & drill-down
+
+Owner feedback: the Stores view had no link in the nav, stores should be
+reached through the client workflow, and the naming needed a pass.
+
+- **Navigation**: Clients · Stores · Head Offices · Plans · Billing now all
+  linked (Stores + Head Offices were orphan routes only reachable by URL);
+  CompaniesPage stays as an advanced page, linked from the Clients header.
+- **One shared store card**: the card, action handlers and modals were
+  extracted from the (1,497-line) StoresPage into `StoreCard` +
+  `useStoreActions` + `storeModals`/`storeUi`/`storeVocab` modules. The
+  client detail page's Stores tab — previously a stale, simpler duplicate
+  table — now renders the same cards backed by the same actions; the backend
+  embeds full `storeToOut` rows in `GET /api/clients/:id` so both surfaces
+  share one data shape.
+- **Store detail page `/stores/:id`**: SPOG §24 Overview (administrative
+  state, licence, technical health, version, sync, configuration with
+  expected/applied versions, devices roster) + a per-store audit trail
+  (`GET /api/stores/:id/audit`, target-filtered). Reached by clicking a store
+  name on the fleet page or the client page; the card's Client column links
+  back to the client. Configure/Diagnostics/Support/Push/More all work there.
+- **Naming**: the merchant account is **"Client"** in every user-facing
+  string (PanelsPage's 46 "Merchant" labels included); "Company accounts"
+  survives only as the advanced page; API/type field names and the CONTEXT
+  glossary are unchanged.
+- Tests: **131 green (12 suites)** (+per-store audit test; client-detail
+  embed assertions); typecheck + frontend build clean.
+
 ## 2026-09-12 (away-session) — L5 closed and the SPOG Stores screen shipped
 
 Owner away; instruction: continue the list and complete the SPOG. Three

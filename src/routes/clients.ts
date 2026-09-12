@@ -26,6 +26,7 @@ import {
   optionalInt,
 } from '../utils/validate.js';
 import { entitlementsFor, requireFeature } from '../services/subscriptions.js';
+import { storeToOut } from './stores.js';
 import {
   orchestrateClientDeployment,
   orchestrateUpgradeToMultiStore,
@@ -146,19 +147,9 @@ clientsRouter.get(
             appVersion: panel.app_version,
           }
         : null,
-      stores: stores.map((s) => ({
-        id: s.id,
-        name: s.name,
-        slug: s.slug,
-        baseUrl: s.base_url,
-        terminalCount: s.terminal_count,
-        vertical: s.vertical,
-        health: s.last_health_status,
-        lastHealthAt: s.last_health_at,
-        deployStatus: s.deploy_status,
-        coolifyUuid: s.coolify_uuid,
-        adminEmail: s.admin_email,
-      })),
+      // Full SPOG shape (same as GET /api/stores) so the client's Stores tab
+      // renders the shared store cards without a second fetch.
+      stores: stores.map(storeToOut),
       latestDeployment: latestJob
         ? {
             job: latestJob,

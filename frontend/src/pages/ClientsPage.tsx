@@ -172,6 +172,11 @@ export default function ClientsPage() {
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-end">
+        <Link to="/companies" className="text-xs font-semibold text-slate-400 hover:text-brand-600">
+          Company accounts (advanced) →
+        </Link>
+      </div>
       {error && (
         <div className="flex items-center justify-between rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs font-bold text-rose-800">
           <span>{error}</span>
@@ -198,7 +203,7 @@ export default function ClientsPage() {
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-2xs">
           <div className="text-xs font-bold uppercase tracking-wider text-indigo-600">Head Offices</div>
           <div className="mt-2 text-2xl font-black text-indigo-600">{multiStoreCount}</div>
-          <div className="mt-1 text-xs text-slate-500">Merchant executive panels</div>
+          <div className="mt-1 text-xs text-slate-500">Client executive panels</div>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-2xs">
           <div className="text-xs font-bold uppercase tracking-wider text-emerald-600">Total Terminals</div>

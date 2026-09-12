@@ -110,8 +110,20 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       Diagnostics modal; summary cards reordered technical-first with a second
       row; filters extended (Healthy/Warning/Offline/Paused/Config issue/Sync
       issue); search extended to store ID.
-      **Deferred (spec "Next"/"Later"):** store detail page, Devices page,
+      **Deferred (spec "Next"/"Later"):** Devices page,
       sync dashboard/inspector, errors, backups, versions/deployments.
+- [x] **SPOG navigation & drill-down** (2026-09-12, owner-requested): nav now
+      surfaces Clients · **Stores** · **Head Offices** · Plans · Billing
+      (Stores/Head Offices were orphan routes with no links); the store card
+      is one shared component (`StoreCard` + `useStoreActions` + shared
+      modals) used by the fleet page AND the client's Stores tab — the stale
+      duplicate table on the client page is gone; new **/stores/:id** store
+      detail page (SPOG §24 Overview + per-store audit trail via
+      `GET /api/stores/:id/audit`) reached from both surfaces, with the fleet
+      card's Client name linking back to the client; naming sweep: the
+      merchant account is **"Client"** everywhere in the UI (PanelsPage's
+      46 "Merchant" strings included), Company accounts demoted to an
+      advanced page linked from Clients, "Stores" kept as the domain term.
 - [x] **Plans: deactivate in the UI** (2026-09-12 — Deactivate/Re-activate
       action + Active/Archived pills; code field read-only in edit mode) and
       the **audit trail** (shipped 2026-09-11, §38).

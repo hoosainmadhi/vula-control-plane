@@ -137,6 +137,10 @@ export interface Store {
   lastConfigAt: string | null;
   lastHealthAt: string | null;
   lastHealthStatus: HealthStatus;
+  licenceSequence: number;
+  licenceIssuedAt: string | null;
+  licencePushStatus: ConfigStatus;
+  licencePushedAt: string | null;
   companyId: number | null;
   companyName: string;
   planCode: string;
@@ -310,19 +314,8 @@ export interface DeploymentJob {
 export interface ClientDetailResponse {
   client: ClientListItem;
   headOffice: Panel | null;
-  stores: Array<{
-    id: number;
-    name: string;
-    slug: string;
-    baseUrl: string;
-    terminalCount: number;
-    vertical: string;
-    health: string;
-    lastHealthAt: string | null;
-    deployStatus?: string;
-    coolifyUuid?: string | null;
-    adminEmail?: string | null;
-  }>;
+  /** Full SPOG store rows (same shape as GET /api/stores). */
+  stores: Store[];
   latestDeployment: {
     job: DeploymentJob;
     steps: DeploymentJobStep[];
