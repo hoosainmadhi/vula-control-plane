@@ -88,17 +88,30 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       collection and quotation conversion; `subscription` block in
       `/api/runtime-config`; register warn/grace/suspended banners + feature
       hiding. Contract: CONTEXT §2b; store doctrine: za-pos `CONTEXT.md` §14a.
-- [ ] **L5 Head Office entitlements** — the panel gates `multi_store` on the company
-      licence, completing the chain.
-- [ ] **SPOG — no new telemetry** — drop VAT (§4); Store Type → **POS profile** with
-      the spec's values incl. Restaurant and Custom; rename actions to Configure /
-      Push Config / Diagnostics / Support / More; split administrative state from
-      technical health with the richer vocabularies; expand summary cards and
-      filters; extend search to name/slug/domain/ID (§21).
-- [ ] **SPOG — needs store telemetry** — a `/api/internal/telemetry` payload
-      (app/schema/config version, heartbeat, per-terminal last-seen, sync events)
-      before Version / Sync / terminal-online / Diagnostics can show real values.
-      Do this **before** designing the store card, or the card gets designed twice.
+- [x] **L5 Head Office entitlements** (2026-09-12, za-pos side) — the panel's
+      `requireFeature('multi_store')` middleware gates catalogue writes/branch
+      pushes, stock transfers, cross-branch lookup and branch management with
+      `402 feature_not_in_plan`; reads stay open; unlicensed dev panels stay
+      permissive. Completes the L1–L5 chain.
+- [x] **SPOG — store telemetry** (2026-09-12) — `GET /api/internal/telemetry`
+      (internal API v0.4.0, contract §4): app/schema version, heartbeat,
+      per-till claim state and sync liveness; `lastSeenAt`/queue counts are
+      nullable until the tenant ships device heartbeats. CP persists
+      `app_version`/`schema_version`/`last_heartbeat_at`/`last_telemetry_json`
+      via the health route and the sweep; stub mirrors it.
+- [x] **SPOG — Stores screen** (2026-09-12, per the UI-revision spec §45/§47):
+      Store Type → POS profile (+ Custom); Environment field; Version and
+      versioned Config state columns; derived technical Health vocabulary
+      (healthy/warning/offline/unknown) split from the administrative state;
+      Licence column mapped from register states; terminal claimed/open
+      summary + sync line on the roster strip; actions renamed to Diagnostics /
+      Configure / Push Config / Support / More (Pause/Resume/Remove inside
+      More); audited Support session modal (reason + optional temp password);
+      Diagnostics modal; summary cards reordered technical-first with a second
+      row; filters extended (Healthy/Warning/Offline/Paused/Config issue/Sync
+      issue); search extended to store ID.
+      **Deferred (spec "Next"/"Later"):** store detail page, Devices page,
+      sync dashboard/inspector, errors, backups, versions/deployments.
 - [x] **Plans: deactivate in the UI** (2026-09-12 — Deactivate/Re-activate
       action + Active/Archived pills; code field read-only in edit mode) and
       the **audit trail** (shipped 2026-09-11, §38).

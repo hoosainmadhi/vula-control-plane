@@ -4,9 +4,11 @@ import type {
   ConfigStatus,
   HealthStatus,
   StoreRecord,
+  StoreEnvironment,
   StoreVertical,
 } from '../config/registryDb.js';
 import {
+  STORE_ENVIRONMENTS,
   STORE_VERTICALS,
   createStore,
   deleteStore,
@@ -18,6 +20,7 @@ import {
   setStoreCompany,
   recordConfigResult,
   recordHealthResult,
+  recordTelemetry,
   terminalRoster,
   recordLicencePush,
   setStoreStatus,
@@ -28,11 +31,12 @@ import {
   pushTerminals,
   pushLicence,
   ping,
+  fetchTelemetry,
   probeAppKind,
   StoreClientError,
 } from '../services/storeClient.js';
 import { runStoreProvisioning } from '../services/storeProvisioning.js';
-import { setStoreDeployStatus, listAuditLogs } from '../config/registryDb.js';
+import { setStoreDeployStatus, listAuditLogs, recordAuditLog } from '../config/registryDb.js';
 import { runHealthSweep } from '../services/healthSweep.js';
 import {
   issueLicence,
@@ -50,6 +54,7 @@ import {
   type RegisterEnforcement,
 } from '../services/subscriptions.js';
 import { requireOffice } from '../middleware/auth.js';
+import { env } from '../config/env.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HttpError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
@@ -82,6 +87,23 @@ export interface StoreOut {
   lastHealthError: string | null;
   /** Resolved per-till names ("Till N" where unset) — for the edit modal. */
   terminalNames: string[];
+  environment: StoreEnvironment;
+  /** Operator-facing technical health (SPOG §9/§10) — administrative state is separate. */
+  healthState: 'healthy' | 'warning' | 'degraded' | 'offline' | 'unknown';
+  /** Versioned configuration state (SPOG §12). */
+  configState: 'current' | 'pending' | 'failed' | 'unknown';
+  configVersion: { expected: number; applied: number };
+  latencyMs: number | null;
+  /** Fleet telemetry (SPOG card): version, heartbeat, sync and till state. */
+  appVersion: string | null;
+  schemaVersion: number | null;
+  lastHeartbeatAt: string | null;
+  telemetry: {
+    version: string | null;
+    generatedAt: string | null;
+    sync: { lastSyncAt: string | null; pendingEvents: number | null; failedEvents: number | null };
+    terminals: { configured: number; claimed: number; open: number; online: number };
+  } | null;
   lastHealthAt: string | null;
   lastHealthStatus: HealthStatus;
   licenceSequence: number;
@@ -138,7 +160,33 @@ export interface HealthOutcome {
 const entitlementsForStore = (store: StoreRecord): Entitlements =>
   entitlementsFor(store.company_id ? getCompanyById(store.company_id) : null);
 
-const storeToOut = (store: StoreRecord): StoreOut => ({
+/** Operator-facing health vocabulary (SPOG §9-§10): technical, not administrative. */
+const healthStateFor = (
+  store: StoreRecord,
+  registerState: RegisterEnforcement['registerState'],
+): 'healthy' | 'warning' | 'degraded' | 'offline' | 'unknown' => {
+  if (store.last_health_status === 'unknown') return 'unknown';
+  if (store.last_health_status === 'down') return 'offline';
+  // Reachable — raise a warning for drift and entitlement trouble, not outages.
+  const drift = configStateFor(store) !== 'current';
+  const licenceTrouble =
+    registerState === 'warn' || registerState === 'grace' || registerState === 'suspended';
+  return drift || licenceTrouble ? 'warning' : 'healthy';
+};
+
+/** Versioned configuration state (SPOG §12): desired vs applied, not just "pushed". */
+const configStateFor = (store: StoreRecord): 'current' | 'pending' | 'failed' | 'unknown' => {
+  if (store.last_config_status === 'failed') return 'failed';
+  const desired = store.desired_config_version ?? 1;
+  const applied = store.applied_config_version ?? 0;
+  if (store.last_config_status === 'pending' && applied === 0) return 'unknown';
+  return desired === applied ? 'current' : 'pending';
+};
+
+const storeToOut = (store: StoreRecord): StoreOut => {
+  const ent = entitlementsForStore(store);
+  const enforcement = registerEnforcementFor(ent);
+  return {
   id: store.id,
   slug: store.slug,
   name: store.name,
@@ -151,30 +199,38 @@ const storeToOut = (store: StoreRecord): StoreOut => ({
   lastConfigError: store.last_config_error,
   lastHealthError: store.last_health_error,
   terminalNames: terminalRoster(store).map((t) => t.name),
+  environment: store.environment,
+  healthState: healthStateFor(store, enforcement.registerState),
+  configState: configStateFor(store),
+  configVersion: {
+    expected: store.desired_config_version ?? 1,
+    applied: store.applied_config_version ?? 0,
+  },
+  latencyMs: store.latency_ms ?? null,
+  appVersion: store.app_version,
+  schemaVersion: store.schema_version,
+  lastHeartbeatAt: store.last_heartbeat_at,
+  telemetry: telemetrySummary(store),
   lastHealthAt: store.last_health_at,
   lastHealthStatus: store.last_health_status,
   licenceSequence: store.licence_sequence,
   licenceIssuedAt: store.licence_issued_at,
   licencePushStatus: store.licence_push_status,
   licencePushedAt: store.licence_pushed_at,
-  ...(() => {
-    const ent = entitlementsForStore(store);
-    return {
-      companyId: ent.companyId,
-      companyName: ent.companyName,
-      planCode: ent.planCode,
-      planName: ent.planName,
-      billingState: ent.billingState,
-      entitlementNote: ent.note,
-      ...registerEnforcementFor(ent),
-    };
-  })(),
+  companyId: ent.companyId,
+  companyName: ent.companyName,
+  planCode: ent.planCode,
+  planName: ent.planName,
+  billingState: ent.billingState,
+  entitlementNote: ent.note,
+  ...enforcement,
   deployStatus: store.deploy_status ?? 'not_deployed',
   coolifyUuid: store.coolify_uuid ?? null,
   adminEmail: store.admin_email ?? null,
   createdAt: store.created_at,
   updatedAt: store.updated_at,
-});
+  };
+};
 
 const parseSnapshot = (store: StoreRecord): unknown => {
   if (!store.last_config_snapshot_json) return null;
@@ -190,6 +246,44 @@ const snapshotTerminalCount = (store: StoreRecord): number => {
   const snapshot = parseSnapshot(store) as { applied?: { terminalCount?: unknown } } | null;
   const count = snapshot?.applied?.terminalCount;
   return typeof count === 'number' && Number.isInteger(count) && count >= 1 ? count : 0;
+};
+
+/** Derived SPOG telemetry summary from the last stored snapshot (technical only). */
+const telemetrySummary = (store: StoreRecord) => {
+  if (!store.last_telemetry_json) return null;
+  try {
+    const t = JSON.parse(store.last_telemetry_json) as {
+      version?: string;
+      generatedAt?: string;
+      sync?: { lastSyncAt: string | null; pendingEvents: number | null; failedEvents: number | null };
+      terminals?: Array<{ claimed?: boolean; sessionOpen?: boolean; lastSeenAt?: string | null }>;
+    };
+    const list = Array.isArray(t.terminals) ? t.terminals : [];
+    // A till counts as online when it has a device heartbeat fresher than 5 min.
+    const ONLINE_WINDOW_MS = 5 * 60 * 1000;
+    return {
+      version: t.version ?? null,
+      generatedAt: t.generatedAt ?? null,
+      sync: {
+        lastSyncAt: t.sync?.lastSyncAt ?? null,
+        pendingEvents: t.sync?.pendingEvents ?? null,
+        failedEvents: t.sync?.failedEvents ?? null,
+      },
+      terminals: {
+        configured: store.terminal_count,
+        claimed: list.filter((x) => x.claimed).length,
+        open: list.filter((x) => x.sessionOpen).length,
+        online: list.filter(
+          (x) =>
+            x.lastSeenAt !== null &&
+            x.lastSeenAt !== undefined &&
+            Date.now() - new Date(x.lastSeenAt).getTime() <= ONLINE_WINDOW_MS,
+        ).length,
+      },
+    };
+  } catch {
+    return null;
+  }
 };
 
 const terminalsFor = (store: StoreRecord): TerminalPreview[] => {
@@ -222,6 +316,16 @@ const optionalVertical = (body: Record<string, unknown>): StoreVertical | undefi
 
 /** Parses and validates the :id param, loading the store or 404ing. */
 const storeFromParams = (raw: string): StoreRecord => requireStore(parseIdParam(raw));
+
+const optionalEnvironment = (body: Record<string, unknown>): StoreEnvironment | undefined => {
+  const raw = body['environment'];
+  if (raw === undefined) return undefined;
+  const value = String(raw);
+  if (!(STORE_ENVIRONMENTS as readonly string[]).includes(value)) {
+    throw new ValidationError(`environment must be one of: ${STORE_ENVIRONMENTS.join(', ')}`);
+  }
+  return value as StoreEnvironment;
+};
 
 /** Attempts a terminal push and records ok/failed in the registry. Never throws. */
 const attemptPush = async (store: StoreRecord): Promise<PushOutcome> => {
@@ -324,6 +428,9 @@ storesRouter.post(
     const vertical = optionalVertical(req.body);
     const terminalCount = requireTerminalCount(req.body);
     const baseUrl = requireBaseUrl(req.body);
+    // Default the store's environment to the control plane's own (SPOG §5).
+    const environment =
+      optionalEnvironment(req.body) ?? (env.isProduction ? 'production' : 'development');
     if (getStoreBySlug(slug)) {
       res.status(409).json({ error: `A store with slug "${slug}" already exists` });
       return;
@@ -400,7 +507,7 @@ storesRouter.post(
     }
 
     const store = createStore(
-      { name, slug, vertical, terminalCount, baseUrl },
+      { name, slug, vertical, terminalCount, baseUrl, environment },
       controlPlaneToken,
     );
     if (companyId !== null) setStoreCompany(store.id, companyId);
@@ -478,6 +585,7 @@ storesRouter.put(
       vertical?: StoreVertical;
       terminalCount?: number;
       baseUrl?: string;
+      environment?: StoreEnvironment;
       terminalNames?: string[] | null;
     } = {};
     const body = req.body as Record<string, unknown>;
@@ -485,6 +593,7 @@ storesRouter.put(
     if (body['vertical'] !== undefined) input.vertical = optionalVertical(body);
     if (body['terminalCount'] !== undefined) input.terminalCount = requireTerminalCount(body);
     if (body['baseUrl'] !== undefined) input.baseUrl = requireBaseUrl(body);
+    if (body['environment'] !== undefined) input.environment = optionalEnvironment(body);
     if (body['terminalNames'] !== undefined) {
       if (body['terminalNames'] === null) {
         input.terminalNames = null;
@@ -637,6 +746,19 @@ storesRouter.post(
     try {
       const detail = await ping(store);
       const updated = recordHealthResult(store.id, 'up');
+      // A reachable store is a chance to refresh telemetry (version, heartbeat,
+      // sync, till claim state) — the SPOG card fields come from here.
+      try {
+        const telemetry = await fetchTelemetry(getStoreById(store.id)!);
+        recordTelemetry(store.id, {
+          version: telemetry.version,
+          schemaVersion: telemetry.schemaVersion ?? null,
+          generatedAt: telemetry.generatedAt,
+          telemetry,
+        });
+      } catch {
+        // Telemetry is best-effort; the health result already recorded up.
+      }
       // A reachable store is a chance to keep entitlement fresh — the plan calls
       // for the licence to ride along with health checks.
       await attemptLicencePush(getStoreById(store.id)!);
@@ -665,6 +787,25 @@ storesRouter.post(
 );
 
 storesRouter.post(
+  '/:id/support',
+  asyncHandler(async (req, res) => {
+    const store = storeFromParams(req.params.id);
+    // Support sessions are audited (SPOG §18/§38): who opened one, and why.
+    recordAuditLog('office', 'support_session_started', 'store', store.id, {
+      reason: optionalString(req.body, 'reason', 300) ?? 'No reason given',
+      after: { durationMinutes: 30, access: 'technical diagnostics only' },
+    });
+    res.json({
+      ok: true,
+      store: store.slug,
+      access: 'Technical diagnostics only',
+      durationMinutes: 30,
+      note: 'Session recorded in the audit trail.',
+    });
+  }),
+);
+
+storesRouter.post(
   '/:id/reset-admin',
   asyncHandler(async (req, res) => {
     const store = storeFromParams(req.params.id);
@@ -675,6 +816,9 @@ storesRouter.post(
       return;
     }
     const { tempPassword } = await resetAdmin(store); // StoreClientError → 502 via error handler
+    recordAuditLog('office', 'reset_store_admin', 'store', store.id, {
+      reason: 'Temporary store password issued from the Support panel',
+    });
     res.json({ ok: true, tempPassword, note: 'Shown once — the control plane does not store it.' });
   }),
 );

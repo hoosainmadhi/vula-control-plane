@@ -2,6 +2,49 @@
 
 Dated log of the build.
 
+## 2026-09-12 (away-session) — L5 closed and the SPOG Stores screen shipped
+
+Owner away; instruction: continue the list and complete the SPOG. Three
+workstreams landed across both repos.
+
+- **L5 Head Office entitlements** (za-pos): the panel now gates its
+  multi-store business operations on the company licence — new
+  `requireFeature(key)` middleware returns `402 feature_not_in_plan` on
+  catalogue writes + branch pushes, stock-transfer create/dispatch/receive/
+  cancel, cross-branch stock lookup and branch register/edit/delete. Reads
+  stay open (suspension never hides merchant data) and unlicensed dev panels
+  stay permissive. The licence a panel stores already carries the feature
+  claims, so no wire change was needed.
+- **Store telemetry (internal API v0.4.0)**: za-pos exposes
+  `GET /api/internal/telemetry` — app version, schema version (SQLite
+  `user_version`, now stamped = 1), environment, heartbeat, per-till
+  claim/session state and last successful device sync. Technical only (§40);
+  device `lastSeenAt` and queue counts are nullable until device heartbeats
+  exist, so the contract will not change when they land. The CP fetches it on
+  every health check and in the automated sweep, persisting
+  `app_version` / `schema_version` / `last_heartbeat_at` /
+  `last_telemetry_json`; `StoreOut` derives a telemetry summary (sync +
+  configured/claimed/open/online). The dev stub mirrors the shape.
+- **SPOG Stores screen** (per `~/Downloads/vula-control-plane-agent-ui-revision.md`
+  §45/§47): POS profile (+ `custom`, which seeds no starter pack, mirrored in
+  za-pos `vertical.ts` and the Settings picker); Environment field (defaults
+  to the CP's own environment); Version + versioned Config-state columns
+  (Current/Pending/Failed with expected/applied versions); derived technical
+  Health (Healthy/Warning/Offline/Unknown — entitlement trouble or config
+  drift raises Warning) shown separately from the administrative state; a
+  Licence column (Active/Trial/Expiring/Grace/Suspended/Unlicensed); terminal
+  summary (configured · claimed · open) and last-sync on the roster strip;
+  actions renamed Diagnostics / Configure / Push Config / Support / More with
+  Pause/Resume/Remove inside More; a Diagnostics modal (technical rows only)
+  and an audited Support-session modal (reason, 30 min, optional one-time
+  temp password); summary cards reordered technical-first plus a second row
+  (Active/Paused/Sync issues/Licence warnings); filters
+  Healthy/Warning/Offline/Paused/Config issue/Sync issue; search by
+  name/slug/domain/store ID.
+- Tests: CP **130 green (12 suites)**; za-pos **315 green (32 suites)**
+  (+L5 gate suite, +telemetry test). Typecheck + production builds clean on
+  both.
+
 ## 2026-09-12 (later) — F1 CP ops hardening complete
 
 The phase is now fully closed. Three items were still open after the

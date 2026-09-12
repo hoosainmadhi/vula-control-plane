@@ -12,7 +12,11 @@ export type StoreVertical =
   | 'spares'
   | 'hardware'
   | 'pharmacy'
-  | 'restaurant';
+  | 'restaurant'
+  | 'custom';
+
+/** Deployment environment of the store (SPOG §5/§44). */
+export type StoreEnvironment = 'production' | 'staging' | 'demo' | 'development';
 /** How a plan's price recurs. 'once-off' is a perpetual licence, not a subscription. */
 export type PlanPeriod = 'monthly' | 'annual' | 'once-off';
 
@@ -26,6 +30,14 @@ export const STORE_VERTICALS: readonly StoreVertical[] = [
   'hardware',
   'pharmacy',
   'restaurant',
+  'custom',
+];
+
+export const STORE_ENVIRONMENTS: readonly StoreEnvironment[] = [
+  'production',
+  'staging',
+  'demo',
+  'development',
 ];
 
 export interface StoreRecord {
@@ -38,6 +50,7 @@ export interface StoreRecord {
   control_plane_token: string;
   /** Per-branch credential the merchant's Head Office uses to call this store. */
   head_office_token: string | null;
+  environment: StoreEnvironment;
   status: StoreStatus;
   last_config_status: ConfigStatus;
   last_config_at: string | null;
@@ -51,6 +64,11 @@ export interface StoreRecord {
   /** Monotonic licence counter — a store rejects a licence older than the one it holds. */
   /** Custom per-till names (Till 1..N when null) — pushed on every configure. */
   terminal_names_json: string | null;
+  /** Last telemetry snapshot (technical only) + derived fields, from /api/internal/telemetry. */
+  app_version: string | null;
+  schema_version: number | null;
+  last_heartbeat_at: string | null;
+  last_telemetry_json: string | null;
   licence_sequence: number;
   licence_issued_at: string | null;
   licence_push_status: ConfigStatus;
@@ -81,6 +99,8 @@ const STORES_DDL = `
       CHECK (base_url LIKE 'http://%' OR base_url LIKE 'https://%'),
     control_plane_token    TEXT    NOT NULL,
     head_office_token      TEXT,
+    environment            TEXT    NOT NULL DEFAULT 'development'
+      CHECK (environment IN ('production', 'staging', 'demo', 'development')),
     status                 TEXT    NOT NULL DEFAULT 'active'
       CHECK (status IN ('active', 'paused')),
     last_config_status     TEXT    NOT NULL DEFAULT 'pending'
@@ -376,6 +396,11 @@ export const getRegistryDb = (): Database.Database => {
   addColumn('last_config_error', 'last_config_error TEXT');
   addColumn('last_health_error', 'last_health_error TEXT');
   addColumn('terminal_names_json', 'terminal_names_json TEXT');
+  addColumn('environment', "environment TEXT NOT NULL DEFAULT 'development'");
+  addColumn('app_version', 'app_version TEXT');
+  addColumn('schema_version', 'schema_version INTEGER');
+  addColumn('last_heartbeat_at', 'last_heartbeat_at TEXT');
+  addColumn('last_telemetry_json', 'last_telemetry_json TEXT');
   addColumn('desired_config_version', 'desired_config_version INTEGER NOT NULL DEFAULT 1');
   addColumn('applied_config_version', 'applied_config_version INTEGER NOT NULL DEFAULT 0');
   addColumn('latency_ms', 'latency_ms INTEGER');
@@ -593,6 +618,7 @@ export interface CreateStoreInput {
   vertical?: StoreVertical;
   terminalCount: number;
   baseUrl: string;
+  environment?: StoreEnvironment;
 }
 
 export const createStore = (input: CreateStoreInput, controlPlaneToken: string): StoreRecord => {
@@ -600,8 +626,8 @@ export const createStore = (input: CreateStoreInput, controlPlaneToken: string):
   const insert = db.transaction(() => {
     const info = db
       .prepare(
-        `INSERT INTO stores (name, slug, vertical, terminal_count, base_url, control_plane_token)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO stores (name, slug, vertical, terminal_count, base_url, control_plane_token, environment)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.name,
@@ -610,6 +636,7 @@ export const createStore = (input: CreateStoreInput, controlPlaneToken: string):
         input.terminalCount,
         input.baseUrl,
         controlPlaneToken,
+        input.environment ?? 'development',
       );
     return Number(info.lastInsertRowid);
   });
@@ -622,6 +649,7 @@ export interface UpdateStoreInput {
   vertical?: StoreVertical;
   terminalCount?: number;
   baseUrl?: string;
+  environment?: StoreEnvironment;
   /** Custom per-till names; null reverts to "Till N" defaults. */
   terminalNames?: string[] | null;
 }
@@ -637,6 +665,7 @@ export const updateStore = (id: number, input: UpdateStoreInput): StoreRecord | 
        vertical = COALESCE(?, vertical),
        terminal_count = COALESCE(?, terminal_count),
        base_url = COALESCE(?, base_url),
+       environment = COALESCE(?, environment),
        terminal_names_json = ?,
        updated_at = datetime('now')
      WHERE id = ?`,
@@ -645,6 +674,7 @@ export const updateStore = (id: number, input: UpdateStoreInput): StoreRecord | 
     input.vertical ?? null,
     input.terminalCount ?? null,
     input.baseUrl ?? null,
+    input.environment ?? null,
     input.terminalNames === undefined
       ? current.terminal_names_json
       : input.terminalNames === null
@@ -796,6 +826,35 @@ export const terminalRoster = (store: {
     till: i + 1,
     name: custom[i]?.trim() || `Till ${i + 1}`,
   }));
+};
+
+export interface TelemetryRecordInput {
+  version?: string | null;
+  schemaVersion?: number | null;
+  generatedAt?: string | null;
+  telemetry: unknown;
+}
+
+/** Persists a store's last telemetry snapshot (F1/SPOG: version, heartbeat, sync, tills). */
+export const recordTelemetry = (id: number, input: TelemetryRecordInput): StoreRecord | null => {
+  getRegistryDb()
+    .prepare(
+      `UPDATE stores SET
+         app_version = ?,
+         schema_version = ?,
+         last_heartbeat_at = ?,
+         last_telemetry_json = ?,
+         updated_at = datetime('now')
+       WHERE id = ?`,
+    )
+    .run(
+      input.version ?? null,
+      input.schemaVersion ?? null,
+      input.generatedAt ?? null,
+      JSON.stringify(input.telemetry),
+      id,
+    );
+  return getStoreById(id);
 };
 
 // --- Plans -------------------------------------------------------------------

@@ -1,36 +1,31 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   HeartPulse,
-  KeyRound,
+  LifeBuoy,
   Loader2,
+  MoreHorizontal,
   Pencil,
   Rocket,
-  Trash2,
-  X,
   Search,
-  ToggleLeft,
-  ToggleRight,
 } from 'lucide-react';
 import { api, ApiError } from '../api';
 import ErrorBox from '../components/ErrorBox';
 import Modal from '../components/Modal';
 import Spinner from '../components/Spinner';
 import StatusBadge, {
-  CONFIG_COLORS,
-  HealthDot,
   REGISTER_STATE_COLORS,
-  REGISTER_STATE_LABELS,
   STORE_COLORS,
   VERTICAL_COLORS,
 } from '../components/StatusBadge';
 import type {
-  ConfigStatus,
   CreateStoreResponse,
   HealthOutcome,
-  HealthStatus,
+  ConfigState,
+  HealthState,
   PushOutcome,
   ResetAdminResponse,
   Store,
+  StoreEnvironment,
   StoreFormValues,
   StoreStatus,
   StoreVertical,
@@ -43,6 +38,7 @@ const EMPTY_FORM: StoreFormValues = {
   vertical: 'general',
   baseUrl: '',
   terminalCount: '1',
+  environment: undefined as unknown as StoreEnvironment,
   controlPlaneToken: '',
   companyId: '',
 };
@@ -54,29 +50,76 @@ type ModalState = { mode: 'create' } | { mode: 'edit'; store: Store } | null;
 
 const SLUG_REGEX = /^[a-z0-9][a-z0-9-]*$/;
 
-/** SQLite datetimes arrive in UTC ("YYYY-MM-DD HH:MM:SS"); show them locally. */
-const fmtTime = (value: string | null): string => {
+/** "4 sec ago" style relative times for heartbeat/sync lines (SPOG §7). */
+const fmtAgo = (value: string | null | undefined): string => {
   if (!value) return '—';
   const iso = value.includes('T') ? value : value.replace(' ', 'T') + 'Z';
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return '—';
+  const sec = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (sec < 60) return `${sec} sec ago`;
+  if (sec < 3600) return `${Math.round(sec / 60)} min ago`;
+  if (sec < 86400) return `${Math.round(sec / 3600)} h ago`;
+  return `${Math.round(sec / 86400)} d ago`;
 };
 
-const HEALTH_LABELS: Record<HealthStatus, string> = {
-  up: 'Up',
-  down: 'Down',
+const HEALTH_STATE_LABELS: Record<HealthState, string> = {
+  healthy: 'Healthy',
+  warning: 'Warning',
+  degraded: 'Degraded',
+  offline: 'Offline',
   unknown: 'Unknown',
+};
+
+const HEALTH_STATE_COLORS: Record<HealthState, string> = {
+  healthy: 'bg-green-50 text-green-700 border-green-200',
+  warning: 'bg-amber-50 text-amber-700 border-amber-200',
+  degraded: 'bg-orange-50 text-orange-700 border-orange-200',
+  offline: 'bg-rose-50 text-rose-700 border-rose-200',
+  unknown: 'bg-slate-100 text-slate-500 border-slate-200',
+};
+
+const CONFIG_STATE_LABELS: Record<ConfigState, string> = {
+  current: '✓ Current',
+  pending: '⚠ Pending',
+  failed: '✕ Failed',
+  unknown: 'Unknown',
+};
+
+const CONFIG_STATE_COLORS: Record<ConfigState, string> = {
+  current: 'bg-green-50 text-green-700 border-green-200',
+  pending: 'bg-amber-50 text-amber-700 border-amber-200',
+  failed: 'bg-rose-50 text-rose-700 border-rose-200',
+  unknown: 'bg-slate-100 text-slate-500 border-slate-200',
+};
+
+/** Licence vocabulary (SPOG §15) — mapped from the register states. */
+const LICENCE_LABELS: Record<string, string> = {
+  ok: 'Active',
+  trial: 'Trial',
+  warn: 'Expiring',
+  grace: 'Grace',
+  suspended: 'Suspended',
+  unlicensed: 'Unlicensed',
+};
+
+const ENVIRONMENT_LABELS: Record<StoreEnvironment, string> = {
+  production: 'Production',
+  staging: 'Staging',
+  demo: 'Demo',
+  development: 'Development',
+};
+
+const ENVIRONMENT_COLORS: Record<StoreEnvironment, string> = {
+  production: 'bg-brand-50 text-brand-700 border-brand-200',
+  staging: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+  demo: 'bg-purple-50 text-purple-700 border-purple-200',
+  development: 'bg-slate-100 text-slate-600 border-slate-200',
 };
 
 const STATUS_LABELS: Record<StoreStatus, string> = {
   active: 'Active',
   paused: 'Paused',
-};
-
-const CONFIG_LABELS: Record<ConfigStatus, string> = {
-  ok: 'Config pushed',
-  failed: 'Push failed',
-  pending: 'Never pushed',
 };
 
 /** Store-type labels: short for chips, fuller for the form select (title = full). */
@@ -87,6 +130,7 @@ const VERTICAL_LABELS: Record<StoreVertical, string> = {
   hardware: 'Hardware',
   pharmacy: 'Pharmacy',
   restaurant: 'Restaurant',
+  custom: 'Custom',
 };
 
 const VERTICAL_OPTIONS: Array<{ value: StoreVertical; label: string }> = [
@@ -96,6 +140,7 @@ const VERTICAL_OPTIONS: Array<{ value: StoreVertical; label: string }> = [
   { value: 'hardware', label: 'Hardware & building supplies' },
   { value: 'pharmacy', label: 'Pharmacy & wellness' },
   { value: 'restaurant', label: 'Restaurant & quick service' },
+  { value: 'custom', label: 'Custom (no starter pack)' },
 ];
 
 // --- Terminal roster ---------------------------------------------------------
@@ -211,6 +256,7 @@ function StoreFormModal({ modal, saving, error, companies, onClose, onSubmit }: 
           baseUrl: editing.baseUrl,
           terminalCount: String(editing.terminalCount),
           tillNames: editing.terminalNames ?? [],
+          environment: editing.environment,
           controlPlaneToken: '',
           companyId: editing.companyId === null ? '' : String(editing.companyId),
         }
@@ -255,7 +301,7 @@ function StoreFormModal({ modal, saving, error, companies, onClose, onSubmit }: 
           {editing && <p className="mt-1 text-xs text-slate-400">Slug is fixed after creation</p>}
         </div>
         <div>
-          <label className={labelCls}>Store type</label>
+          <label className={labelCls}>POS profile</label>
           <select
             value={form.vertical}
             onChange={(e) => setForm({ ...form, vertical: e.target.value as StoreVertical })}
@@ -301,6 +347,21 @@ function StoreFormModal({ modal, saving, error, companies, onClose, onSubmit }: 
             className={inputCls}
             placeholder="https://gardens-mall.vula-app.co.za"
           />
+        </div>
+        <div>
+          <label className={labelCls}>Environment</label>
+          <select
+            value={form.environment ?? ''}
+            onChange={(e) => setForm({ ...form, environment: e.target.value as StoreEnvironment })}
+            className="mt-1 w-full rounded-lg border border-slate-300 p-2.5 text-sm"
+          >
+            <option value="">Auto — match this control plane</option>
+            {(Object.keys(ENVIRONMENT_LABELS) as StoreEnvironment[]).map((envKey) => (
+              <option key={envKey} value={envKey}>
+                {ENVIRONMENT_LABELS[envKey]}
+              </option>
+            ))}
+          </select>
         </div>
         <div>
           <label className={labelCls}>Terminal count (1–99)</label>
@@ -462,6 +523,186 @@ function AdminPasswordModal({ storeName, tempPassword, note, onClose }: AdminPas
 
 // --- Stores dashboard --------------------------------------------------------
 
+/** Per-till rows for the Diagnostics drawer (SPOG §17). */
+function DiagnosticsModal({
+  store,
+  running,
+  onClose,
+  onRerun,
+}: {
+  store: Store;
+  running: boolean;
+  onClose: () => void;
+  onRerun: () => void;
+}) {
+  const rows: Array<{ label: string; value: string; ok: boolean | null }> = [
+    {
+      label: 'Application',
+      value: store.healthState === 'offline' ? 'Unreachable' : 'Reachable',
+      ok: store.healthState !== 'offline' && store.healthState !== 'unknown',
+    },
+    { label: 'API', value: store.healthState === 'offline' ? 'No answer' : 'Healthy', ok: store.healthState !== 'offline' },
+    { label: 'Database', value: 'Not reported yet', ok: null },
+    {
+      label: 'Schema',
+      value: store.schemaVersion != null ? `v${store.schemaVersion}` : '—',
+      ok: store.schemaVersion != null ? true : null,
+    },
+    { label: 'Sync engine', value: 'Device-side — not reported yet', ok: null },
+    {
+      label: 'Configuration',
+      value:
+        store.configState === 'current'
+          ? `Current (v${store.configVersion.expected})`
+          : store.configState === 'pending'
+            ? `Pending — expected v${store.configVersion.expected}, applied v${store.configVersion.applied}`
+            : store.configState === 'failed'
+              ? 'Last push failed'
+              : 'Unknown',
+      ok: store.configState === 'current' ? true : store.configState === 'unknown' ? null : false,
+    },
+    {
+      label: 'Licence',
+      value: LICENCE_LABELS[store.registerState] ?? store.registerState,
+      ok: store.registerState === 'ok' || store.registerState === 'trial',
+    },
+  ];
+  return (
+    <Modal title={`Diagnostics — ${store.name}`} onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        {rows.map((r) => (
+          <div key={r.label} className="flex items-center justify-between border-b border-slate-100 pb-2">
+            <span className="text-slate-500">{r.label}</span>
+            <span
+              className={`font-semibold ${
+                r.ok === true ? 'text-green-700' : r.ok === false ? 'text-rose-600' : 'text-slate-400'
+              }`}
+            >
+              {r.ok === true ? '✓ ' : r.ok === false ? '✕ ' : ''}
+              {r.value}
+            </span>
+          </div>
+        ))}
+        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+          <span className="text-slate-500">Latency</span>
+          <span className="font-semibold text-slate-700">{store.latencyMs != null ? `${store.latencyMs} ms` : '—'}</span>
+        </div>
+        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+          <span className="text-slate-500">Last heartbeat</span>
+          <span className="font-semibold text-slate-700">{fmtAgo(store.lastHeartbeatAt)}</span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-slate-500">Last successful device sync</span>
+          <span className="font-semibold text-slate-700">
+            {store.telemetry?.sync.lastSyncAt ? fmtAgo(store.telemetry.sync.lastSyncAt) : '—'}
+          </span>
+        </div>
+        <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          Diagnostics shows technical state only — never business records.
+        </p>
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            onClick={onRerun}
+            disabled={running}
+            className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {running ? 'Running…' : 'Run diagnostics again'}
+          </button>
+          <button
+            onClick={onClose}
+            className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-bold text-white hover:bg-brand-700"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** Support session opener (SPOG §18): audited, diagnostics-only access. */
+function SupportModal({
+  store,
+  busy,
+  error,
+  onClose,
+  onStart,
+  onIssuePassword,
+}: {
+  store: Store;
+  busy: boolean;
+  error: string | null;
+  onClose: () => void;
+  onStart: (reason: string) => void;
+  onIssuePassword: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  return (
+    <Modal title="Start support session" onClose={onClose}>
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          onStart(reason.trim());
+        }}
+      >
+        <div>
+          <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Store</div>
+          <div className="text-sm font-semibold text-slate-800">{store.name}</div>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-bold text-slate-700">Reason</label>
+          <input
+            autoFocus
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="What are you helping with?"
+            className="w-full rounded-lg border border-slate-300 p-2.5 text-sm focus:border-brand-500 focus:outline-none"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Access</div>
+            <div className="text-slate-700">Technical diagnostics only</div>
+          </div>
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Duration</div>
+            <div className="text-slate-700">30 minutes</div>
+          </div>
+        </div>
+        {error && <ErrorBox message={error} />}
+        <div className="flex justify-between gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onIssuePassword}
+            disabled={busy}
+            title="Issue a one-time temporary store admin password (audited)"
+            className="rounded-lg border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+          >
+            Issue temporary password
+          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={busy}
+              className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-bold text-white hover:bg-brand-700 disabled:opacity-50"
+            >
+              {busy ? 'Starting…' : 'Start session'}
+            </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 export default function StoresPage() {
   const [stores, setStores] = useState<Store[]>([]);
   const [loading, setLoading] = useState(true);
@@ -474,7 +715,14 @@ export default function StoresPage() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | StoreStatus>('all');
+  const [statusFilter, setStatusFilter] = useState<
+    'all' | 'healthy' | 'warning' | 'offline' | 'paused' | 'config-issue' | 'sync-issue'
+  >('all');
+  const [diagnostics, setDiagnostics] = useState<Store | null>(null);
+  const [supportStore, setSupportStore] = useState<Store | null>(null);
+  const [supportBusy, setSupportBusy] = useState(false);
+  const [supportError, setSupportError] = useState<string | null>(null);
+  const [moreMenuId, setMoreMenuId] = useState<number | null>(null);
   const [newToken, setNewToken] = useState<{ storeName: string; token: string } | null>(null);
   const [adminPassword, setAdminPassword] = useState<{
     storeName: string;
@@ -523,6 +771,7 @@ export default function StoresPage() {
         vertical: values.vertical,
         baseUrl: values.baseUrl.trim(),
         terminalCount: Number(values.terminalCount),
+        environment: values.environment,
         companyId: values.companyId === '' ? null : Number(values.companyId),
       };
       if (modal?.mode === 'edit') {
@@ -603,17 +852,41 @@ export default function StoresPage() {
       );
     });
 
-  const getAdminPassword = async (store: Store): Promise<void> => {
-    setBusyId(store.id);
+  const runDiagnostics = (store: Store): void => {
+    setDiagnostics(store);
+    void healthCheck(store);
+  };
+
+  const startSupport = async (store: Store, reason: string): Promise<void> => {
+    setSupportBusy(true);
+    setSupportError(null);
+    try {
+      await api<{ ok: boolean }>(`/stores/${store.id}/support`, {
+        method: 'POST',
+        body: { reason },
+      });
+      notify('ok', `Support session started for ${store.slug} — recorded in the audit trail.`);
+      setSupportStore(null);
+    } catch (err) {
+      setSupportError(err instanceof ApiError ? err.message : 'Failed to start support session');
+    } finally {
+      setSupportBusy(false);
+    }
+  };
+
+  const supportIssuePassword = async (store: Store): Promise<void> => {
+    setSupportBusy(true);
+    setSupportError(null);
     try {
       const res = await api<ResetAdminResponse>(`/stores/${store.id}/reset-admin`, {
         method: 'POST',
       });
+      setSupportStore(null);
       setAdminPassword({ storeName: store.name, tempPassword: res.tempPassword, note: res.note });
     } catch (err) {
-      notify('error', err instanceof ApiError ? err.message : 'Reset failed');
+      setSupportError(err instanceof ApiError ? err.message : 'Reset failed');
     } finally {
-      setBusyId(null);
+      setSupportBusy(false);
     }
   };
 
@@ -640,16 +913,26 @@ export default function StoresPage() {
       notify('ok', store.status === 'active' ? `${store.name} paused` : `${store.name} resumed`);
     });
 
-  // Fleet totals — the vendor's at-a-glance view of everything they operate.
+  // Fleet totals — technical health leads, administrative state second (SPOG §20).
   const summary = useMemo(
     () => ({
       total: stores.length,
+      healthy: stores.filter((s) => s.healthState === 'healthy').length,
+      warning: stores.filter((s) => s.healthState === 'warning').length,
+      offline: stores.filter((s) => s.healthState === 'offline').length,
+      configIssues: stores.filter((s) => s.configState === 'failed' || s.configState === 'pending')
+        .length,
+      syncIssues: stores.filter((s) => (s.telemetry?.sync.failedEvents ?? 0) > 0).length,
+      licenceWarnings: stores.filter(
+        (s) =>
+          s.registerState === 'warn' ||
+          s.registerState === 'grace' ||
+          s.registerState === 'suspended' ||
+          s.registerState === 'unlicensed',
+      ).length,
+      terminals: stores.reduce((n, s) => n + s.terminalCount, 0),
       active: stores.filter((s) => s.status === 'active').length,
       paused: stores.filter((s) => s.status === 'paused').length,
-      up: stores.filter((s) => s.lastHealthStatus === 'up').length,
-      down: stores.filter((s) => s.lastHealthStatus === 'down').length,
-      unknown: stores.filter((s) => s.lastHealthStatus === 'unknown').length,
-      terminals: stores.reduce((n, s) => n + s.terminalCount, 0),
     }),
     [stores],
   );
@@ -657,12 +940,22 @@ export default function StoresPage() {
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return stores.filter((s) => {
-      if (statusFilter !== 'all' && s.status !== statusFilter) return false;
+      if (statusFilter === 'paused') {
+        if (s.status !== 'paused') return false;
+      } else if (statusFilter === 'config-issue') {
+        if (s.configState !== 'failed' && s.configState !== 'pending') return false;
+      } else if (statusFilter === 'sync-issue') {
+        if ((s.telemetry?.sync.failedEvents ?? 0) === 0) return false;
+      } else if (statusFilter !== 'all') {
+        if (s.healthState !== statusFilter) return false;
+      }
       if (!q) return true;
       return (
         s.name.toLowerCase().includes(q) ||
         s.slug.toLowerCase().includes(q) ||
-        s.baseUrl.toLowerCase().includes(q)
+        s.baseUrl.toLowerCase().includes(q) ||
+        String(s.id) === q ||
+        s.id === Number(q)
       );
     });
   }, [stores, query, statusFilter]);
@@ -687,14 +980,21 @@ export default function StoresPage() {
 
   return (
     <div className="space-y-5">
-      {/* Fleet summary */}
+      {/* Fleet summary — technical health first (SPOG §20) */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <SummaryTile label="Stores" value={summary.total} />
-        <SummaryTile label="Active" value={summary.active} tone="green" />
-        <SummaryTile label="Paused" value={summary.paused} tone="amber" />
-        <SummaryTile label="Healthy" value={summary.up} tone="green" />
-        <SummaryTile label="Unreachable" value={summary.down} tone="red" />
+        <SummaryTile label="Healthy" value={summary.healthy} tone="green" />
+        <SummaryTile label="Warning" value={summary.warning} tone="amber" />
+        <SummaryTile label="Offline" value={summary.offline} tone="red" />
+        <SummaryTile label="Config issues" value={summary.configIssues} tone={summary.configIssues > 0 ? 'red' : 'slate'} />
         <SummaryTile label="Terminals" value={summary.terminals} tone="brand" />
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <SummaryTile label="Active" value={summary.active} />
+        <SummaryTile label="Paused" value={summary.paused} tone="amber" />
+        <SummaryTile label="Sync issues" value={summary.syncIssues} tone={summary.syncIssues > 0 ? 'red' : 'slate'} />
+        <SummaryTile label="Licence warnings" value={summary.licenceWarnings} tone={summary.licenceWarnings > 0 ? 'amber' : 'slate'} />
+        <div className="hidden lg:block" />
       </div>
 
       {/* Toolbar */}
@@ -705,7 +1005,7 @@ export default function StoresPage() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search name, slug or domain"
+              placeholder="Search store, slug, domain or ID"
               className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm focus:border-brand-500 focus:outline-none"
             />
           </div>
@@ -713,8 +1013,12 @@ export default function StoresPage() {
             {(
               [
                 ['all', 'All'],
-                ['active', 'Active'],
+                ['healthy', 'Healthy'],
+                ['warning', 'Warning'],
+                ['offline', 'Offline'],
                 ['paused', 'Paused'],
+                ['config-issue', 'Config issue'],
+                ['sync-issue', 'Sync issue'],
               ] as const
             ).map(([value, label]) => (
               <button
@@ -832,11 +1136,16 @@ export default function StoresPage() {
                         colors={VERTICAL_COLORS}
                         label={VERTICAL_LABELS[store.vertical]}
                       />
+                      <StatusBadge
+                        status={store.environment}
+                        colors={ENVIRONMENT_COLORS}
+                        label={ENVIRONMENT_LABELS[store.environment]}
+                      />
                     </div>
                   </div>
 
-                  {/* Details as labelled columns */}
-                  <div className="grid flex-1 grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 xl:grid-cols-5">
+                  {/* Details as labelled columns (SPOG §7/§8) */}
+                  <div className="grid flex-1 grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 xl:grid-cols-6">
                     <div className="min-w-0">
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                         Company
@@ -869,16 +1178,26 @@ export default function StoresPage() {
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                         Health
                       </div>
-                      <div className="mt-0.5 flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                        <HealthDot status={store.lastHealthStatus} />
-                        {HEALTH_LABELS[store.lastHealthStatus]}
+                      <div className="mt-0.5">
+                        <span
+                          className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] font-bold ${
+                            HEALTH_STATE_COLORS[store.healthState]
+                          }`}
+                        >
+                          {HEALTH_STATE_LABELS[store.healthState]}
+                        </span>
                       </div>
-                      <div className="text-[11px] text-slate-400">
-                        {store.lastHealthStatus === 'unknown'
-                          ? 'Never checked'
-                          : fmtTime(store.lastHealthAt)}
+                      <div
+                        className="text-[11px] text-slate-400"
+                        title={`Heartbeat ${fmtAgo(store.lastHeartbeatAt)}`}
+                      >
+                        {store.lastHeartbeatAt
+                          ? `Last seen ${fmtAgo(store.lastHeartbeatAt)}`
+                          : store.lastHealthStatus === 'unknown'
+                            ? 'Never checked'
+                            : fmtAgo(store.lastHealthAt)}
                       </div>
-                      {store.lastHealthStatus === 'down' && store.lastHealthError && (
+                      {store.healthState === 'offline' && store.lastHealthError && (
                         <div
                           className="max-w-[16rem] truncate text-[11px] text-rose-500"
                           title={store.lastHealthError}
@@ -890,19 +1209,39 @@ export default function StoresPage() {
 
                     <div>
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Version
+                      </div>
+                      <div className="mt-0.5 font-mono text-xs font-semibold text-slate-700">
+                        {store.appVersion ?? '—'}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        {store.schemaVersion != null ? `schema v${store.schemaVersion}` : 'schema —'}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                         Config
                       </div>
                       <div className="mt-0.5">
-                        <StatusBadge
-                          status={store.lastConfigStatus}
-                          colors={CONFIG_COLORS}
-                          label={CONFIG_LABELS[store.lastConfigStatus]}
-                        />
+                        <span
+                          className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold ${
+                            CONFIG_STATE_COLORS[store.configState]
+                          }`}
+                        >
+                          {CONFIG_STATE_LABELS[store.configState]}
+                        </span>
                       </div>
-                      <div className="mt-0.5 text-[11px] text-slate-400">
-                        {fmtTime(store.lastConfigAt)}
+                      <div
+                        className="text-[11px] text-slate-400"
+                        title={`Expected v${store.configVersion.expected} · applied v${store.configVersion.applied}`}
+                      >
+                        v{store.configVersion.expected}
+                        {store.configState === 'pending'
+                          ? ` · applied v${store.configVersion.applied}`
+                          : ''}
                       </div>
-                      {store.lastConfigStatus === 'failed' && store.lastConfigError && (
+                      {store.configState === 'failed' && store.lastConfigError && (
                         <div
                           className="max-w-[16rem] truncate text-[11px] text-rose-500"
                           title={store.lastConfigError}
@@ -914,7 +1253,7 @@ export default function StoresPage() {
 
                     <div>
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        Register
+                        Licence
                       </div>
                       <div
                         className="mt-0.5"
@@ -923,7 +1262,7 @@ export default function StoresPage() {
                         <StatusBadge
                           status={store.registerState}
                           colors={REGISTER_STATE_COLORS}
-                          label={REGISTER_STATE_LABELS[store.registerState] ?? store.registerState}
+                          label={LICENCE_LABELS[store.registerState] ?? store.registerState}
                         />
                       </div>
                       <div className="mt-0.5 text-[11px] text-slate-400">
@@ -942,8 +1281,16 @@ export default function StoresPage() {
                     ) : (
                       <>
                         <ActionButton
+                          icon={HeartPulse}
+                          label="Diagnostics"
+                          title="Run diagnostics against this store"
+                          onClick={() => runDiagnostics(store)}
+                          className="border-sky-200 text-sky-700 hover:bg-sky-50"
+                        />
+                        <ActionButton
                           icon={Pencil}
-                          label="Edit"
+                          label="Configure"
+                          title="Edit this store's configuration"
                           onClick={() => {
                             setFormError(null);
                             setModal({ mode: 'edit', store });
@@ -951,60 +1298,75 @@ export default function StoresPage() {
                         />
                         <ActionButton
                           icon={Rocket}
-                          label="Push"
-                          title="Push Till 1..N to this store now"
+                          label="Push Config"
+                          title="Push Till 1..N and settings to this store now"
                           onClick={() => void pushNow(store)}
                         />
                         <ActionButton
-                          icon={HeartPulse}
-                          label="Check"
-                          title="Check store health"
-                          onClick={() => void healthCheck(store)}
-                          className="border-sky-200 text-sky-700 hover:bg-sky-50"
-                        />
-                        <ActionButton
-                          icon={KeyRound}
-                          label="Admin"
-                          title="Issue a temporary store admin password"
-                          onClick={() => void getAdminPassword(store)}
+                          icon={LifeBuoy}
+                          label="Support"
+                          title="Start an audited support session"
+                          onClick={() => {
+                            setSupportError(null);
+                            setSupportStore(store);
+                          }}
                           className="border-violet-200 text-violet-700 hover:bg-violet-50"
                         />
                         <ActionButton
-                          icon={store.status === 'active' ? ToggleRight : ToggleLeft}
-                          label={store.status === 'active' ? 'Pause' : 'Resume'}
-                          onClick={() => void togglePause(store)}
-                          className={
-                            store.status === 'active'
-                              ? 'border-amber-200 text-amber-700 hover:bg-amber-50'
-                              : 'border-green-200 text-green-700 hover:bg-green-50'
-                          }
+                          icon={MoreHorizontal}
+                          label="More"
+                          title="Pause, resume and removal actions"
+                          onClick={() => setMoreMenuId(moreMenuId === store.id ? null : store.id)}
                         />
-                        {confirmDeleteId === store.id ? (
-                          <>
-                            <ActionButton
-                              icon={Trash2}
-                              label="Confirm remove"
-                              onClick={() => void removeStore(store)}
-                              className="border-red-600 bg-red-600 text-white hover:bg-red-500"
-                            />
-                            <ActionButton
-                              label="Cancel"
-                              icon={X}
-                              onClick={() => setConfirmDeleteId(null)}
-                            />
-                          </>
-                        ) : (
-                          <ActionButton
-                            icon={Trash2}
-                            label="Remove"
-                            title="Remove this store from the control plane (pause it first)"
-                            onClick={() => setConfirmDeleteId(store.id)}
-                            className="border-red-200 text-red-600 hover:bg-red-50"
-                          />
-                        )}
                       </>
                     )}
                   </div>
+
+                  {/* More menu — administrative and destructive actions (SPOG §16) */}
+                  {moreMenuId === store.id && (
+                    <>
+                      <button
+                        className="fixed inset-0 z-30 cursor-default"
+                        aria-label="Close menu"
+                        onClick={() => setMoreMenuId(null)}
+                      />
+                      <div className="relative z-40 xl:absolute xl:right-5 xl:top-16 xl:z-40 w-full max-w-56 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+                        <button
+                          onClick={() => {
+                            setMoreMenuId(null);
+                            void togglePause(store);
+                          }}
+                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                        >
+                          {store.status === 'active' ? 'Pause store' : 'Resume store'}
+                        </button>
+                        {confirmDeleteId === store.id ? (
+                          <>
+                            <button
+                              onClick={() => void removeStore(store)}
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-bold text-white bg-red-600 hover:bg-red-500"
+                            >
+                              Confirm remove
+                            </button>
+                            <button
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmDeleteId(store.id)}
+                            title="Remove this store from the control plane (pause it first)"
+                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold text-red-600 hover:bg-red-50"
+                          >
+                            Remove store
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Entitlement needs attention (over cap, overdue, unassigned) */}
@@ -1016,7 +1378,7 @@ export default function StoresPage() {
 
                 {/* Terminal roster — every till, laid out across the full card width */}
                 <div className="border-t border-slate-100 bg-slate-50/50 px-5 py-3">
-                  <div className="mb-2 flex items-center gap-3">
+                  <div className="mb-2 flex flex-wrap items-center gap-3">
                     <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                       Terminals
                     </span>
@@ -1026,8 +1388,14 @@ export default function StoresPage() {
                           ? 'bg-green-100 text-green-700'
                           : 'bg-slate-200 text-slate-600'
                       }`}
+                      title="Configured · claimed · session open"
                     >
-                      {store.terminalCount} configured
+                      {store.telemetry
+                        ? `${store.telemetry.terminals.configured} configured · ${store.telemetry.terminals.claimed} claimed · ${store.telemetry.terminals.open} open`
+                        : `${store.terminalCount} configured`}
+                    </span>
+                    <span className="text-[11px] text-slate-400">
+                      Sync: {store.telemetry?.sync.lastSyncAt ? fmtAgo(store.telemetry.sync.lastSyncAt) : 'no device sync yet'}
                     </span>
                   </div>
                   <TerminalRoster store={store} />
@@ -1102,6 +1470,26 @@ export default function StoresPage() {
           tempPassword={adminPassword.tempPassword}
           note={adminPassword.note}
           onClose={() => setAdminPassword(null)}
+        />
+      )}
+
+      {diagnostics && (
+        <DiagnosticsModal
+          store={stores.find((s) => s.id === diagnostics.id) ?? diagnostics}
+          running={busyId === diagnostics.id}
+          onClose={() => setDiagnostics(null)}
+          onRerun={() => void healthCheck(diagnostics)}
+        />
+      )}
+
+      {supportStore && (
+        <SupportModal
+          store={supportStore}
+          busy={supportBusy}
+          error={supportError}
+          onClose={() => setSupportStore(null)}
+          onStart={(reason) => void startSupport(supportStore, reason)}
+          onIssuePassword={() => void supportIssuePassword(supportStore)}
         />
       )}
     </div>

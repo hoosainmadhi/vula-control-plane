@@ -1,13 +1,14 @@
 import {
   listStores,
   recordHealthResult,
+  recordTelemetry,
   listPanels,
   recordPanelHealth,
   getRegistryDb,
   type StoreRecord,
   type PanelRecord,
 } from '../config/registryDb.js';
-import { ping } from './storeClient.js';
+import { fetchTelemetry, ping } from './storeClient.js';
 import { logger } from '../config/env.js';
 
 export interface HealthSweepSummary {
@@ -41,6 +42,19 @@ export async function runHealthSweep(): Promise<HealthSweepSummary> {
       await ping(store, { timeoutMs: 5000 });
       const latencyMs = Date.now() - start;
       recordHealthResult(store.id, 'up');
+      // Telemetry rides the sweep so Version/Sync/Terminal fields stay fresh
+      // without operator action.
+      try {
+        const telemetry = await fetchTelemetry(store, { timeoutMs: 5000 });
+        recordTelemetry(store.id, {
+          version: telemetry.version,
+          schemaVersion: telemetry.schemaVersion ?? null,
+          generatedAt: telemetry.generatedAt,
+          telemetry,
+        });
+      } catch {
+        // Best-effort only.
+      }
       getRegistryDb()
         .prepare('UPDATE stores SET latency_ms = ? WHERE id = ?')
         .run(latencyMs, store.id);

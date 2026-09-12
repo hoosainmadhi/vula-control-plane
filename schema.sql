@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS stores (
     CHECK (base_url LIKE 'http://%' OR base_url LIKE 'https://%'),
   control_plane_token    TEXT    NOT NULL,
   head_office_token      TEXT,
+  environment            TEXT    NOT NULL DEFAULT 'development'
+    CHECK (environment IN ('production', 'staging', 'demo', 'development')),
   status                 TEXT    NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'paused')),
   last_config_status     TEXT    NOT NULL DEFAULT 'pending'

@@ -4,7 +4,13 @@ export type StoreStatus = 'active' | 'paused';
 export type ConfigStatus = 'pending' | 'ok' | 'failed';
 export type HealthStatus = 'up' | 'down' | 'unknown';
 export type StoreVertical =
-  'general' | 'clothing' | 'spares' | 'hardware' | 'pharmacy' | 'restaurant';
+  | 'general'
+  | 'clothing'
+  | 'spares'
+  | 'hardware'
+  | 'pharmacy'
+  | 'restaurant'
+  | 'custom';
 
 export type PlanPeriod = 'monthly' | 'annual' | 'once-off';
 
@@ -94,6 +100,14 @@ export interface PanelPushOutcome {
   error?: string;
 }
 
+export type StoreEnvironment = 'production' | 'staging' | 'demo' | 'development';
+
+/** Operator-facing technical health vocabulary (SPOG §9). */
+export type HealthState = 'healthy' | 'warning' | 'degraded' | 'offline' | 'unknown';
+
+/** Versioned configuration state (SPOG §12). */
+export type ConfigState = 'current' | 'pending' | 'failed' | 'unknown';
+
 export interface Store {
   id: number;
   slug: string;
@@ -101,6 +115,20 @@ export interface Store {
   terminalNames: string[];
   lastConfigError?: string | null;
   lastHealthError?: string | null;
+  environment: StoreEnvironment;
+  healthState: HealthState;
+  configState: ConfigState;
+  configVersion: { expected: number; applied: number };
+  latencyMs?: number | null;
+  appVersion?: string | null;
+  schemaVersion?: number | null;
+  lastHeartbeatAt?: string | null;
+  telemetry?: {
+    version: string | null;
+    generatedAt: string | null;
+    sync: { lastSyncAt: string | null; pendingEvents: number | null; failedEvents: number | null };
+    terminals: { configured: number; claimed: number; open: number; online: number };
+  } | null;
   vertical: StoreVertical;
   terminalCount: number;
   baseUrl: string;
@@ -179,6 +207,7 @@ export interface StoreFormValues {
   name: string;
   slug: string;
   vertical: StoreVertical;
+  environment?: StoreEnvironment;
   /** Per-till names; '' reverts that till to its "Till N" default. */
   tillNames?: string[];
   baseUrl: string;

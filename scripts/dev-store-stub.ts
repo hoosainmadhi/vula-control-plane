@@ -51,6 +51,27 @@ app.get('/api/internal/status', requireToken, (_req, res) => {
   });
 });
 
+// Fleet telemetry (internal API v0.4.0) — stub mirrors the tenant shape.
+app.get('/api/internal/telemetry', requireToken, (_req, res) => {
+  res.json({
+    ok: true,
+    app: 'vula',
+    version: '0.0.0-stub',
+    environment: 'development',
+    schemaVersion: null,
+    generatedAt: new Date().toISOString(),
+    sync: { lastSyncAt: null, pendingEvents: null, failedEvents: null },
+    terminals: configuredTerminals.map((t: { till: number; name: string }) => ({
+      till: t.till,
+      name: t.name,
+      claimed: false,
+      deviceId: null,
+      sessionOpen: false,
+      lastSeenAt: null,
+    })),
+  });
+});
+
 app.post('/api/internal/configure', requireToken, (req, res) => {
   const body = req.body as { terminalCount?: unknown; terminals?: unknown; vertical?: unknown };
   const terminalCount = body.terminalCount;

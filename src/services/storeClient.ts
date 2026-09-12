@@ -167,6 +167,38 @@ export const ping = async (
   return body;
 };
 
+/** Fleet telemetry payload (internal API v0.4.0). Technical metadata only. */
+export interface StoreTelemetry {
+  ok: boolean;
+  app: string;
+  version: string;
+  environment?: string;
+  schemaVersion?: number | null;
+  generatedAt: string;
+  sync: { lastSyncAt: string | null; pendingEvents: number | null; failedEvents: number | null };
+  terminals: Array<{
+    till: number;
+    name: string;
+    claimed: boolean;
+    deviceId: string | null;
+    sessionOpen: boolean;
+    lastSeenAt: string | null;
+  }>;
+}
+
+/**
+ * Fetches the store's telemetry snapshot (GET /api/internal/telemetry) —
+ * app/schema version, heartbeat, per-till claim state and sync liveness.
+ * Version / Sync / terminal-online on the store card come from here.
+ */
+export const fetchTelemetry = async (
+  store: Pick<StoreRecord, 'base_url' | 'control_plane_token'>,
+  options: CallOptions = {},
+): Promise<StoreTelemetry> => {
+  const { body } = await request(store, 'GET', '/api/internal/telemetry', undefined, options);
+  return body as StoreTelemetry;
+};
+
 /**
  * Pings a Company Control Panel's own token-guarded status endpoint. The panel
  * exposes operational metadata only (version, health) — the control plane never
