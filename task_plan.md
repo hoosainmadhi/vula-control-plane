@@ -38,8 +38,8 @@ gate nothing. Shipped in this repo:
 - **Contract authored in CONTEXT.md §2b** — the store side is the za-pos
   workstream (below). Previous phase — restaurant vertical mirror (2026-09-11).
 
-**Next step:** L4 store side in `~/apps/za-pos` (its task_plan tracks it), or
-F1 CP ops hardening here — owner's order says L4 store side first.
+**Next step:** F1 CP ops hardening (the phase set below) — L4 is complete on
+both sides as of 2026-09-12.
 
 Previous Phase — **Subscription licensing & multi-tenant fleet (2026-09-10).** CP v1 (stores CRUD +
 terminal provisioning) shipped 2026-09-03; the licensing/commercial layer landed
@@ -74,10 +74,14 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       vocabulary + validation, CP-side 402 gates (`feature_not_in_plan`,
       `subscription_suspended`), licence propagation on entitlement change, register
       states surfaced; contract in CONTEXT §2b. Store side below.
-- [ ] **L4 Enforcement — store side (za-pos workstream)** — `requireFeature(key)`
-      middleware (402) on gated routes, the suspended gate on checkout + sync
-      replay, `subscription` block in `/api/runtime-config`, and the register's
-      warn/grace/suspended banners + UI feature hiding.
+- [x] **L4 Enforcement — store side (za-pos, 2026-09-12)** — `requireFeature(key)`
+      middleware (402 `feature_not_in_plan`) on debtors/lay-bys, customer credit
+      fields, the range report, woo/shopify bridges, AI routes and Head Office
+      calls into the branch (`multi_store`); suspended gate inside `checkout()`
+      (402 `subscription_suspended`) covering POS, offline sync replay, order
+      collection and quotation conversion; `subscription` block in
+      `/api/runtime-config`; register warn/grace/suspended banners + feature
+      hiding. Contract: CONTEXT §2b; store doctrine: za-pos `CONTEXT.md` §14a.
 - [ ] **L5 Head Office entitlements** — the panel gates `multi_store` on the company
       licence, completing the chain.
 - [ ] **SPOG — no new telemetry** — drop VAT (§4); Store Type → **POS profile** with

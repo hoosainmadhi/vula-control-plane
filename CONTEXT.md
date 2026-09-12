@@ -174,12 +174,16 @@ grace from env `LICENCE_GRACE_DAYS`).
 | `trial`      | Inside the trial window                                    | trading, trial banner         |
 | `unlicensed` | No company/plan behind the licence (informational licence) | trading, no entitlement gates |
 
-**For the tenant workstream (za-pos) to implement against this contract:**
-`requireFeature` middleware (402) on the gated routes, the suspended gate on the
-checkout + sync-replay paths, a `subscription` block (register state, features,
-sales/trading status) in `/api/runtime-config`, and the register banners/feature
-hiding. No internal-API (`/api/internal/*`) shapes change in L4 — the licence
-already carries everything the store needs.
+**Tenant side — shipped 2026-09-12** (za-pos `CONTEXT.md` §14a): `requireFeature`
+middleware (402) gates the debtors/lay-bys routes, credit fields on customers,
+the range report, woo/shopify bridges, AI routes and Head Office calls into the
+branch; the suspended gate lives inside `checkout()` (after the idempotency
+lookup, so replays of recorded sales apply) covering POS checkout, offline sync
+replay, order collection and quotation conversion; `/api/runtime-config` carries
+the `subscription` block and the register shows warn/grace/suspended banners and
+hides gated UI. Unlicensed stores (no `LEASE_PUBLIC_KEY`) allow every feature.
+No internal-API (`/api/internal/*`) shapes changed in L4 — the licence already
+carries everything the store needs.
 
 ## 3. Fleet topology
 

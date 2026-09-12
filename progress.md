@@ -2,6 +2,19 @@
 
 Dated log of the build.
 
+## 2026-09-12 (later) — L4 store side shipped in za-pos; L4 complete on both sides
+
+- The za-pos workstream implemented the store half of the §2b contract the same
+  day: `requireFeature` middleware (402 `feature_not_in_plan`) on debtors,
+  lay-bys, customer credit fields, the range report, woo/shopify bridges, AI
+  routes and Head Office calls into the branch (`multi_store`); the suspended
+  gate inside `checkout()` (402 `subscription_suspended`, after the idempotency
+  lookup so replays apply) covering POS, offline sync replay, order collection
+  and quotation conversion; the `subscription` block in `/api/runtime-config`;
+  and the register warn/grace/suspended banner + feature hiding.
+- za-pos tests: 299 green across 29 suites (+13 enforcement); doctrine in its
+  `CONTEXT.md` §14a. Both repos pushed on `dev`. **Next: F1 CP ops hardening.**
+
 ## 2026-09-12 — dev stub implements licence delivery; L4 verified end to end on a live stack
 
 - The dev store stub (`scripts/dev-store-stub.ts`) had **no
