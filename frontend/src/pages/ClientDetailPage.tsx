@@ -12,7 +12,7 @@ export default function ClientDetailPage() {
   const [data, setData] = useState<ClientDetailResponse | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'stores' | 'head_office' | 'deployments'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'stores' | 'deployments'>('overview');
   const [error, setError] = useState<string | null>(null);
 
   // Edit Client modal state
@@ -371,7 +371,6 @@ export default function ClientDetailPage() {
         <div className="mt-6 flex border-b border-slate-200 gap-2">
           {[
             { id: 'overview', label: 'Overview' },
-            { id: 'head_office', label: client.topology === 'multi_store' ? 'Head Office' : 'Head Office (None)' },
             { id: 'stores', label: `Stores (${stores.length})` },
             { id: 'deployments', label: 'Deployments & Automation' },
           ].map((tab) => (
@@ -394,7 +393,7 @@ export default function ClientDetailPage() {
 
       {/* 1. Overview */}
       {activeTab === 'overview' && (
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 xl:grid-cols-3">
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs space-y-3">
             <h4 className="text-sm font-bold text-slate-900">Subscription & Commercial State</h4>
             <div className="divide-y divide-slate-100 text-xs">
@@ -437,6 +436,78 @@ export default function ClientDetailPage() {
                 <span className="font-semibold">{headOffice ? 'Active (Connected)' : 'None'}</span>
               </div>
             </div>
+          </div>
+          {/* Head Office — a separate overview card, not a tab */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs space-y-3">
+            <h4 className="text-sm font-bold text-slate-900">Head Office</h4>
+            {headOffice ? (
+              <div className="space-y-3 text-xs">
+                <div className="flex justify-between py-2 border-b border-slate-100">
+                  <span className="text-slate-500">Panel:</span>
+                  <span className="font-bold text-slate-900">{headOffice.name}</span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-slate-100">
+                  <span className="text-slate-500">Access URL:</span>
+                  <a
+                    href={headOffice.baseUrl || (headOffice as any).base_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-mono text-purple-700 font-bold hover:underline"
+                  >
+                    {headOffice.baseUrl || (headOffice as any).base_url} ↗
+                  </a>
+                </div>
+                <div className="flex justify-between py-2 border-b border-slate-100">
+                  <span className="text-slate-500">Health:</span>
+                  <span className="font-bold uppercase text-emerald-700">{headOffice.status}</span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-slate-100">
+                  <span className="text-slate-500">Last Check:</span>
+                  <span className="text-slate-600">{headOffice.lastHealthAt ?? 'Never checked'}</span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-slate-100">
+                  <span className="text-slate-500">App Version:</span>
+                  <span className="font-mono">{headOffice.appVersion || 'v1.0.0'}</span>
+                </div>
+                <div className="flex justify-between py-2 border-b border-slate-100">
+                  <span className="text-slate-500">Licence:</span>
+                  <span className="font-mono text-slate-700">
+                    v{headOffice.licenceSequence} · push {headOffice.licencePushStatus}
+                  </span>
+                </div>
+                <div className="flex justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => void runPanelDiagnostics()}
+                    className="rounded-lg border border-sky-200 px-3 py-1.5 text-xs font-bold text-sky-700 hover:bg-sky-50"
+                  >
+                    Diagnostics
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void pushPanelLicence()}
+                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                  >
+                    Push Licence
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3 text-xs">
+                <div className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-slate-500">
+                  No Head Office — this client is Single-Store.
+                </div>
+                <div className="flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => setUpgradeOpen(true)}
+                    className="rounded-lg bg-purple-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-purple-700"
+                  >
+                    Upgrade to Multi-Store & Deploy Head Office
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -497,79 +568,7 @@ export default function ClientDetailPage() {
         </div>
       )}
 
-      {/* 3. Head Office */}
-      {activeTab === 'head_office' && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs space-y-4">
-          <h4 className="text-sm font-bold text-slate-900">Client Head Office Panel</h4>
-          {headOffice ? (
-            <div className="space-y-3 text-xs">
-              <div className="flex justify-between py-2 border-b border-slate-100">
-                <span className="text-slate-500">Panel Name:</span>
-                <span className="font-bold text-slate-900">{headOffice.name}</span>
-              </div>
-              <div className="flex justify-between py-2 border-b border-slate-100">
-                <span className="text-slate-500">Access URL:</span>
-                <a
-                  href={headOffice.baseUrl || (headOffice as any).base_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-mono text-purple-700 font-bold hover:underline"
-                >
-                  {headOffice.baseUrl || (headOffice as any).base_url} ↗
-                </a>
-              </div>
-              <div className="flex justify-between py-2 border-b border-slate-100">
-                <span className="text-slate-500">Health Status:</span>
-                <span className="font-bold uppercase text-emerald-700">{headOffice.status}</span>
-              </div>
-              <div className="flex justify-between py-2 border-b border-slate-100">
-                <span className="text-slate-500">Last Check:</span>
-                <span className="text-slate-600">{headOffice.lastHealthAt ?? 'Never checked'}</span>
-              </div>
-              <div className="flex justify-between py-2 border-b border-slate-100">
-                <span className="text-slate-500">App Version:</span>
-                <span className="font-mono">{headOffice.appVersion || 'v1.0.0'}</span>
-              </div>
-              <div className="flex justify-between py-2 border-b border-slate-100">
-                <span className="text-slate-500">Licence:</span>
-                <span className="font-mono text-slate-700">
-                  v{headOffice.licenceSequence} · push {headOffice.licencePushStatus}
-                </span>
-              </div>
-              <div className="flex justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => void runPanelDiagnostics()}
-                  className="rounded-lg border border-sky-200 px-3 py-1.5 text-xs font-bold text-sky-700 hover:bg-sky-50"
-                >
-                  Diagnostics
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void pushPanelLicence()}
-                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                >
-                  Push Licence
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-xs text-slate-500">
-              This client is currently Single-Store and does not have a Head Office panel.
-              <div className="mt-3">
-                <button
-                  onClick={() => setUpgradeOpen(true)}
-                  className="rounded-lg bg-purple-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-purple-700"
-                >
-                  Upgrade to Multi-Store & Deploy Head Office
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 4. Deployments & Automation Stepper (§11, §12) */}
+      {/* 3. Deployments & Automation Stepper (§11, §12) */}
       {activeTab === 'deployments' && (
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs space-y-4">
           <div className="flex items-center justify-between">

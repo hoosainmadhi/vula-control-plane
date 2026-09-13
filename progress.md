@@ -10,13 +10,15 @@ Dated log of the build.
   reveal-once temp-password action inside, a 30-minute window, and an
   explicit **End session** button. `POST /api/stores/:id/support/end`
   audits the close, so the trail shows start AND end per session.
-- **Head Office tab is the panel surface**: the client detail tab now carries
-  the full panel picture (URL, status, last check, app version, licence
-  sequence + push status) with Diagnostics (health + licence refresh) and
-  Push Licence actions inline — previously name/URL/status/version only.
-  `GET /api/clients/:id` headOffice now includes the licence fields. Nav is
-  down to **Clients · Plans · Billing**; /head-offices, /stores and
-  /companies remain as unlinked advanced pages.
+- **Head Office is an Overview card, not a tab** (owner correction): the
+  panel picture (URL, status, last check, app version, licence sequence +
+  push status) with Diagnostics (health + licence refresh) and Push Licence
+  actions lives in its own card on the client's Overview grid; Single-Store
+  clients get the upgrade entry point in the same card. Tabs are now
+  Overview · Stores · Deployments. `GET /api/clients/:id` headOffice
+  includes the licence fields. Nav is down to **Clients · Plans ·
+  Billing**; /head-offices, /stores and /companies remain as unlinked
+  advanced pages.
 - **Card polish (owner feedback)**: store-card actions (Diagnostics …
   Pause/Resume/Remove) sit on their own full-width row with the More menu
   expanded inline (no dropdown), terminals strip separate — the columns
