@@ -145,8 +145,8 @@ export default function StoreDetailPage() {
     return (
       <div className="space-y-4">
         <ErrorBox message={loadError ?? 'Store not found'} />
-        <Link to="/stores" className="text-sm font-semibold text-brand-600 hover:underline">
-          ← Back to Stores
+        <Link to="/" className="text-sm font-semibold text-brand-600 hover:underline">
+          ← Back to Clients
         </Link>
       </div>
     );
@@ -161,16 +161,17 @@ export default function StoreDetailPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-xs text-slate-400">
-            <Link to="/stores" className="inline-flex items-center gap-1 hover:text-slate-600">
-              <ArrowLeft className="h-3 w-3" /> Stores
-            </Link>
-            {store.companyId !== null && store.companyName && (
-              <>
-                <span>/</span>
-                <Link to={`/clients/${store.companyId}`} className="hover:text-slate-600">
-                  {store.companyName}
-                </Link>
-              </>
+            {store.companyId !== null && store.companyName ? (
+              <Link
+                to={`/clients/${store.companyId}`}
+                className="inline-flex items-center gap-1 hover:text-slate-600"
+              >
+                <ArrowLeft className="h-3 w-3" /> {store.companyName}
+              </Link>
+            ) : (
+              <Link to="/" className="inline-flex items-center gap-1 hover:text-slate-600">
+                <ArrowLeft className="h-3 w-3" /> Clients
+              </Link>
             )}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-2">

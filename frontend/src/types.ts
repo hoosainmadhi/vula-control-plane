@@ -279,6 +279,14 @@ export interface ClientListItem {
   healthyStoresCount: number;
   totalTills: number;
   latestJobStatus: string | null;
+  /** Light store rows so the client card links straight into each store. */
+  stores: Array<{
+    id: number;
+    name: string;
+    slug: string;
+    environment: StoreEnvironment;
+    healthState: HealthState;
+  }>;
   createdAt: string;
 }
 

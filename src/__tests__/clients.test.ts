@@ -83,6 +83,15 @@ describe('Client-Centric Management & Orchestration (§1, §5, §6, §7)', () =>
       .expect(200);
 
     expect(detail.body.client.name).toBe('Gardens Pharmacy');
+    // The client LIST carries light store rows so the client card can link
+    // straight into each store (stores are reached through the client).
+    const list = await request(app).get('/api/clients').set(auth()).expect(200);
+    const listed = (list.body as Array<{ slug: string; stores: Array<{ slug: string; healthState: string }> }>).find(
+      (c) => c.slug === 'gardens-pharmacy',
+    );
+    expect(listed?.stores.map((st) => st.slug)).toEqual(['gardens-pharmacy-main']);
+    expect(listed?.stores[0].healthState).toBeDefined();
+
     expect(detail.body.stores.length).toBe(1);
     expect(detail.body.stores[0].slug).toBe('gardens-pharmacy-main');
     // Full SPOG shape embedded (same as GET /api/stores) so the client's

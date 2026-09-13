@@ -330,6 +330,32 @@ export default function ClientsPage() {
                 </div>
               </div>
 
+              {/* Stores are reached through the client card: each store links
+                  straight into its SPOG detail; Manage opens the workflow. */}
+              <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-semibold text-slate-400">Stores:</span>
+                {(c.stores ?? []).length === 0 ? (
+                  <span className="text-[11px] italic text-slate-400">None yet</span>
+                ) : (
+                  (c.stores ?? []).map((st) => (
+                    <Link
+                      key={st.id}
+                      to={`/stores/${st.id}`}
+                      title={`${st.name} — open store detail`}
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold transition hover:border-brand-400 hover:text-brand-700 ${
+                        st.healthState === 'offline'
+                          ? 'border-rose-200 bg-rose-50 text-rose-700'
+                          : st.healthState === 'warning'
+                            ? 'border-amber-200 bg-amber-50 text-amber-700'
+                            : 'border-slate-200 bg-slate-50 text-slate-700'
+                      }`}
+                    >
+                      {st.name}
+                    </Link>
+                  ))
+                )}
+              </div>
+
               <div className="mt-4 flex items-center justify-between pt-2">
                 <span className="text-[11px] text-slate-400">
                   Onboarded {c.createdAt.slice(0, 10)}

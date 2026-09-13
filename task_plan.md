@@ -112,9 +112,14 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       issue); search extended to store ID.
       **Deferred (spec "Next"/"Later"):** Devices page,
       sync dashboard/inspector, errors, backups, versions/deployments.
-- [x] **SPOG navigation & drill-down** (2026-09-12, owner-requested): nav now
-      surfaces Clients · **Stores** · **Head Offices** · Plans · Billing
-      (Stores/Head Offices were orphan routes with no links); the store card
+- [x] **SPOG navigation & drill-down** (2026-09-12/13, owner-directed): the
+      owner removed the Stores nav link the same day — **stores are reached
+      through the client**: every client card lists its stores as chips
+      linking straight into `/stores/:id` (colour-coded by health), the
+      client's Stores tab renders the shared cards, and the store detail page
+      breadcrumbs back to the client. The `/stores` fleet page remains
+      reachable by URL for cross-client ops but is deliberately unlinked.
+      Head Offices · Plans · Billing stay in the nav; the store card
       is one shared component (`StoreCard` + `useStoreActions` + shared
       modals) used by the fleet page AND the client's Stores tab — the stale
       duplicate table on the client page is gone; new **/stores/:id** store

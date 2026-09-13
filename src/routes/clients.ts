@@ -27,6 +27,7 @@ import {
 } from '../utils/validate.js';
 import { entitlementsFor, requireFeature } from '../services/subscriptions.js';
 import { storeToOut } from './stores.js';
+import type { StoreEnvironment } from '../config/registryDb.js';
 import {
   orchestrateClientDeployment,
   orchestrateUpgradeToMultiStore,
@@ -51,6 +52,14 @@ export interface ClientListItem {
   paidThrough: string | null;
   trialEndsAt: string | null;
   status: 'active' | 'suspended';
+  /** Light store rows so the client card links straight into each store. */
+  stores: Array<{
+    id: number;
+    name: string;
+    slug: string;
+    environment: StoreEnvironment;
+    healthState: 'healthy' | 'warning' | 'degraded' | 'offline' | 'unknown';
+  }>;
   headOffice: {
     id: number;
     name: string;
@@ -100,6 +109,17 @@ export const buildClientListItem = (company: CompanyRecord): ClientListItem => {
         }
       : null,
     storesCount: companyStores.length,
+    // Light store rows so the client card can link straight into each store.
+    stores: companyStores.map((s) => {
+      const out = storeToOut(s);
+      return {
+        id: out.id,
+        name: out.name,
+        slug: out.slug,
+        environment: out.environment,
+        healthState: out.healthState,
+      };
+    }),
     healthyStoresCount,
     totalTills,
     latestJobStatus: latestJob?.status ?? null,

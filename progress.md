@@ -2,6 +2,25 @@
 
 Dated log of the build.
 
+## 2026-09-13 — stores accessed through the client (nav link removed)
+
+Owner: "I don't want the stores link. The stores should be accessed through
+the Client card."
+
+- **Stores removed from the nav** — Clients · Head Offices · Plans · Billing.
+  The `/stores` fleet page still exists for cross-client ops but is
+  deliberately unlinked.
+- **Client cards now list their stores as chips** linking straight into
+  `/stores/:id`, colour-coded by derived health (rose = offline, amber =
+  warning, slate = healthy/unknown). Backend: `GET /api/clients` items carry
+  light store rows (`storeToOut`-derived, so the health vocabulary has a
+  single source of truth).
+- The client detail page's Stores tab (shared cards) and the store detail
+  page's breadcrumb back to the client complete the workflow:
+  Client card → chip → store detail; or Manage Client → Stores tab.
+- Tests: **131 green** (+client-list store-rows assertion); typecheck +
+  build clean.
+
 ## 2026-09-12 (away-session 2) — SPOG navigation & drill-down
 
 Owner feedback: the Stores view had no link in the nav, stores should be
