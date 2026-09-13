@@ -2,6 +2,30 @@
 
 Dated log of the build.
 
+## 2026-09-13 (later still) — panel 404s diagnosed: missing CONTROL_PLANE_TOKEN; token reveal added
+
+- Owner hit `urban-threads-ho is down: … status failed: Not found` on
+  Diagnostics and Push Licence. Diagnosis against the live panel (:3260):
+  `/health` answers `vula-head-office` (right app, healthy), but
+  `/api/internal/*` 404s **even with the correct registry token** — the
+  panel's process had NO `CONTROL_PLANE_TOKEN` env, and an unconfigured
+  panel hides its whole vendor surface behind 404 (by design, not a bug).
+  Proven by a throwaway instance on :3263 with the token set → 200.
+- Fixed locally: `CONTROL_PLANE_TOKEN=<registry token>` written to
+  `za-pos/.env` (loaded via dotenv on restart) — **the panel process needs a
+  restart to pick it up**. hm-spares-ho (:3262) needs its OWN token (same
+  repo .env applies to whichever panel loads it — per-instance env for
+  multi-panel dev). kloof-auto-spares-ho (production) needs the env added in
+  Coolify; new deployments get it automatically via
+  `createHeadOfficeDeployment()`.
+- Product gap closed: panel tokens were NEVER revealable (unlike store
+  tokens at create) — the operator couldn't configure the panel env without
+  DB access. New `GET /api/panels/:id/token` (office-guarded, audited
+  `reveal_panel_token`) + a **Reveal Token** button on the client Head
+  Office tab.
+- Tests: **132 green (12 suites)** (+token reveal test); typecheck + build
+  clean.
+
 ## 2026-09-13 (later) — Support session cycle + Head Office tab as the panel surface
 
 - **Support workflow made visible**: the modal no longer closes after

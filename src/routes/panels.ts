@@ -7,6 +7,7 @@ import {
   getPanelById,
   getPanelBySlug,
   listPanels,
+  recordAuditLog,
   nextPanelLicenceSequence,
   recordPanelHealth,
   recordPanelLicencePush,
@@ -244,6 +245,24 @@ panelsRouter.delete(
     const panel = panelFromParams(req.params.id);
     deletePanel(panel.id);
     res.json({ ok: true, message: `${panel.name} removed` });
+  }),
+);
+
+/** Reveal the panel's vendor token — the only way it is ever shown after
+ * creation. Needed exactly once, to configure CONTROL_PLANE_TOKEN on the
+ * panel deployment; audited like every secret operation. */
+panelsRouter.get(
+  '/:id/token',
+  asyncHandler(async (req, res) => {
+    const panel = panelFromParams(req.params.id);
+    recordAuditLog('office', 'reveal_panel_token', 'panel', panel.id, {
+      reason: 'Panel token revealed to configure the deployment env',
+    });
+    res.json({
+      ok: true,
+      token: panel.control_plane_token,
+      note: 'Set as CONTROL_PLANE_TOKEN on the panel deployment — anyone holding it can reach the panel vendor surface.',
+    });
   }),
 );
 

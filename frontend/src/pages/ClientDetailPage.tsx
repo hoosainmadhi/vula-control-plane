@@ -46,6 +46,7 @@ export default function ClientDetailPage() {
   const [panelEditUrl, setPanelEditUrl] = useState('');
   const [panelSaving, setPanelSaving] = useState(false);
   const [panelRemoveConfirm, setPanelRemoveConfirm] = useState(false);
+  const [panelToken, setPanelToken] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [adminPassword, setAdminPassword] = useState<{
     storeName: string;
@@ -256,6 +257,16 @@ export default function ClientDetailPage() {
       setError(err instanceof Error ? err.message : 'Failed to update the Head Office');
     } finally {
       setPanelSaving(false);
+    }
+  };
+
+  const revealPanelToken = async (): Promise<void> => {
+    if (!headOffice) return;
+    try {
+      const res = await api<{ ok: boolean; token: string }>(`/panels/${headOffice.id}/token`);
+      setPanelToken(res.token);
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Failed to reveal token');
     }
   };
 
@@ -527,7 +538,17 @@ export default function ClientDetailPage() {
                   v{headOffice.licenceSequence} · push {headOffice.licencePushStatus}
                 </span>
               </div>
-              <div className="flex flex-wrap justify-end gap-2 pt-1">
+                {panelToken && (
+                  <div className="w-full rounded-lg bg-slate-900 px-3 py-2 text-center">
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                      CONTROL_PLANE_TOKEN for this panel's deployment
+                    </div>
+                    <div className="mt-1 break-all font-mono text-xs tracking-wider text-emerald-300">
+                      {panelToken}
+                    </div>
+                  </div>
+                )}
+                <div className="flex flex-wrap justify-end gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => void runPanelDiagnostics()}
@@ -548,6 +569,14 @@ export default function ClientDetailPage() {
                   className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
                 >
                   Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void revealPanelToken()}
+                  title="Show the CONTROL_PLANE_TOKEN this panel expects (audited)"
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  Reveal Token
                 </button>
                 {panelRemoveConfirm ? (
                   <>

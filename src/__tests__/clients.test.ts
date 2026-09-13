@@ -313,3 +313,57 @@ describe('per-store audit trail', () => {
     expect(logs.some((l) => l.action === 'support_session_started')).toBe(true);
   });
 });
+
+describe('panel token reveal', () => {
+  it('reveals a panel token to the office user and audits it', async () => {
+    // Multi-store onboarding creates the client's Head Office panel.
+    const planId = await (async () => {
+      const res = await request(app).get('/api/plans').set(auth()).expect(200);
+      const plan = (res.body as Array<{ id: number; code: string }>).find(
+        (p) => p.code === 'multi-store',
+      );
+      return plan!.id;
+    })();
+    const created = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send({
+        name: 'Token Reveal Group',
+        slug: 'token-reveal',
+        planId,
+        deploymentType: 'multi_store',
+        headOffice: {
+          name: 'Token Reveal HO',
+          slug: 'token-reveal-ho',
+          baseUrl: 'http://localhost:3261',
+        },
+        stores: [
+          {
+            name: 'Token Reveal Branch',
+            slug: 'token-reveal-main',
+            baseUrl: 'http://localhost:3247',
+            terminalCount: 1,
+          },
+        ],
+        autoDeploy: false,
+      })
+      .expect(201);
+
+    const detail = await request(app)
+      .get(`/api/clients/${created.body.client.id}`)
+      .set(auth())
+      .expect(200);
+    const panelId = detail.body.headOffice.id;
+
+    const res = await request(app).get(`/api/panels/${panelId}/token`).set(auth()).expect(200);
+    expect((res.body as { token: string }).token).toMatch(/^[0-9a-f]{64}$/);
+
+    // The reveal is attributable in the audit trail.
+    const logs = await request(app).get('/api/stores/audit-logs').set(auth()).expect(200);
+    expect(
+      ((logs.body as { logs: Array<{ action: string }> }).logs ?? []).some(
+        (l) => l.action === 'reveal_panel_token',
+      ),
+    ).toBe(true);
+  });
+});
