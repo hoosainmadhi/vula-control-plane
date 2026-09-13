@@ -37,7 +37,7 @@ export default function StoresPage() {
   >('all');
   const [diagnostics, setDiagnostics] = useState<Store | null>(null);
   const [supportStore, setSupportStore] = useState<Store | null>(null);
-  const [moreMenuId, setMoreMenuId] = useState<number | null>(null);
+  const [supportEndBusy, setSupportEndBusy] = useState(false);
   const [newToken, setNewToken] = useState<{ storeName: string; token: string } | null>(null);
   const [adminPassword, setAdminPassword] = useState<{
     storeName: string;
@@ -83,6 +83,20 @@ export default function StoresPage() {
     onAdminPassword: (reveal) => setAdminPassword(reveal),
   });
   const { busyId, pushNow, healthCheck, togglePause, removeStore, startSupport, supportIssuePassword, supportBusy, supportError, setSupportError } = actions;
+
+  const endSupport = async (store: Store): Promise<void> => {
+    setSupportEndBusy(true);
+    try {
+      await api<{ ok: boolean }>(`/stores/${store.id}/support/end`, { method: 'POST' });
+      notify('ok', `Support session for ${store.slug} ended — recorded in the audit trail.`);
+      setSupportStore(null);
+      await load();
+    } catch (err) {
+      notify('error', err instanceof ApiError ? err.message : 'Failed to end support session');
+    } finally {
+      setSupportEndBusy(false);
+    }
+  };
 
   const runDiagnostics = (store: Store): void => {
     setDiagnostics(store);
@@ -318,7 +332,6 @@ export default function StoresPage() {
               store={store}
               busy={busyId === store.id}
               confirmRemove={confirmDeleteId === store.id}
-              moreOpen={moreMenuId === store.id}
               nameHref={`/stores/${store.id}`}
               onConfigure={() => {
                 setFormError(null);
@@ -334,8 +347,6 @@ export default function StoresPage() {
               onRequestRemove={() => setConfirmDeleteId(store.id)}
               onConfirmRemove={() => void removeStore(store, () => setConfirmDeleteId(null))}
               onCancelRemove={() => setConfirmDeleteId(null)}
-              onToggleMore={() => setMoreMenuId(moreMenuId === store.id ? null : store.id)}
-              onCloseMore={() => setMoreMenuId(null)}
             />
           ))}
         </div>
@@ -423,16 +434,13 @@ export default function StoresPage() {
           busy={supportBusy}
           error={supportError}
           onClose={() => setSupportStore(null)}
-          onStart={(reason) => {
-            void startSupport(supportStore, reason).then((ok) => {
-              if (ok) setSupportStore(null);
-            });
-          }}
-          onIssuePassword={() => {
-            void supportIssuePassword(supportStore).then((ok) => {
-              if (ok) setSupportStore(null);
-            });
-          }}
+          onStart={(reason) => startSupport(supportStore, reason).then((ok) => {
+            if (ok) void load();
+            return ok;
+          })}
+          onIssuePassword={() => supportIssuePassword(supportStore)}
+          onEnd={() => void endSupport(supportStore)}
+          endBusy={supportEndBusy}
         />
       )}
     </div>

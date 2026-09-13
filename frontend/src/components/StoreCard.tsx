@@ -1,6 +1,6 @@
 /** Indent for the assembled card body (extracted verbatim from the page). */
 import { Link } from 'react-router-dom';
-import { HeartPulse, LifeBuoy, Loader2, MoreHorizontal, Pencil, Rocket } from 'lucide-react';
+import { HeartPulse, LifeBuoy, Loader2, Pencil, Rocket, ToggleLeft, ToggleRight, Trash2 } from 'lucide-react';
 import StatusBadge, { REGISTER_STATE_COLORS, STORE_COLORS, VERTICAL_COLORS } from './StatusBadge';
 import { TerminalRoster, ActionButton } from './storeUi';
 import {
@@ -21,7 +21,6 @@ export interface StoreCardProps {
   store: Store;
   busy: boolean;
   confirmRemove: boolean;
-  moreOpen: boolean;
   /** When set, the store name deep-links to the store detail page. */
   nameHref?: string;
   onConfigure: () => void;
@@ -32,15 +31,12 @@ export interface StoreCardProps {
   onRequestRemove: () => void;
   onConfirmRemove: () => void;
   onCancelRemove: () => void;
-  onToggleMore: () => void;
-  onCloseMore: () => void;
 }
 
 export function StoreCard({
   store,
   busy,
   confirmRemove,
-  moreOpen,
   nameHref,
   onConfigure,
   onPush,
@@ -50,8 +46,6 @@ export function StoreCard({
   onRequestRemove,
   onConfirmRemove,
   onCancelRemove,
-  onToggleMore,
-  onCloseMore,
 }: StoreCardProps) {
   const terminalsPushed = store.terminalCount > 0 && store.lastConfigStatus === 'ok';
   return (
@@ -255,8 +249,10 @@ export function StoreCard({
                     </div>
                   </div>
 
-                  {/* Actions */}
-                  <div className="flex flex-wrap gap-1.5 xl:shrink-0 xl:justify-end">
+                </div>
+
+              {/* Actions — their own row so the columns can spread out */}
+              <div className="relative flex flex-wrap items-center justify-end gap-1.5 border-t border-slate-100 px-5 py-3">
                     {busy ? (
                       <span className="inline-flex items-center gap-2 py-1.5 text-xs font-semibold text-slate-400">
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -291,61 +287,41 @@ export function StoreCard({
                           className="border-violet-200 text-violet-700 hover:bg-violet-50"
                         />
                         <ActionButton
-                          icon={MoreHorizontal}
-                          label="More"
-                          title="Pause, resume and removal actions"
-                          onClick={onToggleMore}
+                          icon={store.status === 'active' ? ToggleRight : ToggleLeft}
+                          label={store.status === 'active' ? 'Pause Store' : 'Resume Store'}
+                          title={
+                            store.status === 'active'
+                              ? 'Pause the control-plane relationship (the store keeps trading offline)'
+                              : 'Resume the control-plane relationship'
+                          }
+                          onClick={onPauseResume}
+                          className={
+                            store.status === 'active'
+                              ? 'border-amber-200 text-amber-700 hover:bg-amber-50'
+                              : 'border-green-200 text-green-700 hover:bg-green-50'
+                          }
                         />
-                      </>
-                    )}
-                  </div>
-
-                  {/* More menu — administrative and destructive actions (SPOG §16) */}
-                  {moreOpen && (
-                    <>
-                      <button
-                        className="fixed inset-0 z-30 cursor-default"
-                        aria-label="Close menu"
-                        onClick={onCloseMore}
-                      />
-                      <div className="relative z-40 xl:absolute xl:right-5 xl:top-16 xl:z-40 w-full max-w-56 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
-                        <button
-                          onClick={() => {
-                            onCloseMore();
-                            onPauseResume();
-                          }}
-                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                        >
-                          {store.status === 'active' ? 'Pause store' : 'Resume store'}
-                        </button>
                         {confirmRemove ? (
                           <>
-                            <button
+                            <ActionButton
+                              label="Confirm remove"
                               onClick={onConfirmRemove}
-                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-bold text-white bg-red-600 hover:bg-red-500"
-                            >
-                              Confirm remove
-                            </button>
-                            <button
-                              onClick={onCancelRemove}
-                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                            >
-                              Cancel
-                            </button>
+                              className="border-red-600 bg-red-600 text-white hover:bg-red-500"
+                            />
+                            <ActionButton label="Cancel" onClick={onCancelRemove} />
                           </>
                         ) : (
-                          <button
-                            onClick={onRequestRemove}
+                          <ActionButton
+                            icon={Trash2}
+                            label="Remove"
                             title="Remove this store from the control plane (pause it first)"
-                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold text-red-600 hover:bg-red-50"
-                          >
-                            Remove store
-                          </button>
+                            onClick={onRequestRemove}
+                            className="border-red-200 text-red-600 hover:bg-red-50"
+                          />
                         )}
-                      </div>
-                    </>
-                  )}
-                </div>
+                      </>
+                    )}
+              </div>
 
                 {/* Entitlement needs attention (over cap, overdue, unassigned) */}
                 {store.entitlementNote ? (

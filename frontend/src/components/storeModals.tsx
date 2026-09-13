@@ -3,7 +3,16 @@ import Modal from './Modal';
 import ErrorBox from './ErrorBox';
 import type { Company, Store, StoreEnvironment, StoreFormValues, StoreVertical } from '../types';
 import type { ModalState } from '../lib/storeVocab';
-import { EMPTY_FORM, ENVIRONMENT_LABELS, SLUG_REGEX, fmtAgo, LICENCE_LABELS, VERTICAL_OPTIONS } from '../lib/storeVocab';
+import {
+  CONFIG_STATE_LABELS,
+  EMPTY_FORM,
+  ENVIRONMENT_LABELS,
+  HEALTH_STATE_LABELS,
+  LICENCE_LABELS,
+  SLUG_REGEX,
+  VERTICAL_OPTIONS,
+  fmtAgo,
+} from '../lib/storeVocab';
 
 export interface FormModalProps {
   modal: Exclude<ModalState, null>;
@@ -396,6 +405,15 @@ export function DiagnosticsModal({
 }
 
 /** Support session opener (SPOG §18): audited, diagnostics-only access. */
+function Row({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="flex items-center justify-between border-b border-slate-100 py-1">
+      <span className="text-slate-400">{k}</span>
+      <span className="text-right font-semibold text-slate-700">{v}</span>
+    </div>
+  );
+}
+
 export function SupportModal({
   store,
   busy,
@@ -403,53 +421,141 @@ export function SupportModal({
   onClose,
   onStart,
   onIssuePassword,
+  onEnd,
+  endBusy,
 }: {
   store: Store;
   busy: boolean;
   error: string | null;
   onClose: () => void;
-  onStart: (reason: string) => void;
-  onIssuePassword: () => void;
+  /** Starts the session (audited); resolves true when it began. */
+  onStart: (reason: string) => Promise<boolean>;
+  onIssuePassword: () => Promise<boolean>;
+  /** Ends the session (audited) — the parent closes the modal afterwards. */
+  onEnd: () => void;
+  endBusy: boolean;
 }) {
   const [reason, setReason] = useState('');
+  const [phase, setPhase] = useState<'start' | 'active'>('start');
+  const [startedAt, setStartedAt] = useState<Date | null>(null);
+
+  if (phase === 'start') {
+    return (
+      <Modal title="Start support session" onClose={onClose}>
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void onStart(reason.trim()).then((ok) => {
+              if (ok) {
+                setPhase('active');
+                setStartedAt(new Date());
+              }
+            });
+          }}
+        >
+          <div>
+            <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Store</div>
+            <div className="text-sm font-semibold text-slate-800">{store.name}</div>
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-bold text-slate-700">Reason</label>
+            <input
+              autoFocus
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="What are you helping with?"
+              className="w-full rounded-lg border border-slate-300 p-2.5 text-sm focus:border-brand-500 focus:outline-none"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Access</div>
+              <div className="text-slate-700">Technical diagnostics only</div>
+            </div>
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Duration</div>
+              <div className="text-slate-700">30 minutes</div>
+            </div>
+          </div>
+          {error && <ErrorBox message={error} />}
+          <div className="flex justify-between gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                void onIssuePassword().then((ok) => {
+                  void ok; // the parent reveals the password; the session stays open
+                });
+              }}
+              disabled={busy}
+              title="Issue a one-time temporary store admin password (audited)"
+              className="rounded-lg border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+            >
+              Issue temporary password
+            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={busy}
+                className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-bold text-white hover:bg-brand-700 disabled:opacity-50"
+              >
+                {busy ? 'Starting…' : 'Start session'}
+              </button>
+            </div>
+          </div>
+        </form>
+      </Modal>
+    );
+  }
+
+  // Active session (SPOG §18): the technical picture the developer is allowed
+  // to see, a visible window, and an explicit, audited end.
+  const endsAt = startedAt ? new Date(startedAt.getTime() + 30 * 60 * 1000) : null;
   return (
-    <Modal title="Start support session" onClose={onClose}>
-      <form
-        className="space-y-4"
-        onSubmit={(e) => {
-          e.preventDefault();
-          onStart(reason.trim());
-        }}
-      >
-        <div>
-          <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Store</div>
-          <div className="text-sm font-semibold text-slate-800">{store.name}</div>
+    <Modal title={`Support session — ${store.name}`} onClose={onClose}>
+      <div className="space-y-4 text-sm">
+        <div className="flex items-center justify-between rounded-lg border border-violet-200 bg-violet-50 px-3 py-2">
+          <span className="text-xs font-bold uppercase tracking-wide text-violet-700">
+            Session active
+          </span>
+          <span className="text-xs font-semibold text-violet-700">
+            {startedAt?.toLocaleTimeString()} → {endsAt?.toLocaleTimeString()}
+          </span>
         </div>
-        <div>
-          <label className="mb-1 block text-xs font-bold text-slate-700">Reason</label>
-          <input
-            autoFocus
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="What are you helping with?"
-            className="w-full rounded-lg border border-slate-300 p-2.5 text-sm focus:border-brand-500 focus:outline-none"
+
+        <div className="grid grid-cols-2 gap-x-4 text-xs">
+          <Row k="Health" v={HEALTH_STATE_LABELS[store.healthState]} />
+          <Row k="Version" v={store.appVersion ?? '—'} />
+          <Row k="Schema" v={store.schemaVersion != null ? `v${store.schemaVersion}` : '—'} />
+          <Row k="Config" v={CONFIG_STATE_LABELS[store.configState]} />
+          <Row k="Licence" v={LICENCE_LABELS[store.registerState] ?? store.registerState} />
+          <Row
+            k="Last sync"
+            v={store.telemetry?.sync.lastSyncAt ? fmtAgo(store.telemetry.sync.lastSyncAt) : '—'}
           />
+          <Row k="Latency" v={store.latencyMs != null ? `${store.latencyMs} ms` : '—'} />
+          <Row k="Tills" v={`${store.terminalCount} configured`} />
         </div>
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <div>
-            <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Access</div>
-            <div className="text-slate-700">Technical diagnostics only</div>
-          </div>
-          <div>
-            <div className="text-xs font-bold uppercase tracking-wide text-slate-400">Duration</div>
-            <div className="text-slate-700">30 minutes</div>
-          </div>
-        </div>
+
+        <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+          Technical diagnostics only — business data stays in the store. Starting and ending the
+          session is recorded in the audit trail.
+        </p>
         {error && <ErrorBox message={error} />}
+
         <div className="flex justify-between gap-2 pt-1">
           <button
             type="button"
-            onClick={onIssuePassword}
+            onClick={() => {
+              void onIssuePassword();
+            }}
             disabled={busy}
             title="Issue a one-time temporary store admin password (audited)"
             className="rounded-lg border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
@@ -462,18 +568,19 @@ export function SupportModal({
               onClick={onClose}
               className="rounded-lg px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100"
             >
-              Cancel
+              Leave open
             </button>
             <button
-              type="submit"
-              disabled={busy}
+              type="button"
+              onClick={onEnd}
+              disabled={endBusy}
               className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-bold text-white hover:bg-brand-700 disabled:opacity-50"
             >
-              {busy ? 'Starting…' : 'Start session'}
+              {endBusy ? 'Ending…' : 'End session'}
             </button>
           </div>
         </div>
-      </form>
+      </div>
     </Modal>
   );
 }

@@ -72,6 +72,7 @@ export default function StoreDetailPage() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [supportOpen, setSupportOpen] = useState(false);
+  const [supportEndBusy, setSupportEndBusy] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -108,6 +109,20 @@ export default function StoreDetailPage() {
 
   const actions = useStoreActions({ notify, reload: load, onAdminPassword: setAdminPassword });
   const { busyId, pushNow, healthCheck, togglePause, removeStore, startSupport, supportIssuePassword, supportBusy, supportError, setSupportError } = actions;
+
+  const endSupport = async (store: Store): Promise<void> => {
+    setSupportEndBusy(true);
+    try {
+      await api<{ ok: boolean }>(`/stores/${store.id}/support/end`, { method: 'POST' });
+      notify('ok', `Support session for ${store.slug} ended — recorded in the audit trail.`);
+      setSupportOpen(false);
+      await load();
+    } catch (err) {
+      notify('error', err instanceof ApiError ? err.message : 'Failed to end support session');
+    } finally {
+      setSupportEndBusy(false);
+    }
+  };
 
   const runDiagnostics = (): void => {
     setDiagnosticsOpen(true);
@@ -387,16 +402,13 @@ export default function StoreDetailPage() {
           busy={supportBusy}
           error={supportError}
           onClose={() => setSupportOpen(false)}
-          onStart={(reason) => {
-            void startSupport(store, reason).then((ok) => {
-              if (ok) setSupportOpen(false);
-            });
-          }}
-          onIssuePassword={() => {
-            void supportIssuePassword(store).then((ok) => {
-              if (ok) setSupportOpen(false);
-            });
-          }}
+          onStart={(reason) => startSupport(store, reason).then((ok) => {
+            if (ok) void load();
+            return ok;
+          })}
+          onIssuePassword={() => supportIssuePassword(store)}
+          onEnd={() => void endSupport(store)}
+          endBusy={supportEndBusy}
         />
       )}
 

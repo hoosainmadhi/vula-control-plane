@@ -165,6 +165,9 @@ clientsRouter.get(
             health: panel.last_health_status,
             lastHealthAt: panel.last_health_at,
             appVersion: panel.app_version,
+            licenceSequence: panel.licence_sequence,
+            licencePushStatus: panel.licence_push_status,
+            licencePushedAt: panel.licence_pushed_at,
           }
         : null,
       // Full SPOG shape (same as GET /api/stores) so the client's Stores tab

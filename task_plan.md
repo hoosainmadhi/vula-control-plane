@@ -110,6 +110,16 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       Diagnostics modal; summary cards reordered technical-first with a second
       row; filters extended (Healthy/Warning/Offline/Paused/Config issue/Sync
       issue); search extended to store ID.
+- [x] **Support session workflow** (2026-09-13): Start (reason, audited) →
+      active-session view (health/version/schema/config/licence/sync/latency
+      summary + reveal-once temp password) → End (audited). The session stays
+      open while the developer works instead of vanishing behind a toast.
+- [x] **Head Office info lives in Clients → Head Office tab** (2026-09-13,
+      owner-directed): full panel detail (URL, status, last check, version,
+      licence sequence/push) + Diagnostics and Push Licence actions inline;
+      Head Offices removed from the nav (the /head-offices fleet page stays
+      reachable by URL for panel registration, like /stores and /companies).
+      Tab order: Overview · Head Office · Stores · Deployments.
       **Deferred (spec "Next"/"Later"):** Devices page,
       sync dashboard/inspector, errors, backups, versions/deployments.
 - [x] **SPOG navigation & drill-down** (2026-09-12/13, owner-directed): the

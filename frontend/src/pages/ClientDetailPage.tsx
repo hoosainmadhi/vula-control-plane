@@ -40,8 +40,8 @@ export default function ClientDetailPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [diagnosticsStore, setDiagnosticsStore] = useState<Store | null>(null);
   const [supportStore, setSupportStore] = useState<Store | null>(null);
+  const [supportEndBusy, setSupportEndBusy] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
-  const [moreMenuId, setMoreMenuId] = useState<number | null>(null);
   const [adminPassword, setAdminPassword] = useState<{
     storeName: string;
     tempPassword: string;
@@ -189,6 +189,59 @@ export default function ClientDetailPage() {
     setSupportError,
   } = actions;
 
+  const runPanelDiagnostics = async (): Promise<void> => {
+    if (!headOffice) return;
+    setError(null);
+    try {
+      const res = await api<{ ok: boolean; error?: string }>(`/panels/${headOffice.id}/health`, {
+        method: 'POST',
+      });
+      notify(
+        res.ok ? 'ok' : 'error',
+        res.ok
+          ? `${headOffice.slug} is up — licence refreshed`
+          : `${headOffice.slug} is down: ${res.error}`,
+      );
+      await loadData();
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Diagnostics failed');
+    }
+  };
+
+  const pushPanelLicence = async (): Promise<void> => {
+    if (!headOffice) return;
+    setError(null);
+    try {
+      const res = await api<{ ok: boolean; sequence?: number; error?: string }>(
+        `/panels/${headOffice.id}/licence`,
+        { method: 'POST' },
+      );
+      notify(
+        res.ok ? 'ok' : 'error',
+        res.ok
+          ? `Licence v${res.sequence} pushed to ${headOffice.slug}`
+          : `Licence push failed: ${res.error}`,
+      );
+      await loadData();
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Licence push failed');
+    }
+  };
+
+  const endSupport = async (store: Store): Promise<void> => {
+    setSupportEndBusy(true);
+    try {
+      await api<{ ok: boolean }>(`/stores/${store.id}/support/end`, { method: 'POST' });
+      notify('ok', `Support session for ${store.slug} ended — recorded in the audit trail.`);
+      setSupportStore(null);
+      await loadData();
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Failed to end support session');
+    } finally {
+      setSupportEndBusy(false);
+    }
+  };
+
   const runDiagnostics = (store: Store): void => {
     setDiagnosticsStore(store);
     void healthCheck(store);
@@ -318,8 +371,8 @@ export default function ClientDetailPage() {
         <div className="mt-6 flex border-b border-slate-200 gap-2">
           {[
             { id: 'overview', label: 'Overview' },
-            { id: 'stores', label: `Stores (${stores.length})` },
             { id: 'head_office', label: client.topology === 'multi_store' ? 'Head Office' : 'Head Office (None)' },
+            { id: 'stores', label: `Stores (${stores.length})` },
             { id: 'deployments', label: 'Deployments & Automation' },
           ].map((tab) => (
             <button
@@ -422,8 +475,7 @@ export default function ClientDetailPage() {
                   store={store}
                   busy={busyId === store.id}
                   confirmRemove={confirmDeleteId === store.id}
-                  moreOpen={moreMenuId === store.id}
-                  nameHref={`/stores/${store.id}`}
+                      nameHref={`/stores/${store.id}`}
                   onConfigure={() => {
                     setFormError(null);
                     setConfigureStore(store);
@@ -438,8 +490,6 @@ export default function ClientDetailPage() {
                   onRequestRemove={() => setConfirmDeleteId(store.id)}
                   onConfirmRemove={() => void removeStore(store, () => setConfirmDeleteId(null))}
                   onCancelRemove={() => setConfirmDeleteId(null)}
-                  onToggleMore={() => setMoreMenuId(moreMenuId === store.id ? null : store.id)}
-                  onCloseMore={() => setMoreMenuId(null)}
                 />
               ))
             )}
@@ -473,8 +523,34 @@ export default function ClientDetailPage() {
                 <span className="font-bold uppercase text-emerald-700">{headOffice.status}</span>
               </div>
               <div className="flex justify-between py-2 border-b border-slate-100">
+                <span className="text-slate-500">Last Check:</span>
+                <span className="text-slate-600">{headOffice.lastHealthAt ?? 'Never checked'}</span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-100">
                 <span className="text-slate-500">App Version:</span>
                 <span className="font-mono">{headOffice.appVersion || 'v1.0.0'}</span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-100">
+                <span className="text-slate-500">Licence:</span>
+                <span className="font-mono text-slate-700">
+                  v{headOffice.licenceSequence} · push {headOffice.licencePushStatus}
+                </span>
+              </div>
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => void runPanelDiagnostics()}
+                  className="rounded-lg border border-sky-200 px-3 py-1.5 text-xs font-bold text-sky-700 hover:bg-sky-50"
+                >
+                  Diagnostics
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void pushPanelLicence()}
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  Push Licence
+                </button>
               </div>
             </div>
           ) : (
@@ -872,16 +948,13 @@ export default function ClientDetailPage() {
           busy={supportBusy}
           error={supportError}
           onClose={() => setSupportStore(null)}
-          onStart={(reason) => {
-            void startSupport(supportStore, reason).then((ok) => {
-              if (ok) setSupportStore(null);
-            });
-          }}
-          onIssuePassword={() => {
-            void supportIssuePassword(supportStore).then((ok) => {
-              if (ok) setSupportStore(null);
-            });
-          }}
+          onStart={(reason) => startSupport(supportStore, reason).then((ok) => {
+            if (ok) void loadData();
+            return ok;
+          })}
+          onIssuePassword={() => supportIssuePassword(supportStore)}
+          onEnd={() => void endSupport(supportStore)}
+          endBusy={supportEndBusy}
         />
       )}
 

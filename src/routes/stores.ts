@@ -818,6 +818,17 @@ storesRouter.post(
 );
 
 storesRouter.post(
+  '/:id/support/end',
+  asyncHandler(async (req, res) => {
+    const store = storeFromParams(req.params.id);
+    recordAuditLog('office', 'support_session_ended', 'store', store.id, {
+      reason: 'Support session closed by the office user',
+    });
+    res.json({ ok: true });
+  }),
+);
+
+storesRouter.post(
   '/:id/reset-admin',
   asyncHandler(async (req, res) => {
     const store = storeFromParams(req.params.id);

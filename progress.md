@@ -2,6 +2,27 @@
 
 Dated log of the build.
 
+## 2026-09-13 (later) — Support session cycle + Head Office tab as the panel surface
+
+- **Support workflow made visible**: the modal no longer closes after
+  starting — it switches to an active-session view (health, version, schema,
+  config state, licence, sync, latency, tills; technical only) with the
+  reveal-once temp-password action inside, a 30-minute window, and an
+  explicit **End session** button. `POST /api/stores/:id/support/end`
+  audits the close, so the trail shows start AND end per session.
+- **Head Office tab is the panel surface**: the client detail tab now carries
+  the full panel picture (URL, status, last check, app version, licence
+  sequence + push status) with Diagnostics (health + licence refresh) and
+  Push Licence actions inline — previously name/URL/status/version only.
+  `GET /api/clients/:id` headOffice now includes the licence fields. Nav is
+  down to **Clients · Plans · Billing**; /head-offices, /stores and
+  /companies remain as unlinked advanced pages.
+- **Card polish (owner feedback)**: store-card actions (Diagnostics …
+  Pause/Resume/Remove) sit on their own full-width row with the More menu
+  expanded inline (no dropdown), terminals strip separate — the columns
+  spread out on the client page.
+- Tests: **131 green (12 suites)**; typecheck + build clean.
+
 ## 2026-09-13 — stores accessed through the client (nav link removed)
 
 Owner: "I don't want the stores link. The stores should be accessed through

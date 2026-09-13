@@ -34,7 +34,7 @@ export function ActionButton({
   className = 'border-slate-200 text-slate-600 hover:bg-slate-50',
   title,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
+  icon?: React.ComponentType<{ className?: string }>;
   label: string;
   onClick: () => void;
   className?: string;
@@ -47,7 +47,7 @@ export function ActionButton({
       title={title ?? label}
       className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${className}`}
     >
-      <Icon className="h-3.5 w-3.5" />
+      {Icon && <Icon className="h-3.5 w-3.5" />}
       {label}
     </button>
   );
