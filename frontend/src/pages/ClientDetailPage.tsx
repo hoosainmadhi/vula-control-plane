@@ -12,7 +12,7 @@ export default function ClientDetailPage() {
   const [data, setData] = useState<ClientDetailResponse | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'stores' | 'deployments'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'head_office' | 'stores' | 'deployments'>('overview');
   const [error, setError] = useState<string | null>(null);
 
   // Edit Client modal state
@@ -41,6 +41,11 @@ export default function ClientDetailPage() {
   const [diagnosticsStore, setDiagnosticsStore] = useState<Store | null>(null);
   const [supportStore, setSupportStore] = useState<Store | null>(null);
   const [supportEndBusy, setSupportEndBusy] = useState(false);
+  const [panelEditOpen, setPanelEditOpen] = useState(false);
+  const [panelEditName, setPanelEditName] = useState('');
+  const [panelEditUrl, setPanelEditUrl] = useState('');
+  const [panelSaving, setPanelSaving] = useState(false);
+  const [panelRemoveConfirm, setPanelRemoveConfirm] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [adminPassword, setAdminPassword] = useState<{
     storeName: string;
@@ -228,6 +233,48 @@ export default function ClientDetailPage() {
     }
   };
 
+  const openPanelEdit = (): void => {
+    if (!headOffice) return;
+    setPanelEditName(headOffice.name);
+    setPanelEditUrl(headOffice.baseUrl);
+    setPanelEditOpen(true);
+  };
+
+  const savePanelEdit = async (): Promise<void> => {
+    if (!headOffice) return;
+    setPanelSaving(true);
+    setError(null);
+    try {
+      await api(`/panels/${headOffice.id}`, {
+        method: 'PUT',
+        body: { name: panelEditName.trim(), baseUrl: panelEditUrl.trim() },
+      });
+      notify('ok', `${panelEditName.trim()} updated`);
+      setPanelEditOpen(false);
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update the Head Office');
+    } finally {
+      setPanelSaving(false);
+    }
+  };
+
+  const removePanel = async (): Promise<void> => {
+    if (!headOffice) return;
+    setError(null);
+    try {
+      const res = await api<{ ok: boolean; message: string }>(`/panels/${headOffice.id}`, {
+        method: 'DELETE',
+      });
+      notify('ok', res.message);
+      setPanelRemoveConfirm(false);
+      await loadData();
+    } catch (err) {
+      setPanelRemoveConfirm(false);
+      notify('error', err instanceof Error ? err.message : 'Failed to remove the Head Office');
+    }
+  };
+
   const endSupport = async (store: Store): Promise<void> => {
     setSupportEndBusy(true);
     try {
@@ -371,6 +418,7 @@ export default function ClientDetailPage() {
         <div className="mt-6 flex border-b border-slate-200 gap-2">
           {[
             { id: 'overview', label: 'Overview' },
+            { id: 'head_office', label: client.topology === 'multi_store' ? 'Head Office' : 'Head Office (None)' },
             { id: 'stores', label: `Stores (${stores.length})` },
             { id: 'deployments', label: 'Deployments & Automation' },
           ].map((tab) => (
@@ -393,7 +441,7 @@ export default function ClientDetailPage() {
 
       {/* 1. Overview */}
       {activeTab === 'overview' && (
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs space-y-3">
             <h4 className="text-sm font-bold text-slate-900">Subscription & Commercial State</h4>
             <div className="divide-y divide-slate-100 text-xs">
@@ -437,82 +485,116 @@ export default function ClientDetailPage() {
               </div>
             </div>
           </div>
-          {/* Head Office — a separate overview card, not a tab */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs space-y-3">
-            <h4 className="text-sm font-bold text-slate-900">Head Office</h4>
-            {headOffice ? (
-              <div className="space-y-3 text-xs">
-                <div className="flex justify-between py-2 border-b border-slate-100">
-                  <span className="text-slate-500">Panel:</span>
-                  <span className="font-bold text-slate-900">{headOffice.name}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-slate-100">
-                  <span className="text-slate-500">Access URL:</span>
-                  <a
-                    href={headOffice.baseUrl || (headOffice as any).base_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="font-mono text-purple-700 font-bold hover:underline"
-                  >
-                    {headOffice.baseUrl || (headOffice as any).base_url} ↗
-                  </a>
-                </div>
-                <div className="flex justify-between py-2 border-b border-slate-100">
-                  <span className="text-slate-500">Health:</span>
-                  <span className="font-bold uppercase text-emerald-700">{headOffice.status}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-slate-100">
-                  <span className="text-slate-500">Last Check:</span>
-                  <span className="text-slate-600">{headOffice.lastHealthAt ?? 'Never checked'}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-slate-100">
-                  <span className="text-slate-500">App Version:</span>
-                  <span className="font-mono">{headOffice.appVersion || 'v1.0.0'}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-slate-100">
-                  <span className="text-slate-500">Licence:</span>
-                  <span className="font-mono text-slate-700">
-                    v{headOffice.licenceSequence} · push {headOffice.licencePushStatus}
-                  </span>
-                </div>
-                <div className="flex justify-end gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => void runPanelDiagnostics()}
-                    className="rounded-lg border border-sky-200 px-3 py-1.5 text-xs font-bold text-sky-700 hover:bg-sky-50"
-                  >
-                    Diagnostics
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void pushPanelLicence()}
-                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                  >
-                    Push Licence
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3 text-xs">
-                <div className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-slate-500">
-                  No Head Office — this client is Single-Store.
-                </div>
-                <div className="flex justify-center">
-                  <button
-                    type="button"
-                    onClick={() => setUpgradeOpen(true)}
-                    className="rounded-lg bg-purple-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-purple-700"
-                  >
-                    Upgrade to Multi-Store & Deploy Head Office
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
       )}
 
-      {/* 2. Stores */}
+      {/* 2. Head Office — its own tab between Overview and Stores */}
+      {activeTab === 'head_office' && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs space-y-4">
+          <h4 className="text-sm font-bold text-slate-900">Client Head Office Panel</h4>
+          {headOffice ? (
+            <div className="space-y-3 text-xs">
+              <div className="flex justify-between py-2 border-b border-slate-100">
+                <span className="text-slate-500">Panel Name:</span>
+                <span className="font-bold text-slate-900">{headOffice.name}</span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-100">
+                <span className="text-slate-500">Access URL:</span>
+                <a
+                  href={headOffice.baseUrl || (headOffice as any).base_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-mono text-purple-700 font-bold hover:underline"
+                >
+                  {headOffice.baseUrl || (headOffice as any).base_url} ↗
+                </a>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-100">
+                <span className="text-slate-500">Health Status:</span>
+                <span className="font-bold uppercase text-emerald-700">{headOffice.status}</span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-100">
+                <span className="text-slate-500">Last Check:</span>
+                <span className="text-slate-600">{headOffice.lastHealthAt ?? 'Never checked'}</span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-100">
+                <span className="text-slate-500">App Version:</span>
+                <span className="font-mono">{headOffice.appVersion || 'v1.0.0'}</span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-100">
+                <span className="text-slate-500">Licence:</span>
+                <span className="font-mono text-slate-700">
+                  v{headOffice.licenceSequence} · push {headOffice.licencePushStatus}
+                </span>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => void runPanelDiagnostics()}
+                  className="rounded-lg border border-sky-200 px-3 py-1.5 text-xs font-bold text-sky-700 hover:bg-sky-50"
+                >
+                  Diagnostics
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void pushPanelLicence()}
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  Push Licence
+                </button>
+                <button
+                  type="button"
+                  onClick={openPanelEdit}
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  Edit
+                </button>
+                {panelRemoveConfirm ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void removePanel()}
+                      className="rounded-lg border border-red-600 bg-red-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-red-500"
+                    >
+                      Confirm remove
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPanelRemoveConfirm(false)}
+                      className="rounded-lg px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setPanelRemoveConfirm(true)}
+                    title="Remove the Head Office registration (the deployment and its data are untouched)"
+                    className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-bold text-red-600 hover:bg-red-50"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-xs text-slate-500">
+              This client is currently Single-Store and does not have a Head Office panel.
+              <div className="mt-3">
+                <button
+                  onClick={() => setUpgradeOpen(true)}
+                  className="rounded-lg bg-purple-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-purple-700"
+                >
+                  Upgrade to Multi-Store & Deploy Head Office
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 3. Stores */}
       {activeTab === 'stores' && (
         <div className="rounded-2xl border border-slate-200 bg-white shadow-2xs overflow-hidden">
           <div className="border-b border-slate-200 px-5 py-4 flex items-center justify-between">
@@ -568,7 +650,7 @@ export default function ClientDetailPage() {
         </div>
       )}
 
-      {/* 3. Deployments & Automation Stepper (§11, §12) */}
+      {/* 4. Deployments & Automation Stepper (§11, §12) */}
       {activeTab === 'deployments' && (
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs space-y-4">
           <div className="flex items-center justify-between">
@@ -906,6 +988,55 @@ export default function ClientDetailPage() {
           </div>
         </div>
       )}
+      {panelEditOpen && headOffice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-2xs">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-slate-200">
+            <h3 className="text-lg font-bold text-slate-900">Edit Head Office</h3>
+            <p className="mt-1 text-xs text-slate-500">Update the panel registration for {headOffice.slug}</p>
+            <form
+              className="mt-4 space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void savePanelEdit();
+              }}
+            >
+              <div>
+                <label className="mb-1 block text-xs font-bold text-slate-700">Panel name</label>
+                <input
+                  value={panelEditName}
+                  onChange={(e) => setPanelEditName(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 p-2.5 text-sm"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-bold text-slate-700">Base URL</label>
+                <input
+                  value={panelEditUrl}
+                  onChange={(e) => setPanelEditUrl(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 p-2.5 font-mono text-sm"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setPanelEditOpen(false)}
+                  className="rounded-lg px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={panelSaving || !panelEditName.trim()}
+                  className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-bold text-white hover:bg-brand-700 disabled:opacity-50"
+                >
+                  {panelSaving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {notice && (
         <div
           className={`flex items-center justify-between rounded-lg px-4 py-2.5 text-sm ${
