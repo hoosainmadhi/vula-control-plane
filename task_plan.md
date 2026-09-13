@@ -114,13 +114,15 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       active-session view (health/version/schema/config/licence/sync/latency
       summary + reveal-once temp password) → End (audited). The session stays
       open while the developer works instead of vanishing behind a toast.
-- [x] **Head Office is a card on the client Overview** (2026-09-13,
-      owner-directed — no separate tab): full panel detail (URL, status, last
-      check, version, licence sequence/push) + Diagnostics and Push Licence
-      actions in its own overview card; Single-Store clients see the upgrade
-      entry point there. Head Offices removed from the nav (the /head-offices
-      fleet page stays reachable by URL for panel registration, like /stores
-      and /companies). Tabs: Overview · Stores · Deployments.
+- [x] **Head Office has its own client tab, between Overview and Stores**
+      (2026-09-13, owner-directed): the tab carries the full panel card
+      (URL, status, last check, version, licence sequence/push) with
+      **Diagnostics, Push Licence, Edit (name/URL) and Remove (registration
+      only, confirm-then-delete)** actions; Single-Store clients see the
+      upgrade entry point there. Head Offices removed from the nav (the
+      /head-offices fleet page stays reachable by URL for panel registration,
+      like /stores and /companies). Tabs: Overview · Head Office · Stores ·
+      Deployments.
       **Deferred (spec "Next"/"Later"):** Devices page,
       sync dashboard/inspector, errors, backups, versions/deployments.
 - [x] **SPOG navigation & drill-down** (2026-09-12/13, owner-directed): the
