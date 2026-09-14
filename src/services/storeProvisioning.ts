@@ -181,6 +181,6 @@ export async function runStoreProvisioning(
     logger.info(`Store ${store.slug} successfully provisioned and deployed via Coolify!`);
   } catch (err: any) {
     logger.error(`Coolify provisioning failed for store ${store.slug}: ${err?.message || err}`);
-    setStoreDeployStatus(storeId, 'failed');
+    setStoreDeployStatus(storeId, 'failed', { error: err?.message ? String(err.message) : String(err) });
   }
 }

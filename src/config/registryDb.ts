@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'crypto';
 import Database from 'better-sqlite3';
 import { env, logger } from './env.js';
 
@@ -222,6 +223,38 @@ const AUDIT_LOGS_DDL = `
     reason        TEXT,
     result        TEXT NOT NULL DEFAULT 'ok',
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  )`;
+
+/**
+ * The error feed (§30, observability). A store row keeps only the *latest*
+ * failure (`last_health_error`, `last_config_error`), which cannot answer the
+ * questions the Errors page exists for: how often, since when, how many stores.
+ * One row per fingerprint × source × entity, incremented when the same fault
+ * recurs, so the table grows with the number of distinct problems rather than
+ * with the number of probes.
+ *
+ * `entity_type`/`entity_id` rather than nullable `store_id`/`panel_id`: SQLite
+ * treats NULLs as distinct in a unique index, so a nullable column would break
+ * the upsert and silently write a row per occurrence.
+ *
+ * Recovery never deletes rows — this is a timeline, and freshness is
+ * `last_seen`. Nothing business-shaped is stored: the message is the control
+ * plane's own technical summary, never a merchant payload (§40).
+ */
+const ERROR_EVENTS_DDL = `
+  CREATE TABLE IF NOT EXISTS error_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    fingerprint TEXT NOT NULL,
+    source      TEXT NOT NULL
+      CHECK (source IN ('health', 'config', 'licence', 'deploy')),
+    entity_type TEXT NOT NULL CHECK (entity_type IN ('store', 'panel')),
+    entity_id   INTEGER NOT NULL,
+    message     TEXT NOT NULL,
+    app_version TEXT,
+    environment TEXT,
+    occurrences INTEGER NOT NULL DEFAULT 1,
+    first_seen  TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen   TEXT NOT NULL DEFAULT (datetime('now'))
   )`;
 
 let registry: Database.Database | null = null;
@@ -457,6 +490,7 @@ export const getRegistryDb = (): Database.Database => {
   db.exec(DEPLOYMENT_JOBS_DDL);
   db.exec(DEPLOYMENT_JOB_STEPS_DDL);
   db.exec(AUDIT_LOGS_DDL);
+  db.exec(ERROR_EVENTS_DDL);
   db.exec('CREATE INDEX IF NOT EXISTS idx_invoices_company ON invoices(company_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_payments_company ON payments(company_id)');
@@ -464,6 +498,11 @@ export const getRegistryDb = (): Database.Database => {
   db.exec('CREATE INDEX IF NOT EXISTS idx_deployment_jobs_company ON deployment_jobs(company_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_deployment_job_steps_job ON deployment_job_steps(job_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id)');
+  // The group key the recorder upserts on, and the sort the feed reads by.
+  db.exec(
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_error_events_group ON error_events(fingerprint, source, entity_type, entity_id)',
+  );
+  db.exec('CREATE INDEX IF NOT EXISTS idx_error_events_last_seen ON error_events(last_seen)');
   db.exec(
     'CREATE INDEX IF NOT EXISTS idx_store_terminal_licences_company ON store_terminal_licences(company_id)',
   );
@@ -1011,7 +1050,7 @@ export const setStoreStatus = (id: number, status: StoreStatus): StoreRecord | n
 export const setStoreDeployStatus = (
   id: number,
   status: 'not_deployed' | 'provisioning' | 'deployed' | 'failed',
-  meta?: { coolifyUuid?: string; volumeName?: string; adminEmail?: string },
+  meta?: { coolifyUuid?: string; volumeName?: string; adminEmail?: string; error?: string },
 ): StoreRecord | null => {
   getRegistryDb()
     .prepare(
@@ -1024,6 +1063,17 @@ export const setStoreDeployStatus = (
        WHERE id = ?`,
     )
     .run(status, meta?.coolifyUuid ?? null, meta?.volumeName ?? null, meta?.adminEmail ?? null, id);
+  if (status === 'failed') {
+    const store = getStoreById(id);
+    recordErrorEvent({
+      source: 'deploy',
+      entityType: 'store',
+      entityId: id,
+      message: meta?.error ?? 'provisioning failed',
+      appVersion: store?.app_version ?? null,
+      environment: store?.environment ?? null,
+    });
+  }
   return getStoreById(id);
 };
 
@@ -1067,6 +1117,16 @@ export const recordConfigResult = (id: number, result: ConfigResultRecord): Stor
     result.status === 'ok' ? 1 : 0,
     id,
   );
+  if (result.status === 'failed') {
+    recordErrorEvent({
+      source: 'config',
+      entityType: 'store',
+      entityId: id,
+      message: result.error ?? 'push failed',
+      appVersion: store.app_version,
+      environment: store.environment,
+    });
+  }
   return getStoreById(id);
 };
 
@@ -1086,7 +1146,12 @@ export const nextLicenceSequence = (id: number): number => {
   return getStoreById(id)?.licence_sequence ?? 1;
 };
 
-export const recordLicencePush = (id: number, status: ConfigStatus): StoreRecord | null => {
+export const recordLicencePush = (
+  id: number,
+  status: ConfigStatus,
+  error?: string | null,
+): StoreRecord | null => {
+  const store = getStoreById(id);
   getRegistryDb()
     .prepare(
       `UPDATE stores SET
@@ -1096,6 +1161,18 @@ export const recordLicencePush = (id: number, status: ConfigStatus): StoreRecord
        WHERE id = ?`,
     )
     .run(status, status === 'ok' ? 1 : 0, id);
+  if (status === 'failed') {
+    // The failure reason used to be dropped on the floor here, leaving a red
+    // badge with nothing behind it — the reason the feed exists.
+    recordErrorEvent({
+      source: 'licence',
+      entityType: 'store',
+      entityId: id,
+      message: error ?? 'licence push failed',
+      appVersion: store?.app_version ?? null,
+      environment: store?.environment ?? null,
+    });
+  }
   return getStoreById(id);
 };
 
@@ -1115,6 +1192,16 @@ export const recordHealthResult = (
        updated_at = datetime('now')
      WHERE id = ?`,
   ).run(status, status === 'up' ? null : (error ?? 'unreachable').slice(0, 500), id);
+  if (status === 'down') {
+    recordErrorEvent({
+      source: 'health',
+      entityType: 'store',
+      entityId: id,
+      message: error ?? 'unreachable',
+      appVersion: store.app_version,
+      environment: store.environment,
+    });
+  }
   return getStoreById(id);
 };
 
@@ -1630,8 +1717,10 @@ export const recordPanelHealth = (
   id: number,
   status: 'up' | 'down',
   appVersion?: string | null,
+  error?: string | null,
 ): PanelRecord | null => {
-  if (!getPanelById(id)) return null;
+  const panel = getPanelById(id);
+  if (!panel) return null;
   getRegistryDb()
     .prepare(
       `UPDATE panels SET
@@ -1642,6 +1731,15 @@ export const recordPanelHealth = (
        WHERE id = ?`,
     )
     .run(status, appVersion ?? null, id);
+  if (status === 'down') {
+    recordErrorEvent({
+      source: 'health',
+      entityType: 'panel',
+      entityId: id,
+      message: error ?? 'unreachable',
+      appVersion: panel.app_version,
+    });
+  }
   return getPanelById(id);
 };
 
@@ -1683,7 +1781,12 @@ export const nextPanelLicenceSequence = (id: number): number => {
   return getPanelById(id)?.licence_sequence ?? 1;
 };
 
-export const recordPanelLicencePush = (id: number, status: ConfigStatus): PanelRecord | null => {
+export const recordPanelLicencePush = (
+  id: number,
+  status: ConfigStatus,
+  error?: string | null,
+): PanelRecord | null => {
+  const panel = getPanelById(id);
   getRegistryDb()
     .prepare(
       `UPDATE panels SET
@@ -1693,13 +1796,22 @@ export const recordPanelLicencePush = (id: number, status: ConfigStatus): PanelR
        WHERE id = ?`,
     )
     .run(status, status === 'ok' ? 1 : 0, id);
+  if (status === 'failed') {
+    recordErrorEvent({
+      source: 'licence',
+      entityType: 'panel',
+      entityId: id,
+      message: error ?? 'licence push failed',
+      appVersion: panel?.app_version ?? null,
+    });
+  }
   return getPanelById(id);
 };
 
 export const setPanelDeployStatus = (
   id: number,
   status: 'not_deployed' | 'provisioning' | 'deployed' | 'failed',
-  meta?: { coolifyUuid?: string; volumeName?: string },
+  meta?: { coolifyUuid?: string; volumeName?: string; error?: string },
 ): PanelRecord | null => {
   getRegistryDb()
     .prepare(
@@ -1711,6 +1823,16 @@ export const setPanelDeployStatus = (
        WHERE id = ?`,
     )
     .run(status, meta?.coolifyUuid ?? null, meta?.volumeName ?? null, id);
+  if (status === 'failed') {
+    const panel = getPanelById(id);
+    recordErrorEvent({
+      source: 'deploy',
+      entityType: 'panel',
+      entityId: id,
+      message: meta?.error ?? 'provisioning failed',
+      appVersion: panel?.app_version ?? null,
+    });
+  }
   return getPanelById(id);
 };
 
@@ -2096,4 +2218,202 @@ export const recordAuditLog = (
 
 export const listAuditLogs = (limit = 100): AuditLogRecord[] =>
   getRegistryDb().prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?').all(limit) as AuditLogRecord[];
+
+// --- Error feed (§30) --------------------------------------------------------
+
+export type ErrorSource = 'health' | 'config' | 'licence' | 'deploy';
+
+export const ERROR_SOURCES: readonly ErrorSource[] = ['health', 'config', 'licence', 'deploy'];
+
+export type ErrorEntityType = 'store' | 'panel';
+
+export interface ErrorEventRecord {
+  id: number;
+  fingerprint: string;
+  source: ErrorSource;
+  entity_type: ErrorEntityType;
+  entity_id: number;
+  message: string;
+  app_version: string | null;
+  environment: string | null;
+  occurrences: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface ErrorEventInput {
+  source: ErrorSource;
+  entityType: ErrorEntityType;
+  entityId: number;
+  message: string;
+  appVersion?: string | null;
+  environment?: string | null;
+}
+
+/** Longest message kept — the same bound the per-store error columns use. */
+const ERROR_MESSAGE_LIMIT = 500;
+
+/**
+ * Normalises a failure message into a stable class and hashes it. Two
+ * occurrences of one fault differ in the parts that identify a single event —
+ * a store's timeout milliseconds, a sequence number, a URL — so those are
+ * replaced before hashing. Everything else is kept, so two genuinely different
+ * faults do not collapse into one group.
+ */
+export const errorFingerprint = (message: string): string => {
+  const normalised = message
+    .toLowerCase()
+    .replace(/\b[0-9a-f]{8,}\b/g, '<id>')
+    .replace(/\d{4}-\d{2}-\d{2}[t ][\d:.]+z?/g, '<ts>')
+    .replace(/https?:\/\/\S+/g, '<url>')
+    // No trailing \b: the volatile part is usually a quantity with a unit
+    // ("timed out after 5000ms"), and a boundary would not match inside it.
+    .replace(/\d+(?:\.\d+)?/g, '<n>')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return createHash('sha1').update(normalised).digest('hex').slice(0, 16);
+};
+
+export const getErrorEventById = (id: number): ErrorEventRecord | null =>
+  (getRegistryDb().prepare('SELECT * FROM error_events WHERE id = ?').get(id) as ErrorEventRecord) ??
+  null;
+
+/**
+ * Records a failure, grouping it with earlier occurrences of the same fault for
+ * the same store or panel. Never throws for a caller's benefit — an error while
+ * recording an error must not replace the real failure the caller is reporting.
+ */
+export const recordErrorEvent = (input: ErrorEventInput): ErrorEventRecord | null => {
+  try {
+    const db = getRegistryDb();
+    const message = input.message.slice(0, ERROR_MESSAGE_LIMIT);
+    const fingerprint = errorFingerprint(message);
+    const existing = db
+      .prepare(
+        `SELECT id FROM error_events
+          WHERE fingerprint = ? AND source = ? AND entity_type = ? AND entity_id = ?`,
+      )
+      .get(fingerprint, input.source, input.entityType, input.entityId) as { id: number } | undefined;
+
+    if (existing) {
+      db.prepare(
+        `UPDATE error_events SET
+           message = ?,
+           app_version = COALESCE(?, app_version),
+           environment = COALESCE(?, environment),
+           occurrences = occurrences + 1,
+           last_seen = datetime('now')
+         WHERE id = ?`,
+      ).run(message, input.appVersion ?? null, input.environment ?? null, existing.id);
+      return getErrorEventById(existing.id);
+    }
+
+    const info = db
+      .prepare(
+        `INSERT INTO error_events
+           (fingerprint, source, entity_type, entity_id, message, app_version, environment)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        fingerprint,
+        input.source,
+        input.entityType,
+        input.entityId,
+        message,
+        input.appVersion ?? null,
+        input.environment ?? null,
+      );
+    return getErrorEventById(Number(info.lastInsertRowid));
+  } catch (err) {
+    // The feed is diagnostic: losing an entry must never replace or mask the
+    // failure the caller is in the middle of reporting.
+    logger.warn(`Could not record error event (${input.source}): ${String(err)}`);
+    return null;
+  }
+};
+
+export interface ErrorGroupRecord {
+  fingerprint: string;
+  /** The most recent occurrence's message — the row an operator reads. */
+  message: string;
+  sources: ErrorSource[];
+  occurrences: number;
+  /** Distinct stores + panels affected, counted apart because ids collide. */
+  entityCount: number;
+  storeCount: number;
+  panelCount: number;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+/**
+ * The feed: one row per distinct fault, newest first. The message is taken from
+ * the latest occurrence so the row shows what the fault looks like now, not
+ * what it looked like the first time.
+ */
+export const listErrorGroups = (limit = 100): ErrorGroupRecord[] => {
+  const rows = getRegistryDb()
+    .prepare(
+      `SELECT
+         g.fingerprint  AS fingerprint,
+         g.occurrences  AS occurrences,
+         g.entity_count AS entity_count,
+         g.store_count  AS store_count,
+         g.panel_count  AS panel_count,
+         g.sources      AS sources,
+         g.first_seen   AS first_seen,
+         g.last_seen    AS last_seen,
+         e.message      AS message
+       FROM (
+         SELECT
+           fingerprint,
+           SUM(occurrences) AS occurrences,
+           COUNT(DISTINCT entity_type || ':' || entity_id) AS entity_count,
+           COUNT(DISTINCT CASE WHEN entity_type = 'store' THEN entity_id END) AS store_count,
+           COUNT(DISTINCT CASE WHEN entity_type = 'panel' THEN entity_id END) AS panel_count,
+           GROUP_CONCAT(DISTINCT source) AS sources,
+           MIN(first_seen) AS first_seen,
+           MAX(last_seen)  AS last_seen
+         FROM error_events
+         GROUP BY fingerprint
+       ) g
+       JOIN error_events e ON e.id = (
+         SELECT e2.id FROM error_events e2
+          WHERE e2.fingerprint = g.fingerprint
+          ORDER BY e2.last_seen DESC, e2.id DESC
+          LIMIT 1
+       )
+       ORDER BY g.last_seen DESC, g.occurrences DESC, g.fingerprint ASC
+       LIMIT ?`,
+    )
+    .all(limit) as Array<{
+    fingerprint: string;
+    occurrences: number;
+    entity_count: number;
+    store_count: number;
+    panel_count: number;
+    sources: string | null;
+    first_seen: string;
+    last_seen: string;
+    message: string;
+  }>;
+
+  return rows.map((r) => ({
+    fingerprint: r.fingerprint,
+    message: r.message,
+    sources: (r.sources ?? '').split(',').filter(Boolean) as ErrorSource[],
+    occurrences: r.occurrences,
+    entityCount: r.entity_count,
+    storeCount: r.store_count,
+    panelCount: r.panel_count,
+    firstSeen: r.first_seen,
+    lastSeen: r.last_seen,
+  }));
+};
+
+/** Every occurrence behind one group, newest first. */
+export const listErrorEvents = (fingerprint: string): ErrorEventRecord[] =>
+  getRegistryDb()
+    .prepare('SELECT * FROM error_events WHERE fingerprint = ? ORDER BY last_seen DESC, id DESC')
+    .all(fingerprint) as ErrorEventRecord[];
 

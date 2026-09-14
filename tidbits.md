@@ -2,6 +2,46 @@
 
 > Prioritised for the next workspace. ~~Struck~~ items are done.
 
+## Deferred SPOG surfaces (2026-09-14, after the Errors page)
+
+Spec: `~/Downloads/vula-control-plane-agent-ui-revision.md` (§25–§36, §39).
+Order is buildable-first; each is its own increment.
+
+- ~~**Errors page (§30)**~~ **shipped 2026-09-14** (`error_events` feed, nav +
+  `ErrorsPage`).
+- **Devices page (§25/§26)** — next. The data is already collected: per-till
+  `deviceId`/`claimed`/`sessionOpen`/`lastSeenAt` sit in
+  `stores.last_telemetry_json`, but `telemetrySummary` deliberately reduces them
+  to counts, so the work is exposing them (`GET /api/devices` or an added field)
+  plus a page. A Head Office panel can appear as an "Office" device with health +
+  `app_version`, but it has **no** `lastSeenAt`. Device actions (rename / rotate
+  token / revoke / force logout / run diagnostics) are **not** buildable — the
+  tenant exposes no per-device command API; ship the page read-only and say so.
+- **Versions page (§32)** — no schema change: aggregate `stores.app_version` /
+  `schema_version` + `panels.app_version` into a distribution with a filter.
+  **"Minimum supported" does not exist** anywhere (no config, no constant) —
+  decide whether it is env, a CP setting, or dropped before building.
+- **Deployments page (§33, read-only)** — `deployment_jobs`/`deployment_job_steps`
+  are durable and already API-exposed, but only **per client**
+  (`GET /api/clients/:id/jobs`). A fleet-wide view needs a new read query. There
+  is no image version/tag or operator recorded on a job; the spec's Version /
+  Operator columns can only be filled from `audit_logs.actor` at best. No rollout
+  controls (§33 "later") — and §33 itself warns against them without permissions
+  and auditing, which the CP does not have (see the RBAC item below).
+- **Blocked — do not start without tenant work:**
+  - **Sync dashboard / Sync Inspector (§28/§29)** — `pendingEvents`,
+    `failedEvents`, `lastSyncAt` and per-till `lastSeenAt` are contracted but
+    **null until za-pos ships device heartbeats**; there is no sync-event store
+    to inspect by `sync_event_id`/`correlation_id`, so §29 has nothing to query.
+  - **Printers page (§27)** — no printer agent exists in the tenant.
+  - **Backups page (§36)** — needs a tenant internal endpoint; za-pos exposes
+    `/api/backups` to its own admins only. Cross-repo (za-pos + CP).
+  - **Logs, Feature Flags (§34), Migrations (§35), Integrations, Services,
+    API Explorer, Webhooks** — no data model at all.
+- **The full grouped nav (§39) is deliberately not implemented** — with only
+  Errors shipped, grouping the bar would create exactly the empty placeholder
+  items §39 forbids. Revisit when three or four surfaces exist.
+
 ## Deferred from the subscription redesign (2026-09-13)
 
 - **The live fleet's plans arrived as `custom`.** Starter/Business/Multi-Store

@@ -11,6 +11,7 @@ import PanelsPage from './pages/PanelsPage';
 import CompaniesPage from './pages/CompaniesPage';
 import PlansPage from './pages/PlansPage';
 import BillingPage from './pages/BillingPage';
+import ErrorsPage from './pages/ErrorsPage';
 
 function RequireOffice({ children }: { children: ReactNode }) {
   if (!getToken()) return <Navigate to="/login" replace />;
@@ -97,6 +98,16 @@ export default function App() {
           <RequireOffice>
             <Layout title="Billing & Invoicing">
               <BillingPage />
+            </Layout>
+          </RequireOffice>
+        }
+      />
+      <Route
+        path="/errors"
+        element={
+          <RequireOffice>
+            <Layout title="Errors">
+              <ErrorsPage />
             </Layout>
           </RequireOffice>
         }

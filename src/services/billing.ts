@@ -151,8 +151,9 @@ export async function pushLicencesForCompany(companyId: number): Promise<{
       recordLicencePush(store.id, 'ok');
       storesUpdated++;
     } catch (err) {
-      recordLicencePush(store.id, 'failed');
-      const msg = `Failed to push licence to store ${store.slug}: ${err instanceof Error ? err.message : String(err)}`;
+      const reason = err instanceof Error ? err.message : String(err);
+      recordLicencePush(store.id, 'failed', reason);
+      const msg = `Failed to push licence to store ${store.slug}: ${reason}`;
       logger.error(msg);
       errors.push(msg);
     }
@@ -185,8 +186,9 @@ export async function pushLicencesForCompany(companyId: number): Promise<{
       recordPanelLicencePush(panel.id, 'ok');
       panelsUpdated++;
     } catch (err) {
-      recordPanelLicencePush(panel.id, 'failed');
-      const msg = `Failed to push licence to panel ${panel.slug}: ${err instanceof Error ? err.message : String(err)}`;
+      const reason = err instanceof Error ? err.message : String(err);
+      recordPanelLicencePush(panel.id, 'failed', reason);
+      const msg = `Failed to push licence to panel ${panel.slug}: ${reason}`;
       logger.error(msg);
       errors.push(msg);
     }

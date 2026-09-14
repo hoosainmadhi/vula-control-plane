@@ -401,14 +401,15 @@ const attemptLicencePush = async (
     recordLicencePush(store.id, 'ok');
     return { ok: true, licencePushStatus: 'ok', sequence };
   } catch (err) {
-    recordLicencePush(store.id, 'failed');
+    const message = err instanceof Error ? err.message : String(err);
+    recordLicencePush(store.id, 'failed', message);
     if (!(err instanceof StoreClientError)) {
       logger.error(`Licence push to store ${store.id} failed unexpectedly: ${String(err)}`);
     }
     return {
       ok: false,
       licencePushStatus: 'failed',
-      error: err instanceof Error ? err.message : String(err),
+      error: message,
     };
   }
 };

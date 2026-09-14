@@ -1,5 +1,55 @@
 # Findings
 
+## 2026-09-14 — what the deferred SPOG set can actually be built on
+
+- **Most of the deferred nav has no data behind it.** Checked each surface
+  against the schema before planning. Buildable now: **Errors** (latest-only
+  per store, hence the new `error_events` table), **Devices** (per-till
+  `deviceId`/`claimed`/`sessionOpen`/`lastSeenAt` are already in
+  `stores.last_telemetry_json` — `telemetrySummary` reduces them to counts, so
+  it needs *exposing*, not collecting), **Versions** (`app_version` /
+  `schema_version` / `last_heartbeat_at` from telemetry, `panels.app_version`),
+  and a **read-only Deployments** page (`deployment_jobs`/`_steps` are durable
+  but exposed only per-client). Blocked: **Sync dashboard/inspector**
+  (`pendingEvents`/`failedEvents`/`lastSyncAt` are reserved nulls until the
+  tenant ships device heartbeats, and there is no sync-event store to inspect),
+  **Printers** (no printer agent exists), **Backups** (needs a tenant internal
+  endpoint; za-pos has only an admin-only `/api/backups`). Spec §39 forbids
+  empty placeholder pages, so the blocked ones were left unbuilt rather than
+  stubbed.
+- **The licence-push failure reason was being thrown away.** `recordLicencePush`
+  wrote a `failed` enum and nothing else; the message existed only in the HTTP
+  response and a log line, so a red licence badge had no explanation anywhere in
+  the database. Same for `setStoreDeployStatus(…, 'failed')`. Both now record
+  the reason into the feed.
+- **`MAX(message)` is not the latest message.** SQLite has no "last value"
+  aggregate, so the grouped feed joins each group to the row `ORDER BY last_seen
+  DESC, id DESC LIMIT 1`. Getting this wrong would have shown the *first*
+  occurrence's text, which is exactly the stale reading the page is meant to
+  avoid.
+- **A nullable column cannot be part of the grouping key.** `stores` and `panels`
+  have independent id sequences, and SQLite treats NULLs as distinct in a unique
+  index — so `(fingerprint, source, store_id, panel_id)` with one of them NULL
+  would never conflict and every occurrence would insert a new row. Hence
+  `entity_type` + `entity_id`, both NOT NULL.
+- **Number normalisation needs no word boundary on the right.** `\b\d+\b` does
+  not match `5000` in `5000ms` (no boundary between the digit and the unit), so
+  the first fingerprint test failed: identical timeouts hashed differently.
+- **The spec's Errors page asks for more than the CP can know.** Fingerprint,
+  frequency, first/last seen and store count are real after this slice; **stack
+  trace and correlation ids are not** — a store's failure reaches the CP as a
+  502 summary string, and nothing propagates a trace. The page shows what exists
+  and does not fake the rest.
+- **Privacy holds by construction.** The feed stores only strings the CP already
+  produced and already persisted in `stores.last_health_error` /
+  `last_config_error`; no tenant payload or raw response body enters it. The
+  failure text a store returns *is* a `{ error }` validation message (§40 line
+  already documented for the store surface).
+- **Stale doc, noticed not fixed:** `CONTEXT.md` §7 still lists "audit trail,
+  DELETE store, automated health sweep" as out of scope, though all three shipped
+  (2026-09-11/12). Left alone rather than widening this slice — flagged here per
+  the repo rule about doc/code disagreement.
+
 ## 2026-09-13 — the pricing redesign: what the code said vs what the brief assumed
 
 - **The working tree already contained a half-finished pricing implementation that

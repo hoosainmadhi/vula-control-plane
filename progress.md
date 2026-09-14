@@ -2,6 +2,60 @@
 
 Dated log of the build.
 
+## 2026-09-14 — SPOG §30: the Errors page (first of the deferred surfaces)
+
+Owner picked the deferred SPOG set; this lands its first slice after committing
+the subscription redesign.
+
+**Why this one first.** A store row keeps only the *latest* failure
+(`last_health_error`, `last_config_error`), and the 2026-09-14 health-probe
+incident made the cost concrete: the panel showed a bare "Offline" badge with no
+reason, undiagnosable from the UI by construction. Grouping, frequency and
+"since when" are the questions the page exists for, and none of them are
+answerable from a single latest-error column.
+
+- **`error_events`** (registryDb + `schema.sql`): one row per
+  `fingerprint × source × entity`, with `occurrences`, `first_seen`,
+  `last_seen`, `app_version`, `environment`. A unique index on that key makes
+  the recorder an upsert, so the table grows with distinct problems, not with
+  probes. `entity_type`/`entity_id` rather than nullable `store_id`/`panel_id`
+  — SQLite treats NULLs as distinct in a unique index, which would have written
+  one row per occurrence and silently defeated the grouping.
+- **Fingerprint** = SHA-1 of the message with volatile detail stripped (ids,
+  timestamps, urls, numbers), so `timed out after 5000ms` groups with
+  `timed out after 100ms` while different faults stay apart. The trailing `\b`
+  had to go: a quantity carries a unit (`5000ms`), and a word boundary does not
+  match inside it.
+- **Recorded from the four real failure paths** — store health down, config push
+  failed, licence push failed, deploy failed — plus panel health and panel
+  licence push. `recordLicencePush`/`recordPanelLicencePush` and
+  `setStoreDeployStatus`/`setPanelDeployStatus` gained the failure reason they
+  previously dropped, and the call sites now pass it.
+- **Recovery never deletes history**: the feed is a timeline and freshness is
+  `last_seen`. **Recording never masks a failure**: `recordErrorEvent` logs and
+  swallows its own errors.
+- **Routes** `GET /api/errors` and `GET /api/errors/:fingerprint` (office-gated,
+  grouped newest first, ties broken by occurrences then fingerprint);
+  `src/routes/errors.ts`, mounted in the API router.
+- **UI**: new **Errors** nav entry and `ErrorsPage` — summary tiles, source
+  filters, the grouped table (message, fingerprints, sources, stores, occurrences,
+  relative last-seen) and a detail modal naming the store or Head Office behind
+  each occurrence and listing version/environment. Store and panel names ride
+  along on load so an occurrence names the thing it came from.
+- Tests: `src/__tests__/errors.test.ts` (13) → CP **173 green (14 suites)**,
+  typecheck + production build clean. Verified live against a scratch registry:
+  two health probes grouped to `occurrences: 2`, the create-time config and
+  licence failures recorded separately, unauthenticated `/api/errors` → 401,
+  and the page rendered with real rows and a working detail modal.
+
+**Not built, and why** (spec §39 forbids empty placeholders): Sync
+dashboard/inspector need device heartbeats and a sync-event store the tenant
+does not ship yet (`pendingEvents`/`failedEvents`/`lastSeenAt` are reserved
+nulls); Printers needs a printer agent that does not exist; Backups needs a
+tenant internal endpoint (za-pos has only admin-only `/api/backups`). Devices,
+Versions and a read-only Deployments page are buildable and are the queued next
+slices (tidbits.md).
+
 ## 2026-09-13 (redesign, later) — a custom plan can carry an agreed amount; plan-row switch
 
 Owner feedback on the shipped Plans screen, two changes:

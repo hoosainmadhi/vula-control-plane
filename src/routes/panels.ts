@@ -122,8 +122,9 @@ const attemptPanelLicencePush = async (
     recordPanelLicencePush(panel.id, 'ok');
     return { ok: true, sequence };
   } catch (err) {
-    recordPanelLicencePush(panel.id, 'failed');
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    const message = err instanceof Error ? err.message : String(err);
+    recordPanelLicencePush(panel.id, 'failed', message);
+    return { ok: false, error: message };
   }
 };
 
@@ -280,7 +281,8 @@ panelsRouter.post(
       await attemptPanelLicencePush(getPanelById(panel.id)!);
       res.json({ ok: true, healthStatus: 'up', checkedAt: updated?.last_health_at ?? null });
     } catch (err) {
-      const updated = recordPanelHealth(panel.id, 'down');
+      const reason = err instanceof Error ? err.message : String(err);
+      const updated = recordPanelHealth(panel.id, 'down', null, reason);
       if (!(err instanceof StoreClientError)) {
         // Unexpected failures are logged; the operator just sees 'down'.
       }
@@ -288,7 +290,7 @@ panelsRouter.post(
         ok: false,
         healthStatus: 'down',
         checkedAt: updated?.last_health_at ?? null,
-        error: err instanceof Error ? err.message : String(err),
+        error: reason,
       });
     }
   }),

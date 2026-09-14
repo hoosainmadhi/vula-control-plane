@@ -373,6 +373,51 @@ Conventions: snake_case columns, CHECK-constrained enums, ISO-ish UTC
 timestamps, JSON text for snapshots. The audit table, the users table and the
 DELETE routes shipped after v1 (see `tidbits.md` for what is still open).
 
+## 5a. Error feed (observability, §30)
+
+A store row keeps only the **latest** failure (`last_health_error`,
+`last_config_error`), which cannot answer the questions the Errors page exists
+for: how often, since when, and how many stores. `error_events` keeps that
+history.
+
+| Column        | Notes                                                                                              |
+| ------------- | -------------------------------------------------------------------------------------------------- |
+| `fingerprint` | SHA-1 (16 hex chars) of the normalised message — the grouping key                                  |
+| `source`      | `health` \| `config` \| `licence` \| `deploy`                                                      |
+| `entity_type` | `store` \| `panel` — an error belongs to one fleet member                                          |
+| `entity_id`   | that member's id                                                                                   |
+| `message`     | the control plane's own technical summary, truncated to 500 chars                                   |
+| `app_version` | the member's version when it failed, when known                                                     |
+| `occurrences` | increments when the same fault recurs                                                               |
+| `first_seen` / `last_seen` | UTC; `last_seen` is the row's freshness                                             |
+
+Rules that matter:
+
+- **The group key is `(fingerprint, source, entity_type, entity_id)`.** A unique
+  index makes the recorder an upsert, so the table grows with the number of
+  distinct problems, not with the number of probes. `entity_type`/`entity_id`
+  rather than nullable `store_id`/`panel_id` because SQLite treats NULLs as
+  distinct in a unique index — a nullable column would silently write one row
+  per occurrence.
+- **The fingerprint strips volatile detail** (ids, timestamps, urls, numbers)
+  before hashing, so `timed out after 5000ms` and `timed out after 100ms` group
+  while two genuinely different faults do not.
+- **Recovery never deletes rows.** The feed is a timeline; a store coming back
+  up leaves its past failures visible with their original `last_seen`.
+- **The reason is now kept where it used to be discarded.** A failed licence
+  push recorded only a `failed` enum; it now records its message too.
+- **Privacy (§40):** the only thing stored is the control plane's own summary —
+  the same strings already held in the store's error columns. Merchant payloads
+  and raw response bodies are never persisted or shown, and the feed is
+  office-authenticated.
+- **Recording never masks a failure.** `recordErrorEvent` swallows and logs its
+  own errors, so a problem writing the feed cannot replace the real failure the
+  caller is reporting.
+
+Endpoints: `GET /api/errors` returns the grouped feed (newest first, ties broken
+by occurrence count then fingerprint) and `GET /api/errors/:fingerprint` returns
+one group with every occurrence behind it.
+
 ## 6. Auth & session conventions
 
 - Single office admin from env; password bcrypt-hashed once at boot, compared

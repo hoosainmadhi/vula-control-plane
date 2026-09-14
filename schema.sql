@@ -238,3 +238,27 @@ CREATE INDEX IF NOT EXISTS idx_deployment_jobs_company ON deployment_jobs(compan
 CREATE INDEX IF NOT EXISTS idx_deployment_job_steps_job ON deployment_job_steps(job_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id);
 
+-- Grouped failure feed (§30 observability). One row per fingerprint × source ×
+-- entity, incremented when the same fault recurs, so the table grows with the
+-- number of distinct problems rather than with the number of probes. Recovery
+-- never deletes rows: it is a timeline, and freshness is last_seen. Technical
+-- summaries only — never merchant payloads (§40).
+CREATE TABLE IF NOT EXISTS error_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  fingerprint TEXT NOT NULL,
+  source      TEXT NOT NULL
+    CHECK (source IN ('health', 'config', 'licence', 'deploy')),
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('store', 'panel')),
+  entity_id   INTEGER NOT NULL,
+  message     TEXT NOT NULL,
+  app_version TEXT,
+  environment TEXT,
+  occurrences INTEGER NOT NULL DEFAULT 1,
+  first_seen  TEXT NOT NULL DEFAULT (datetime('now')),
+  last_seen   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_error_events_group
+  ON error_events(fingerprint, source, entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_error_events_last_seen ON error_events(last_seen);
+

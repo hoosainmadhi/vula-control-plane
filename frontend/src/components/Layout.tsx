@@ -17,6 +17,7 @@ const NAV: NavItem[] = [
   { to: '/', label: 'Clients' },
   { to: '/plans', label: 'Plans' },
   { to: '/billing', label: 'Billing' },
+  { to: '/errors', label: 'Errors' },
 ];
 
 export default function Layout({ title, children }: LayoutProps) {

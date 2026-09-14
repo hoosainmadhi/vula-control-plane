@@ -148,7 +148,20 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       like /stores and /companies). Tabs: Overview · Head Office · Stores ·
       Deployments.
       **Deferred (spec "Next"/"Later"):** Devices page,
-      sync dashboard/inspector, errors, backups, versions/deployments.
+      sync dashboard/inspector, backups, versions/deployments (errors shipped
+      2026-09-14 — below).
+- [x] **SPOG — Errors page** (2026-09-14, §30 observability): the panel was
+      blind by construction — a store's row keeps only the *latest* failure, so
+      "how often, since when, how many stores" was unanswerable, and the
+      2026-09-14 health-probe incident showed a bare "Offline" with no reason.
+      New `error_events` feed (one row per fingerprint × source × entity,
+      incremented on repeat), recorded from the four real failure paths —
+      store health, config push, licence push (**whose reason used to be
+      discarded**, now kept) and deploy. `GET /api/errors` (grouped, newest
+      first) + `GET /api/errors/:fingerprint` (a group with every occurrence);
+      new **Errors** nav entry and page with source filters and a detail modal.
+      History survives recovery; only the CP's own technical summaries are
+      stored (§40). Doctrine: CONTEXT §5a. Tests: CP **173 green (14 suites)**.
 - [x] **SPOG navigation & drill-down** (2026-09-12/13, owner-directed): the
       owner removed the Stores nav link the same day — **stores are reached
       through the client**: every client card lists its stores as chips

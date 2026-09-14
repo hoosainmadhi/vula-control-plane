@@ -81,13 +81,14 @@ export async function runHealthSweep(): Promise<HealthSweepSummary> {
         recordPanelHealth(panel.id, 'up', json?.version ?? null);
         summary.upCount++;
       } else {
-        recordPanelHealth(panel.id, 'down');
+        recordPanelHealth(panel.id, 'down', null, `Panel /health answered HTTP ${res.status}`);
         summary.downCount++;
       }
     } catch (err) {
-      recordPanelHealth(panel.id, 'down');
+      const reason = err instanceof Error ? err.message : String(err);
+      recordPanelHealth(panel.id, 'down', null, reason);
       summary.downCount++;
-      summary.errors.push(`Panel ${panel.slug} health down: ${err instanceof Error ? err.message : String(err)}`);
+      summary.errors.push(`Panel ${panel.slug} health down: ${reason}`);
     }
   }
 

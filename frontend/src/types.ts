@@ -403,3 +403,46 @@ export interface ClientDetailResponse {
     steps: DeploymentJobStep[];
   } | null;
 }
+
+// --- Error feed (§30 observability) ------------------------------------------
+
+/** Which subsystem failed. */
+export type ErrorSource = 'health' | 'config' | 'licence' | 'deploy';
+
+/**
+ * One distinct fault with its occurrences folded in. `message` is the most
+ * recent occurrence's text, so the row reads as the fault looks now.
+ */
+export interface ErrorGroup {
+  fingerprint: string;
+  message: string;
+  sources: ErrorSource[];
+  occurrences: number;
+  /** Distinct stores + panels affected. */
+  entityCount: number;
+  storeCount: number;
+  panelCount: number;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+/** A single occurrence of a fault, for the group detail view. */
+export interface ErrorEvent {
+  id: number;
+  fingerprint: string;
+  source: ErrorSource;
+  entityType: 'store' | 'panel';
+  entityId: number;
+  message: string;
+  appVersion: string | null;
+  environment: string | null;
+  occurrences: number;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+export interface ErrorGroupDetail {
+  ok: true;
+  group: ErrorGroup;
+  events: ErrorEvent[];
+}

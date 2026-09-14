@@ -55,7 +55,8 @@ za-pos-control-plane/
 │   ├── config/
 │   │   ├── env.ts         # typed env (PORT, CP_DB_PATH, OFFICE_ADMIN_*, JWT_*)
 │   │   └── registryDb.ts  # DDL (stores, plans, companies, subscriptions,
-│   │                      # licences, invoices, panels, jobs, audit), lazy
+│   │                      # licences, invoices, panels, jobs, audit,
+│   │                      # error_events), lazy
 │   │                      # singleton (WAL), CRUD + migrations
 │   ├── app.ts             # createApp(): headers, /health, /api, SPA, errors
 │   ├── middleware/
@@ -63,7 +64,7 @@ za-pos-control-plane/
 │   │   └── error.ts       # notFound + one { error, code? } handler (err.status)
 │   ├── routes/            # auth.ts (login), clients.ts (client-first wizard +
 │   │                      # subscription), stores.ts, companies.ts (+ plans),
-│   │                      # panels.ts, billing.ts
+│   │                      # panels.ts, billing.ts, errors.ts (failure feed §30)
 │   ├── services/          # subscriptions (billing state + entitlements),
 │   │                      # pricing (THE recurring calculator),
 │   │                      # terminalLicences (purchase + allocations + caps),
@@ -82,7 +83,8 @@ za-pos-control-plane/
 │       ├── lib/money.ts   # cents → ZAR, price labels (one formatter, all screens)
 │       ├── components/    # Layout, Modal, StatusBadge, Spinner, ErrorBox, cards
 │       ├── pages/         # Clients (+wizard), ClientDetail, StoreDetail, Plans,
-│       │                  # Billing, Companies (advanced), Panels (advanced)
+│       │                  # Billing, Companies (advanced), Panels (advanced),
+│       │                  # Errors (the §30 failure feed)
 │       └── types.ts       # camelCase mirrors of the API types
 └── prompts/
     └── deploy-coolify-control-plane.md  # runbook: deploy stores + this CP
@@ -151,6 +153,8 @@ ambiguity alive. See `CONTEXT.md` §2a.
 | GET/POST `/billing/invoices`                 | office                          | invoices with their pricing evidence (`terminalCount` × `terminalPriceCents`, `setupFeeCents`); an amountless invoice for a custom-priced client is 400 `custom_pricing_requires_amount`       |
 | POST `/billing/invoices/:id/pay` · `/cancel` | office                          | settlement (advances `paid_through`, marks the onboarding charge paid, re-pushes licences) / cancel                                                                                            |
 | POST `/billing/renew-check`                  | office                          | renewal sweep: recurring-only invoices, explicit settlement, custom-priced clients skipped                                                                                                    |
+| GET `/errors`                                | office                          | grouped failure feed (§30): fingerprint, message, sources, occurrences, stores/head-offices hit, first/last seen                                                                              |
+| GET `/errors/:fingerprint`                   | office                          | one fault with every occurrence behind it (entity, source, times, version, environment); 404 on an unknown fingerprint                                                                        |
 | GET `/health`                                | public                          | liveness (Coolify healthcheck)                                                                                                                                                                |
 
 ## Testing conventions
