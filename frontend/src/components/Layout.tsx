@@ -19,6 +19,7 @@ const NAV: NavItem[] = [
   { to: '/billing', label: 'Billing' },
   { to: '/devices', label: 'Devices' },
   { to: '/versions', label: 'Versions' },
+  { to: '/deployments', label: 'Deployments' },
   { to: '/errors', label: 'Errors' },
 ];
 

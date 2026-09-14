@@ -8,6 +8,7 @@ import { clientsRouter } from './clients.js';
 import { errorsRouter } from './errors.js';
 import { devicesRouter } from './devices.js';
 import { versionsRouter } from './versions.js';
+import { deploymentsRouter } from './deployments.js';
 
 export const apiRouter = Router();
 
@@ -21,4 +22,5 @@ apiRouter.use('/billing', billingRouter);
 apiRouter.use('/errors', errorsRouter);
 apiRouter.use('/devices', devicesRouter);
 apiRouter.use('/versions', versionsRouter);
+apiRouter.use('/deployments', deploymentsRouter);
 

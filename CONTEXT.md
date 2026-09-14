@@ -471,6 +471,34 @@ has one current build, overwritten on every telemetry read, so the page answers
 - Environment counts on a row sum to its store count; panel counts sit outside
   them and are shown separately.
 
+## 5d. Deployments (SPOG §33, read-only)
+
+`GET /api/deployments` is the fleet-wide view of `deployment_jobs` — until now
+the orchestration history was only reachable per client
+(`GET /api/clients/:id/jobs`). Newest first, with a step tally computed in one
+grouped query (`deploymentStepCounts`) rather than per job.
+
+`GET /api/deployments/:id` adds the steps.
+
+- **`stepCounts` and `steps` are deliberately different keys.** The list returns
+  `stepCounts` (totals); the detail returns `steps` (the rows). One key cannot
+  carry both meanings without lying about one of them.
+- **What a job does not record, the page does not show.** There is no image
+  version/tag on a job, no `environment` column, and no operator — jobs carry
+  `type`, `status`, `error`, `started_at`, `completed_at` only. So the spec's
+  Version, Environment and Operator columns are omitted rather than guessed at
+  (an operator could only be inferred from `audit_logs.actor`, which is not
+  joined here). The page footer says so.
+- **Target comes from the steps**, which carry `resource_type` + `resource_id`
+  (a store, a Head Office, wiring, a licence…) and, for some, `metadata_json`.
+- **Warnings are real and worth showing:** a step can be `complete` while having
+  recorded best-effort failures in `warnings_json` (e.g. a branch token that
+  could not be verified). The detail surfaces them next to the step.
+- **Read-only, and no rollout controls.** §33's canary/pause/rollback are
+  explicitly "later" and the spec itself warns against them without permissions
+  and auditing — which the control plane does not have (it is a single office
+  JWT; see the RBAC item in tidbits.md).
+
 ## 6. Auth & session conventions
 
 - Single office admin from env; password bcrypt-hashed once at boot, compared

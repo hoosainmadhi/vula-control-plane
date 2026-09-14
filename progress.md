@@ -2,6 +2,31 @@
 
 Dated log of the build.
 
+## 2026-09-14 — SPOG §33: the Deployments page (fourth deferred surface)
+
+- **Fleet-wide for the first time.** `deployment_jobs`/`_steps` were durable from
+  the start but only ever exposed per client; `GET /api/deployments` lists every
+  job newest first with a step tally computed in **one grouped query**
+  (`deploymentStepCounts`) rather than a step query per job, and
+  `GET /api/deployments/:id` returns the steps.
+- **`stepCounts` vs `steps`.** The list returns tallies, the detail returns rows.
+  Sharing one key would have made it mean two things, so they are named apart.
+- **What a job doesn't record is not shown.** There is no image version, no
+  `environment`, and no operator on a job — so the spec's Version / Environment /
+  Operator columns are omitted rather than inferred (the footer says so). Target
+  does exist, from the steps' `resource_type` + `resource_id`.
+- **Warnings are surfaced.** A step can be `complete` while carrying best-effort
+  failures in `warnings_json`; the detail shows them beside the step. Verified
+  live: a real client wizard run produced a 4-step job where
+  `store_deploy_urban-threads` completed with 2 warnings and `issue_licences`
+  with 1 — exactly the kind of half-success that a bare status pill hides.
+- **No rollout controls.** §33's canary/pause/rollback are "later" and the spec
+  warns against them without permissions and auditing; the CP has a single office
+  JWT and no RBAC (tidbits.md).
+- Tests: `src/__tests__/deployments.test.ts` (7) → CP **195 green (17 suites)**,
+  typecheck + production build clean. Page verified live against a wizard-created
+  client. Doctrine: CONTEXT §5d.
+
 ## 2026-09-14 — SPOG §32: the Versions page (third deferred surface)
 
 - **`GET /api/versions`** aggregates what telemetry already wrote: each store's

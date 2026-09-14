@@ -66,7 +66,8 @@ za-pos-control-plane/
 │   │                      # subscription), stores.ts, companies.ts (+ plans),
 │   │                      # panels.ts, billing.ts, errors.ts (failure feed §30),
 │   │                      # devices.ts (fleet devices §25),
-│   │                      # versions.ts (build distribution §32)
+│   │                      # versions.ts (build distribution §32),
+│   │                      # deployments.ts (job history §33, read-only)
 │   ├── services/          # subscriptions (billing state + entitlements),
 │   │                      # pricing (THE recurring calculator),
 │   │                      # terminalLicences (purchase + allocations + caps),
@@ -87,7 +88,8 @@ za-pos-control-plane/
 │       ├── components/    # Layout, Modal, StatusBadge, Spinner, ErrorBox, cards
 │       ├── pages/         # Clients (+wizard), ClientDetail, StoreDetail, Plans,
 │       │                  # Billing, Companies (advanced), Panels (advanced),
-│       │                  # Devices (§25), Versions (§32), Errors (§30 feed)
+│       │                  # Devices (§25), Versions (§32), Deployments (§33),
+│       │                  # Errors (§30 feed)
 │       └── types.ts       # camelCase mirrors of the API types
 └── prompts/
     └── deploy-coolify-control-plane.md  # runbook: deploy stores + this CP
@@ -160,6 +162,8 @@ ambiguity alive. See `CONTEXT.md` §2a.
 | GET `/errors/:fingerprint`                   | office                          | one fault with every occurrence behind it (entity, source, times, version, environment); 404 on an unknown fingerprint                                                                        |
 | GET `/devices`                               | office                          | every configured till of every store (claimed or not) plus one entry per Head Office (§25); derived from roster + last telemetry, read-only                                                   |
 | GET `/versions`                              | office                          | fleet build distribution (§32): version → stores/panels + environments + members, schema spread, most-deployed per environment; no minimum-supported policy (see tidbits)                       |
+| GET `/deployments`                           | office                          | every orchestrated deployment across the fleet, newest first (§33, read-only) with a one-query step tally                                                                                     |
+| GET `/deployments/:id`                       | office                          | one job with its steps — status, attempts, warnings, error; 404 on an unknown job                                                                                                             |
 | GET `/health`                                | public                          | liveness (Coolify healthcheck)                                                                                                                                                                |
 
 ## Testing conventions

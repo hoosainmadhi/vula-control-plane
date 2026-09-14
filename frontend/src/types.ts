@@ -516,3 +516,50 @@ export interface VersionsView {
     panelsReporting: number;
   };
 }
+
+// --- Deployments (§33) -------------------------------------------------------
+// The client detail page still reads raw snake_case job rows; these are the
+// camelCase shapes of the fleet-wide Releases > Deployments surface.
+
+export type DeploymentJobStatus = 'pending' | 'running' | 'complete' | 'failed';
+export type DeploymentStepStatus = 'pending' | 'running' | 'complete' | 'failed' | 'skipped';
+
+export interface DeploymentStepCounts {
+  total: number;
+  failed: number;
+  complete: number;
+  skipped: number;
+}
+
+export interface DeploymentSummary {
+  id: number;
+  type: string;
+  status: DeploymentJobStatus;
+  error: string | null;
+  companyId: number;
+  companyName: string;
+  startedAt: string;
+  completedAt: string | null;
+  /** Tallies only — the detail route's `steps` is the row list. */
+  stepCounts: DeploymentStepCounts;
+}
+
+export interface DeploymentStepView {
+  id: number;
+  stepKey: string;
+  resourceType: string;
+  resourceId: number | null;
+  status: DeploymentStepStatus;
+  attempts: number;
+  error: string | null;
+  /** Best-effort operations that did not succeed while the step still completed. */
+  warnings: string[];
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface DeploymentDetail {
+  ok: true;
+  job: DeploymentSummary;
+  steps: DeploymentStepView[];
+}

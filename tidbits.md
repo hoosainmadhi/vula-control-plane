@@ -15,14 +15,11 @@ Order is buildable-first; each is its own increment.
   `VersionsPage`). **Still open: the "minimum supported version" policy** — the
   page omits it because nothing defines it. Decide where it lives (env var, a CP
   setting, or a plan column) and who guarantees it before adding the line.
-- **Deployments page (§33, read-only)** — next.
-  `deployment_jobs`/`deployment_job_steps` are durable and already API-exposed,
-  but only **per client**
-  (`GET /api/clients/:id/jobs`). A fleet-wide view needs a new read query. There
-  is no image version/tag or operator recorded on a job; the spec's Version /
-  Operator columns can only be filled from `audit_logs.actor` at best. No rollout
-  controls (§33 "later") — and §33 itself warns against them without permissions
-  and auditing, which the CP does not have (see the RBAC item below).
+- ~~**Deployments page (§33)**~~ **shipped 2026-09-14** (`GET /api/deployments`,
+  nav + `DeploymentsPage`, read-only). **Still open: a job records no image
+  version, environment or operator**, so those spec columns are omitted; adding
+  them means changing the orchestrator's writes, since `deployment_jobs` has no
+  such columns today.
 - **Blocked — do not start without tenant work:**
   - **Sync dashboard / Sync Inspector (§28/§29)** — `pendingEvents`,
     `failedEvents`, `lastSyncAt` and per-till `lastSeenAt` are contracted but
@@ -33,9 +30,14 @@ Order is buildable-first; each is its own increment.
     `/api/backups` to its own admins only. Cross-repo (za-pos + CP).
   - **Logs, Feature Flags (§34), Migrations (§35), Integrations, Services,
     API Explorer, Webhooks** — no data model at all.
-- **The full grouped nav (§39) is deliberately not implemented** — with three
-  surfaces shipped it is close, but the remaining items in the spec's groups have
-  no data. Revisit when Deployments lands.
+- **The grouped nav (§39) is now the obvious follow-up, and the owner's call.**
+  Four surfaces shipped (Devices, Versions, Deployments, Errors) on top of
+  Clients/Plans/Billing, so the flat bar is seven items and the spec's groups
+  (FLEET, RELEASES, OBSERVABILITY, PLATFORM…) would read better. It is a design
+  change to the shell, not a data problem — but the spec's other groups
+  (OPERATIONS/Health/Sync/Jobs, DEVELOPER/Diagnostics/Sync Inspector/API
+  Explorer/Webhooks) still have no data, so only the groups holding shipped
+  surfaces should be introduced.
 
 ## Deferred from the subscription redesign (2026-09-13)
 

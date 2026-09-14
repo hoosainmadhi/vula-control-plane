@@ -2116,6 +2116,41 @@ export const listDeploymentJobsForCompany = (companyId: number): DeploymentJobRe
     .prepare('SELECT * FROM deployment_jobs WHERE company_id = ? ORDER BY id DESC')
     .all(companyId) as DeploymentJobRecord[];
 
+/** Every job in the fleet, newest first — the Releases > Deployments view (§33). */
+export const listAllDeploymentJobs = (): DeploymentJobRecord[] =>
+  getRegistryDb().prepare('SELECT * FROM deployment_jobs ORDER BY id DESC').all() as DeploymentJobRecord[];
+
+export interface DeploymentStepCounts {
+  total: number;
+  failed: number;
+  complete: number;
+  skipped: number;
+}
+
+/**
+ * Per-job step tallies in one query, so the fleet's Deployments list does not
+ * run a step query per job.
+ */
+export const deploymentStepCounts = (): Map<number, DeploymentStepCounts> => {
+  const rows = getRegistryDb()
+    .prepare(
+      `SELECT job_id AS job_id,
+              COUNT(*)                                       AS total,
+              SUM(CASE WHEN status = 'failed'  THEN 1 ELSE 0 END) AS failed,
+              SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS complete,
+              SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) AS skipped
+         FROM deployment_job_steps
+        GROUP BY job_id`,
+    )
+    .all() as Array<{ job_id: number; total: number; failed: number; complete: number; skipped: number }>;
+  return new Map(
+    rows.map((r) => [
+      r.job_id,
+      { total: r.total, failed: r.failed, complete: r.complete, skipped: r.skipped },
+    ]),
+  );
+};
+
 export const createDeploymentStep = (
   jobId: number,
   stepKey: string,

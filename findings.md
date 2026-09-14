@@ -1,5 +1,31 @@
 # Findings
 
+## 2026-09-14 — Deployments: the half-success a status pill hides
+
+- **The orchestration history was already durable and already detailed** — it was
+  simply only reachable per client, so nothing new had to be recorded to build
+  §33. Same lesson as Devices: check what exists before collecting more.
+- **A `complete` step is not necessarily a clean step.** `deployment_job_steps`
+  carries `warnings_json` for best-effort operations that failed while the step
+  still succeeded. A live wizard run showed `store_deploy_urban-threads` complete
+  with 2 warnings and `issue_licences` with 1; a page that renders only
+  status pills would report that deployment as flawless. The detail view shows
+  the warnings inline.
+- **One key cannot mean two things.** The first cut returned `steps` as tallies
+  on the list and as rows on the detail. Renamed to `stepCounts` on the list
+  before it shipped — the kind of ambiguity that is cheap to fix now and
+  expensive once a page depends on it.
+- **Jobs carry no version, environment or operator.** `deployment_jobs` has
+  `type`, `status`, `error`, `started_at`, `completed_at` and nothing else; the
+  image deployed is not recorded, and `audit_logs.actor` is 'office' for whoever
+  was signed in. The spec's Version/Environment/Operator columns are therefore
+  omitted rather than filled from a guess. If those columns are wanted, the
+  orchestrator has to start recording them at deploy time — a write-side change,
+  not a display one.
+- **The step tally needed one query, not N.** `listStepsForJob` per job would
+  have been a query per row on the fleet page; a single `GROUP BY job_id` gives
+  the counts for every job at once.
+
 ## 2026-09-14 — Versions: what telemetry can and cannot answer
 
 - **There is no version history, only a current value.** `app_version` and

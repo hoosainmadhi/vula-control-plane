@@ -147,8 +147,19 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       /head-offices fleet page stays reachable by URL for panel registration,
       like /stores and /companies). Tabs: Overview · Head Office · Stores ·
       Deployments.
-      **Deferred (spec "Next"/"Later"):** sync dashboard/inspector, backups,
-      deployments (errors, devices and versions shipped 2026-09-14 — below).
+      **Deferred (spec "Next"/"Later"):** sync dashboard/inspector, backups —
+      errors, devices, versions and deployments shipped 2026-09-14 below.
+      The spec's grouped nav (§39) is the obvious follow-up now that four
+      surfaces exist.
+- [x] **SPOG — Deployments page** (2026-09-14, §33, read-only): `GET
+      /api/deployments` exposes the orchestration history fleet-wide (until now
+      only per client) with a one-query step tally, and
+      `GET /api/deployments/:id` adds the steps (status, attempts, warnings,
+      error). A job records no image version, environment or operator — those
+      spec columns are omitted rather than guessed. No rollout controls: §33
+      warns against them without permissions and auditing the CP does not have.
+      Page + nav + status filter + step modal. Doctrine: CONTEXT §5d. Tests: CP
+      **195 green (17 suites)**.
 - [x] **SPOG — Versions page** (2026-09-14, §32): `GET /api/versions` aggregates
       the build each registered member runs (stores' `app_version`/
       `schema_version`, panels' `app_version`) into a distribution with its
