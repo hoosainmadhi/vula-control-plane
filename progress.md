@@ -1129,3 +1129,46 @@ supermarket`); UI labels it "Store type"; default `general` (matches the
   restarted onto the rebuilt tenant bundle. Fleet = general (everyday-retail
   :3245), clothing (urban-threads :3246), spares (brake-bolt-spares :3247),
   hardware (builders-hardware :3248).
+## 2026-09-14 — demo registry rebuilt: 10 clients, 9 stores, nothing unassigned
+
+Owner: "remove all plans and stores and reseed with new data, use same Company
+names, no 'Unassigned — no client'." The registry had accumulated 16 store rows
+for 9 real deployments — 7 pointed at nothing (3 Kloof on production domains, 2
+Cresta, 2 AHK whose URL was `https://ahk-dbn-gw.localhost:3254`, https on a local
+port) — and 5 of the 9 live stores had no client at all.
+
+**New tool: `scripts/reseed-fleet.ts`** (also `--dry-run`). It reads each store's
+env file (`PORT`, `CONTROL_PLANE_TOKEN`) and its own database (`store_name`,
+`vertical`, till count from `terminals`) and recreates the registry through the
+control plane's API — so nothing is invented, and the panel and the store cannot
+disagree. It refuses a non-empty registry unless `--force`, and it validates that
+every store's tills fit its client's plan ceiling *before* writing anything (that
+check caught the real ceilings: the freshly seeded tiers cap at 2 / 10 / 10 / 99).
+
+Adopting the env's existing token is the point: a minted one would 401 every push
+and show the whole fleet Offline while each store API was healthy — the failure
+mode the fleet already hit once on 2026-09-14. Every store reported `config=ok`,
+which is the proof the tokens match.
+
+Result: **10 clients · 9 stores · 5 Head Offices · 0 unassigned**. Kloof Auto
+Spares, Cresta Grocers and AHK Spares keep their names (chosen by the owner) and
+hold a Head Office panel each, but own no store. Plans reseeded to the four
+defaults (the three Vula Market tiers are gone) and invoices/payments cleared.
+Store databases themselves were left untouched.
+
+Store base URLs are now `http://<slug>.localhost:<port>`; a health sweep over
+them returns 9 stores up, 1 Head Office up, and the 4 panels that have no local
+deployment down (expected: hm-spares-ho's :3262 is not started, and the three
+production panels point at domains that are not live).
+
+Two consequences worth the owner's attention:
+
+- **Starter caps at 2 tills**, so the 3-till demo stores (Brake & Bolt Spares,
+  Builders Hardware) cannot buy the entry tier and sit on Business.
+- **Everyday Retail's 25 tills exceed every priced tier**, so it had to go on
+  Enterprise — which is `custom`-priced, meaning no rate and no automatic
+  invoice. Raise a priced tier's ceiling, or lower that store's tills, to show it
+  on a normal plan.
+
+The old registry is preserved at `~/vula-store-data/backups/pre-reseed/`
+(`.db` + `-wal`; SQLite needs both).

@@ -80,6 +80,7 @@ za-pos-control-plane/
 │   └── __tests__/         # env-setup.ts, helpers.ts + suites (*.test.ts)
 ├── scripts/
 │   ├── dev-store-stub.ts  # stand-in tenant internal API until za-pos ships it
+│   ├── reseed-fleet.ts    # rebuild the demo registry from the live deployments
 │   └── smoke-test.sh      # curl boot smoke against :3240 + stub :3299
 ├── frontend/              # React 19 + Vite + Tailwind v4 (own package)
 │   └── src/
