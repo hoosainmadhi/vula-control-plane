@@ -1240,3 +1240,32 @@ at the house default.
 Verified on the live registry: after a restart the catalogue reads as the eight
 name-derived codes and all ten clients kept their plan. Tests: **195 green
 across 17 suites**.
+
+## 2026-09-14 — nine new branches, and the reseed tool made re-runnable
+
+Owner: the merchants whose Head Office had no branches (Kloof Auto Spares,
+Cresta Grocers, AHK Spares) should get three stores each — jhb, dbn, ct — with
+data; and `kloof-autu-spares` was a typo for `kloof-auto-spares`.
+
+- **Typo fixed** in the registry (company slug, panel slug, panel name and
+  base_url), the env file and database file on disk, `fleet.sh`, the readme and
+  this tool. Verified: `http://kloof-auto-spares-ho.localhost:3264` answers. (The
+  old name still answers too — `*.localhost` all resolves to loopback, so the
+  hostname is a label, not a virtual host.)
+- **Nine stores created** (`fleet.sh create`, which also provisions each branch's
+  Head Office token), each seeded with the retail demo dataset — 26 products and
+  52 orders — and their `store_name` and `vertical` restored afterwards, because
+  that seeder hardcodes "Kasi Fresh Mart" and its `--force` wipe resets the
+  vertical to the default. Three tills for each JHB branch, two for DBN and CT.
+- **`reseed-fleet.ts` is now idempotent**: it reuses existing clients, skips
+  already-registered stores, and updates panels in place (by numeric id — the
+  panel routes do not accept a slug). It refuses only a registry holding stores
+  it does not manage, and the dry run prints the whole plan without writing.
+- Result: **18 stores · 10 clients · 5 Head Offices · 0 unassigned**, 64 tills
+  plus 5 offices, and a health sweep reporting **23 up, 0 down**.
+
+Still outstanding: the panels do not yet list their branches. `branch_stores` is
+populated by the control plane's topology wiring (or by hand on the panel's
+Stores page), and neither the reseed tool nor the store-create path does it —
+each new branch's `head_office_token` is provisioned on the store side but never
+registered with its merchant's panel.

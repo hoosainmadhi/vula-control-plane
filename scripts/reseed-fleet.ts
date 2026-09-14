@@ -81,6 +81,9 @@ interface StoreSpec {
   /** Cap the store's tills at this (the plan ceiling), pushing it down if it is
    *  configured for more. Owner-approved for Everyday Retail: 25 -> 20. */
   maxTills?: number;
+  /** The tills to register when the store's own database cannot say: the demo
+   *  seeder wipes the terminals table, so a just-seeded deployment reports none. */
+  tills?: number;
 }
 
 /** One merchant = one client account = one plan. Slugs are kept from the old
@@ -94,7 +97,7 @@ const CLIENTS: Array<{ slug: string; name: string; plan: string; billingEmail: s
   { slug: 'medisave-pharmacy', name: 'MediSave Pharmacy', plan: 'vula-market', billingEmail: 'ops@medisave.test' },
   { slug: 'mydiner', name: 'myDiner', plan: 'vula-branch', billingEmail: 'ops@mydiner.test' },
   // Kept as client names: they hold a Head Office panel but no local store.
-  { slug: 'kloof-autu-spares', name: 'Kloof Auto Spares', plan: 'vula-spares-network', billingEmail: 'ops@kloof-auto.test' },
+  { slug: 'kloof-auto-spares', name: 'Kloof Auto Spares', plan: 'vula-spares-network', billingEmail: 'ops@kloof-auto.test' },
   { slug: 'cresta-grocers', name: 'Cresta Grocers', plan: 'vula-market-plus', billingEmail: 'ops@cresta-grocers.test' },
   { slug: 'ahk-spares', name: 'AHK Spares', plan: 'vula-spares-network', billingEmail: 'ops@ahk-spares.test' },
 ];
@@ -109,6 +112,16 @@ const STORES: StoreSpec[] = [
   { cpSlug: 'medisave-pharmacy', envSlug: 'medisave-pharmacy', client: 'medisave-pharmacy' },
   { cpSlug: 'hm-spares', envSlug: 'hm-spares', client: 'hm-spares' },
   { cpSlug: 'mydiner', envSlug: 'mydiner', client: 'mydiner' },
+  // Merchants whose panel had no branches: three each, one per city (owner).
+  { cpSlug: 'kloof-auto-spares-jhb', envSlug: 'kloof-auto-spares-jhb', client: 'kloof-auto-spares', tills: 3 },
+  { cpSlug: 'kloof-auto-spares-dbn', envSlug: 'kloof-auto-spares-dbn', client: 'kloof-auto-spares', tills: 2 },
+  { cpSlug: 'kloof-auto-spares-ct', envSlug: 'kloof-auto-spares-ct', client: 'kloof-auto-spares', tills: 2 },
+  { cpSlug: 'cresta-grocers-jhb', envSlug: 'cresta-grocers-jhb', client: 'cresta-grocers', tills: 3 },
+  { cpSlug: 'cresta-grocers-dbn', envSlug: 'cresta-grocers-dbn', client: 'cresta-grocers', tills: 2 },
+  { cpSlug: 'cresta-grocers-ct', envSlug: 'cresta-grocers-ct', client: 'cresta-grocers', tills: 2 },
+  { cpSlug: 'ahk-spares-jhb', envSlug: 'ahk-spares-jhb', client: 'ahk-spares', tills: 3 },
+  { cpSlug: 'ahk-spares-dbn', envSlug: 'ahk-spares-dbn', client: 'ahk-spares', tills: 2 },
+  { cpSlug: 'ahk-spares-ct', envSlug: 'ahk-spares-ct', client: 'ahk-spares', tills: 2 },
 ];
 
 /**
@@ -120,7 +133,7 @@ const STORES: StoreSpec[] = [
 const PANELS: Array<{ slug: string; name: string; client: string; port: number }> = [
   { slug: 'urban-threads-ho', name: 'Urban Threads Head Office', client: 'urban-threads', port: 3260 },
   { slug: 'hm-spares-ho', name: 'HM Spares HO', client: 'hm-spares', port: 3262 },
-  { slug: 'kloof-autu-spares-ho', name: 'Kloof Autu Spares Head Office', client: 'kloof-autu-spares', port: 3264 },
+  { slug: 'kloof-auto-spares-ho', name: 'Kloof Auto Spares Head Office', client: 'kloof-auto-spares', port: 3264 },
   { slug: 'cresta-grocers-ho', name: 'Cresta Grocers Head Office', client: 'cresta-grocers', port: 3266 },
   { slug: 'ahk-spares-ho', name: 'AHK Spares Head Office', client: 'ahk-spares', port: 3268 },
 ];
@@ -253,22 +266,32 @@ interface CompanyOut {
   licensedTerminalCount?: number;
 }
 
+const resolved0Count = (): number =>
+  STORES.filter((spec) => !storeSlugsPresent.has(spec.cpSlug)).length;
+
+/** Slugs already in the registry, filled in by main() before the count above. */
+const storeSlugsPresent = new Set<string>();
+
 const main = async (): Promise<void> => {
   await login();
 
+  // Idempotent by design: it adds the branches that are missing and leaves the
+  // rest alone, so it can be re-run whenever the fleet grows. It still refuses to
+  // touch a registry holding stores it does not know about.
   const existing = await api<StoreOut[]>('GET', '/stores');
-  // --dry-run previews against any state: it writes nothing, so a populated
-  // registry is fine to look at (that is how you check the plan before wiping).
-  if (existing.length > 0 && !FORCE && !DRY_RUN) {
-    console.error(
-      `Refusing to reseed: the registry already holds ${existing.length} store(s).\n` +
-        `Start from a fresh registry (see this script's header) or pass --force.`,
-    );
+  const knownSlugs = new Set(STORES.map((spec) => spec.cpSlug));
+  for (const store of existing) storeSlugsPresent.add(store.slug);
+  const foreign = existing.filter((store) => !knownSlugs.has(store.slug));
+  if (foreign.length > 0 && !FORCE) {
+    console.error(`Refusing: the registry holds ${foreign.length} store(s) this tool does not manage:`);
+    for (const store of foreign) console.error(`  ${store.slug}`);
+    console.error('Re-run with --force to add the fleet and leave those alone.');
     process.exit(1);
   }
-  if (existing.length > 0) {
-    console.log(`Note: the registry currently holds ${existing.length} store(s); this run will add to them.\n`);
-  }
+  const missing = resolved0Count();
+  console.log(
+    `Registry holds ${existing.length} store(s); this run registers ${missing} and leaves the rest.\n`,
+  );
 
   // The plan catalogue first: clients are created against these codes.
   const before = await api<PlanOut[]>('GET', '/plans');
@@ -304,7 +327,8 @@ const main = async (): Promise<void> => {
   const resolved = STORES.map((spec) => {
     const { token: storeToken, port } = readEnv(spec.envSlug);
     const fromDb = readStoreDb(spec.envSlug);
-    const tills = spec.maxTills !== undefined ? Math.min(fromDb.tills, spec.maxTills) : fromDb.tills;
+    const tills =
+      spec.tills ?? (spec.maxTills !== undefined ? Math.min(fromDb.tills, spec.maxTills) : fromDb.tills);
     return { ...spec, storeToken, port, ...fromDb, tills, baseUrl: `http://${spec.cpSlug}.localhost:${port}` };
   });
 
@@ -351,25 +375,43 @@ const main = async (): Promise<void> => {
 
   // 2. Clients — created before their stores, each with the terminals it needs.
   const companyIdBySlug = new Map<string, number>();
+  const existingCompanies = await api<CompanyOut[]>('GET', '/companies');
+  const companyBySlug = new Map(existingCompanies.map((c) => [c.slug, c]));
   for (const c of CLIENTS) {
     const plan = planByCode.get(c.plan);
     if (!plan) throw new Error(`Plan '${c.plan}' is not seeded — is the registry fresh?`);
-    const company = await api<CompanyOut>('POST', '/companies', {
-      name: c.name,
-      slug: c.slug,
-      billingEmail: c.billingEmail,
-      planId: plan.id,
-    });
-    companyIdBySlug.set(c.slug, company.id);
+    const already = companyBySlug.get(c.slug);
+    let companyId: number;
+    if (already) {
+      companyId = already.id;
+    } else {
+      const company = await api<CompanyOut>('POST', '/companies', {
+        name: c.name,
+        slug: c.slug,
+        billingEmail: c.billingEmail,
+        planId: plan.id,
+      });
+      companyId = company.id;
+    }
+    companyIdBySlug.set(c.slug, companyId);
     const licensed = tillsByClient.get(c.slug) ?? 0;
-    await api('PUT', `/clients/${company.id}`, { licensedTerminalCount: licensed });
-    console.log(`  ✓ client ${c.name} (plan ${c.plan}, ${licensed} licensed terminals)`);
+    await api('PUT', `/clients/${companyId}`, { licensedTerminalCount: licensed });
+    console.log(
+      `  ✓ client ${c.name} (plan ${c.plan}, ${licensed} licensed terminals)${already ? ' — existing' : ''}`,
+    );
   }
 
   // 3. Stores — adopting each deployment's own token so pushes authenticate.
+  //    Already-registered slugs are left alone, so this can be re-run as the
+  //    fleet grows.
+  const registered = new Set((await api<StoreOut[]>('GET', '/stores')).map((s) => s.slug));
   for (const s of resolved) {
     const companyId = companyIdBySlug.get(s.client);
     if (!companyId) throw new Error(`No client '${s.client}' for store '${s.cpSlug}'`);
+    if (registered.has(s.cpSlug)) {
+      console.log(`  · store ${s.cpSlug.padEnd(22)} already registered`);
+      continue;
+    }
     const created = await api<{ store: StoreOut }>('POST', '/stores', {
       name: s.name,
       slug: s.cpSlug,
@@ -391,6 +433,10 @@ const main = async (): Promise<void> => {
   // Adopt the original single-HO file for the primary panel rather than minting a
   // second one: its database path is where the running panel's branch registry
   // already lives, and a fresh secret would log every executive out for no gain.
+  // The panel routes address rows by numeric id, not slug.
+  const existingPanels = new Map(
+    (await api<Array<{ id: number; slug: string }>>('GET', '/panels')).map((p) => [p.slug, p.id]),
+  );
   const legacy = envFile('head-office');
   const primaryFile = envFile(PANELS[0]!.slug);
   if (fs.existsSync(legacy) && !fs.existsSync(primaryFile)) {
@@ -401,6 +447,12 @@ const main = async (): Promise<void> => {
     const companyId = companyIdBySlug.get(p.client);
     if (!companyId) throw new Error(`No client '${p.client}' for panel '${p.slug}'`);
     const instance = ensureHoInstance(p);
+    const panelId = existingPanels.get(p.slug);
+    if (panelId !== undefined) {
+      await api('PUT', `/panels/${panelId}`, { name: p.name, baseUrl: panelUrl(p) });
+      console.log(`  · panel ${p.slug.padEnd(22)} updated (instance ${instance})`);
+      continue;
+    }
     await api('POST', '/panels', { name: p.name, slug: p.slug, companyId, baseUrl: panelUrl(p) });
     console.log(`  ✓ panel ${p.slug.padEnd(22)} instance ${instance === 'created' ? 'created' : 'already present'}`);
   }
