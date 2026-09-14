@@ -302,14 +302,16 @@ export default function DevicesPage() {
               className="overflow-hidden rounded-xl border border-slate-200 bg-white"
             >
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-4 py-2.5">
+                {/* The client is the top of this page's hierarchy, so it reads
+                    largest — above the store names it contains. */}
                 <span
-                  className={`text-[11px] font-bold uppercase tracking-wide ${
-                    section.name ? 'text-slate-600' : 'text-amber-700'
+                  className={`text-base font-bold ${
+                    section.name ? 'text-slate-900' : 'text-amber-700'
                   }`}
                 >
                   {section.name ?? 'Unassigned — no client'}
                 </span>
-                <span className="text-[11px] text-slate-400">{sectionSummary(section)}</span>
+                <span className="text-xs text-slate-500">{sectionSummary(section)}</span>
               </div>
               {section.stores.map((group) => {
                 const open = isOpen(group);
@@ -322,10 +324,7 @@ export default function DevicesPage() {
                     >
                       <span className="w-3 text-[10px] text-slate-400">{open ? '▼' : '▶'}</span>
                       <HealthDot status={group.healthStatus} />
-                      {/* The store is the entity being scanned, so its name
-                          leads the row — larger and bolder than the chips and
-                          the summary that qualify it. */}
-                      <span className="text-lg font-bold text-slate-900">{group.name}</span>
+                      <span className="font-semibold text-slate-800">{group.name}</span>
                       {group.vertical && <VerticalChip vertical={group.vertical} />}
                       {/* Development is the local default, so the chip would be
                           noise on every row; anything else is worth flagging. */}
