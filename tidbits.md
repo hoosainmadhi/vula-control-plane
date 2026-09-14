@@ -6,6 +6,13 @@
 
 From the review behind `za-pos/prompts/deploy-production-vula-app.md` §10.
 
+- **This image does not build in a clean context.** `frontend/tsconfig.node.json`
+  asks for `types: ["node"]`, but `@types/node` is not declared in
+  `frontend/package.json` — locally the root install hoists it, so `npm run
+  build` passes and the failure only appears in Coolify's build:
+  `error TS2688: Cannot find type definition file for 'node'`. One-line fix
+  (declare the dependency in the frontend, refresh its lockfile), verified to
+  make the image build. **Blocks deploying this app at all.**
 - **This image pins `EXPOSE 3240` and probes `localhost:3240/health`, while
   Coolify injects `PORT=3000` for the proxy.** The container can serve traffic
   and still be marked unhealthy, which reads as a failed deploy. Align the image
