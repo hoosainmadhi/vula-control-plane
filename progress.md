@@ -2,6 +2,42 @@
 
 Dated log of the build.
 
+## 2026-09-14 — Devices page: store-first layout (owner-directed)
+
+The owner looked at the shipped page against the real fleet and asked for
+"store first, then the device". The reason was visible in the data: **70 rows for
+16 stores**, of which **Everyday Retail alone was 25** (38% of the page, its name
+repeated on every row), and five stores with no client rendered a dead
+`— · Development` line.
+
+Rewritten as a **grouped, collapsible** list (owner picked this over store cards
+and master/detail):
+
+- A **store header** per store — health dot, name, short vertical chip, client
+  only when set, environment only when it is not `development` — with
+  `N tills · M claimed · heartbeat …` right-aligned.
+- **More than 5 tills starts collapsed** (`DEFAULT_EXPAND_MAX_TILLS`) so the
+  25-till store cannot bury the other fifteen; Expand all / Collapse all
+  alongside.
+- **Head offices move to their own section** — a fleet member with no tills has
+  no parent store to nest under.
+- Search matches store fields, so searching a store brings its tills; status and
+  type filters drop emptied groups.
+- The Config column now uses the shared `CONFIG_STATE_LABELS` (`✓ Current`,
+  `⚠ Pending`) instead of raw enum values, matching the store surfaces.
+
+Two design points worth keeping: the **vertical chip stays even when a store's
+name encodes it**, because `Cape Town`/`cpt-wf` are general-profile stores owned
+by spares merchants — the mismatch is the signal; and the **client name is what
+disambiguates** the several stores named after towns.
+
+Verified against a **copy of the live registry** (never the running one): 16
+stores · 65 tills · 5 head offices = 70 devices, Everyday Retail collapsed by
+default, expanding it takes the page from 61 to 87 rows, and the status tiles
+still reconcile (61 unclaimed + 4 claimed + 3 offline + 2 unknown = 70). No
+backend change; tests **195 green (17 suites)**, typecheck and build clean.
+Doctrine: CONTEXT §5b.
+
 ## 2026-09-14 — SPOG §33: the Deployments page (fourth deferred surface)
 
 - **Fleet-wide for the first time.** `deployment_jobs`/`_steps` were durable from

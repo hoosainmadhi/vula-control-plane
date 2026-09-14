@@ -448,6 +448,32 @@ Honest limits, deliberately surfaced rather than papered over:
   logout, run diagnostics) are not implemented because the tenant exposes no
   per-device command API — §39 forbids shipping the controls as dead buttons.
 
+### Presentation: store-first, grouped and collapsible (2026-09-14)
+
+The spec's §25 is a flat device table; on the real fleet that was 70 rows in
+which one store (**Everyday Retail, 25 tills**) accounted for 38% of the page and
+every row repeated its store's name. The owner asked for store-first, so the page
+groups devices under a store header instead of repeating the store per device.
+
+- **The store header** carries a health dot, the store name, a short vertical
+  chip, the client **only when one is set**, and the environment **only when it
+  is not `development`** (the local default, which would otherwise be noise on
+  every row). Right-aligned: `N tills · M claimed · heartbeat …`. The client chip
+  is what disambiguates stores named `Jhb`, `Durban`, `Cape Town`, `durban-gw`
+  from one another.
+- **The vertical chip stays even when the name encodes it.** "Builders Hardware"
+  and "Brake & Bolt Spares" do describe their own vertical, but `Cape Town` and
+  `cpt-wf` are **general**-profile stores belonging to *Kloof Auto Spares* and
+  *AHK Spares* — without the chip nothing on screen says a spares merchant is
+  running general tills, which is a real configuration mismatch worth seeing.
+- **Stores with more than 5 tills start collapsed** (`DEFAULT_EXPAND_MAX_TILLS`),
+  with Expand all / Collapse all. The threshold exists so a 25-till store cannot
+  bury the other fifteen; it is a presentation default, not a rule about stores.
+- **A Head Office gets its own section**, not a store group: it is a fleet member
+  with no tills and no parent store, so nesting it under one would be a lie.
+- Search matches a store's own fields, so searching `Everyday Retail` brings all
+  its tills with it; status/type filters drop groups that no longer match.
+
 ## 5c. Versions (SPOG §32)
 
 `GET /api/versions` aggregates the build each registered member currently runs,

@@ -3,8 +3,9 @@ import { api, ApiError } from '../api';
 import ErrorBox from '../components/ErrorBox';
 import Spinner from '../components/Spinner';
 import { SummaryTile } from '../components/storeUi';
-import { ENVIRONMENT_LABELS, fmtAgo, fmtTime } from '../lib/storeVocab';
-import type { Device, DeviceStatus } from '../types';
+import { HealthDot, VERTICAL_COLORS } from '../components/StatusBadge';
+import { ENVIRONMENT_LABELS, CONFIG_STATE_LABELS, fmtAgo, fmtTime, VERTICAL_LABELS } from '../lib/storeVocab';
+import type { Device, DeviceStatus, StoreEnvironment, StoreVertical } from '../types';
 
 const STATUS_LABELS: Record<DeviceStatus, string> = {
   online: 'Online',
@@ -31,6 +32,13 @@ const STATUS_FILTERS: Array<{ id: DeviceStatus | 'all'; label: string }> = [
   { id: 'unclaimed', label: 'Unclaimed' },
 ];
 
+/**
+ * Stores at or below this many tills open on load; larger ones start collapsed
+ * so one 25-till store cannot bury the other fifteen. Expand all / Collapse all
+ * override it either way.
+ */
+const DEFAULT_EXPAND_MAX_TILLS = 5;
+
 const StatusPill = ({ status }: { status: DeviceStatus }) => (
   <span
     className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-bold ${STATUS_COLORS[status]}`}
@@ -39,6 +47,39 @@ const StatusPill = ({ status }: { status: DeviceStatus }) => (
   </span>
 );
 
+const VerticalChip = ({ vertical }: { vertical: StoreVertical }) => (
+  <span
+    className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${VERTICAL_COLORS[vertical] ?? 'bg-slate-100 text-slate-600'}`}
+  >
+    {VERTICAL_LABELS[vertical]}
+  </span>
+);
+
+/** The store header's right-hand summary: how big it is and how fresh it is. */
+const storeSummary = (devices: Device[]): string => {
+  const claimed = devices.filter((d) => d.claimed).length;
+  const parts = [`${devices.length} ${devices.length === 1 ? 'till' : 'tills'}`];
+  if (claimed > 0) parts.push(`${claimed} claimed`);
+  const seen = devices
+    .map((d) => d.lastSeenAt ?? d.lastHeartbeatAt)
+    .filter((v): v is string => Boolean(v))
+    .sort()
+    .at(-1);
+  if (seen) parts.push(`heartbeat ${fmtAgo(seen)}`);
+  return parts.join(' · ');
+};
+
+interface StoreGroup {
+  key: string;
+  name: string;
+  slug: string;
+  companyName: string | null;
+  environment: StoreEnvironment | null;
+  vertical: StoreVertical | null;
+  healthStatus: Device['healthStatus'];
+  devices: Device[];
+}
+
 export default function DevicesPage() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
@@ -46,6 +87,8 @@ export default function DevicesPage() {
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'pos' | 'office'>('all');
   const [statusFilter, setStatusFilter] = useState<DeviceStatus | 'all'>('all');
+  /** Explicit open/closed choices; absent means "use the size default". */
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     setLoadError('');
@@ -80,12 +123,58 @@ export default function DevicesPage() {
       if (typeFilter !== 'all' && d.type !== typeFilter) return false;
       if (statusFilter !== 'all' && d.status !== statusFilter) return false;
       if (!needle) return true;
+      // A store-name match brings the whole store's tills with it, which is what
+      // "search for Everyday Retail" should do.
       return [d.name, d.storeName, d.storeSlug, d.companyName ?? '', d.deviceId ?? '']
         .join(' ')
         .toLowerCase()
         .includes(needle);
     });
   }, [devices, query, typeFilter, statusFilter]);
+
+  const groups = useMemo(() => {
+    const byStore = new Map<string, StoreGroup>();
+    const offices: Device[] = [];
+    for (const device of filtered) {
+      if (device.type === 'office') {
+        offices.push(device);
+        continue;
+      }
+      const key = `store:${device.storeId ?? device.storeSlug}`;
+      let group = byStore.get(key);
+      if (!group) {
+        group = {
+          key,
+          name: device.storeName,
+          slug: device.storeSlug,
+          companyName: device.companyName,
+          environment: device.environment,
+          vertical: device.vertical,
+          healthStatus: device.healthStatus,
+          devices: [],
+        };
+        byStore.set(key, group);
+      }
+      group.devices.push(device);
+    }
+    const stores = [...byStore.values()].sort((a, b) => a.name.localeCompare(b.name));
+    offices.sort((a, b) => a.name.localeCompare(b.name));
+    return { stores, offices };
+  }, [filtered]);
+
+  const isOpen = (group: StoreGroup): boolean =>
+    expanded[group.key] ?? group.devices.length <= DEFAULT_EXPAND_MAX_TILLS;
+
+  const toggle = (group: StoreGroup): void =>
+    setExpanded((prev) => ({ ...prev, [group.key]: !isOpen(group) }));
+
+  const setAll = (open: boolean): void =>
+    setExpanded(Object.fromEntries(groups.stores.map((g) => [g.key, open])));
+
+  const tillTotal = useMemo(
+    () => groups.stores.reduce((n, g) => n + g.devices.length, 0),
+    [groups.stores],
+  );
 
   if (loading) return <Spinner label="Loading devices…" />;
   if (loadError) {
@@ -116,7 +205,7 @@ export default function DevicesPage() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search device, store or device id…"
+          placeholder="Search store, device or device id…"
           className="w-full max-w-sm rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-brand-400"
         />
         <div className="flex gap-1 rounded-lg bg-slate-100 p-1">
@@ -153,6 +242,22 @@ export default function DevicesPage() {
         </button>
       </div>
 
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+        <span>
+          {groups.stores.length} {groups.stores.length === 1 ? 'store' : 'stores'} · {tillTotal}{' '}
+          {tillTotal === 1 ? 'till' : 'tills'}
+          {groups.offices.length > 0 && ` · ${groups.offices.length} head ${groups.offices.length === 1 ? 'office' : 'offices'}`}
+        </span>
+        <span className="flex gap-2">
+          <button onClick={() => setAll(true)} className="font-semibold text-brand-600 hover:underline">
+            Expand all
+          </button>
+          <button onClick={() => setAll(false)} className="font-semibold text-brand-600 hover:underline">
+            Collapse all
+          </button>
+        </span>
+      </div>
+
       {filtered.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
           {devices.length === 0
@@ -160,70 +265,146 @@ export default function DevicesPage() {
             : 'No devices match these filters.'}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-          <table className="w-full text-xs">
-            <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-              <tr>
-                <th className="px-4 py-2.5 text-left">Device</th>
-                <th className="px-4 py-2.5 text-left">Store</th>
-                <th className="px-4 py-2.5 text-left">Type</th>
-                <th className="px-4 py-2.5 text-left">Version</th>
-                <th className="px-4 py-2.5 text-left">Status</th>
-                <th className="px-4 py-2.5 text-right">Last seen</th>
-                <th className="px-4 py-2.5 text-left">Config</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((device) => (
-                <tr key={device.id} className="border-t border-slate-100">
-                  <td className="px-4 py-2.5">
-                    <div className="font-semibold text-slate-700">{device.name}</div>
-                    <div className="mt-0.5 font-mono text-[10px] text-slate-400">
-                      {device.deviceId ?? 'no device bound'}
-                      {device.sessionOpen && <span className="ml-1 text-green-600">· session open</span>}
-                    </div>
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <div className="text-slate-700">{device.storeName}</div>
-                    <div className="text-[10px] text-slate-400">
-                      {device.companyName ?? '—'}
-                      {device.environment ? ` · ${ENVIRONMENT_LABELS[device.environment]}` : ''}
-                    </div>
-                  </td>
-                  <td className="px-4 py-2.5 text-slate-500">
-                    {device.type === 'pos' ? 'POS' : 'Office'}
-                    {device.till !== null && <span className="text-slate-400"> · Till {device.till}</span>}
-                  </td>
-                  <td className="px-4 py-2.5 font-mono text-slate-500">{device.version ?? '—'}</td>
-                  <td className="px-4 py-2.5">
-                    <StatusPill status={device.status} />
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-slate-500">
-                    {/* A till reports no per-device heartbeat yet, so fall back to
-                        the store's own and say which one it is via the title. */}
-                    {device.lastSeenAt ? (
-                      <span title={fmtTime(device.lastSeenAt)}>{fmtAgo(device.lastSeenAt)}</span>
-                    ) : device.lastHeartbeatAt ? (
-                      <span title={`Store heartbeat: ${fmtTime(device.lastHeartbeatAt)}`}>
-                        {fmtAgo(device.lastHeartbeatAt)}
+        <>
+          {groups.stores.length > 0 && (
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              {groups.stores.map((group) => {
+                const open = isOpen(group);
+                return (
+                  <div key={group.key} className="border-t border-slate-100 first:border-t-0">
+                    <button
+                      onClick={() => toggle(group)}
+                      aria-expanded={open}
+                      className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-left hover:bg-slate-50"
+                    >
+                      <span className="w-3 text-[10px] text-slate-400">{open ? '▼' : '▶'}</span>
+                      <HealthDot status={group.healthStatus} />
+                      <span className="font-semibold text-slate-800">{group.name}</span>
+                      {group.vertical && <VerticalChip vertical={group.vertical} />}
+                      {group.companyName && (
+                        <span className="text-xs text-slate-400">{group.companyName}</span>
+                      )}
+                      {/* Development is the local default, so the chip would be
+                          noise on every row; anything else is worth flagging. */}
+                      {group.environment && group.environment !== 'development' && (
+                        <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
+                          {ENVIRONMENT_LABELS[group.environment]}
+                        </span>
+                      )}
+                      <span className="ml-auto text-xs tabular-nums text-slate-500">
+                        {storeSummary(group.devices)}
                       </span>
-                    ) : (
-                      '—'
+                    </button>
+
+                    {open && (
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50/70 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                          <tr>
+                            <th className="px-4 py-2 pl-10 text-left">Till</th>
+                            <th className="px-4 py-2 text-left">Version</th>
+                            <th className="px-4 py-2 text-left">Status</th>
+                            <th className="px-4 py-2 text-right">Last seen</th>
+                            <th className="px-4 py-2 text-left">Config</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {group.devices.map((device) => (
+                            <tr key={device.id} className="border-t border-slate-100">
+                              <td className="px-4 py-2 pl-10">
+                                <div className="font-semibold text-slate-700">{device.name}</div>
+                                <div className="mt-0.5 font-mono text-[10px] text-slate-400">
+                                  {device.deviceId ?? 'no device bound'}
+                                  {device.sessionOpen && (
+                                    <span className="ml-1 text-green-600">· session open</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-4 py-2 font-mono text-slate-500">{device.version ?? '—'}</td>
+                              <td className="px-4 py-2">
+                                <StatusPill status={device.status} />
+                              </td>
+                              <td className="px-4 py-2 text-right text-slate-500">
+                                {device.lastSeenAt ? (
+                                  <span title={fmtTime(device.lastSeenAt)}>{fmtAgo(device.lastSeenAt)}</span>
+                                ) : device.lastHeartbeatAt ? (
+                                  <span title={`Store heartbeat: ${fmtTime(device.lastHeartbeatAt)}`}>
+                                    {fmtAgo(device.lastHeartbeatAt)}
+                                  </span>
+                                ) : (
+                                  '—'
+                                )}
+                              </td>
+                              <td className="px-4 py-2 text-slate-500">
+                                {CONFIG_STATE_LABELS[device.configState]}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     )}
-                  </td>
-                  <td className="px-4 py-2.5 text-slate-500">{device.configState}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                  </div>
+                );
+              })}
+            </section>
+          )}
+
+          {groups.offices.length > 0 && (
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+              <div className="border-b border-slate-100 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                Head offices
+              </div>
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50/70 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                  <tr>
+                    <th className="px-4 py-2 text-left">Head office</th>
+                    <th className="px-4 py-2 text-left">Client</th>
+                    <th className="px-4 py-2 text-left">Version</th>
+                    <th className="px-4 py-2 text-left">Status</th>
+                    <th className="px-4 py-2 text-right">Last seen</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.offices.map((device) => (
+                    <tr key={device.id} className="border-t border-slate-100">
+                      <td className="px-4 py-2">
+                        <div className="flex items-center gap-2">
+                          <HealthDot status={device.healthStatus} />
+                          <span className="font-semibold text-slate-700">{device.name}</span>
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
+                            Office
+                          </span>
+                        </div>
+                        <div className="mt-0.5 font-mono text-[10px] text-slate-400">{device.storeSlug}</div>
+                      </td>
+                      <td className="px-4 py-2 text-slate-500">{device.companyName ?? '—'}</td>
+                      <td className="px-4 py-2 font-mono text-slate-500">{device.version ?? '—'}</td>
+                      <td className="px-4 py-2">
+                        <StatusPill status={device.status} />
+                      </td>
+                      <td className="px-4 py-2 text-right text-slate-500">
+                        {device.lastSeenAt ? (
+                          <span title={fmtTime(device.lastSeenAt)}>{fmtAgo(device.lastSeenAt)}</span>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+        </>
       )}
 
       <p className="text-xs text-slate-400">
-        Every configured till of every store — claimed or not — plus one entry per Head Office.
-        Registers do not report a per-device heartbeat yet, so a bound till reads
-        <span className="font-semibold"> Claimed</span> rather than Online, and Last seen falls back to the
-        store&rsquo;s own heartbeat. Read-only: the tenant exposes no per-device command API.
+        Stores lead and their tills follow, because a fleet is read store-first — one store with 25
+        tills would otherwise fill the page. Stores with more than {DEFAULT_EXPAND_MAX_TILLS} tills
+        start collapsed. A Head Office is a fleet member in its own right, so it sits in its own
+        section rather than being nested under a store it does not have. Registers do not report a
+        per-device heartbeat yet, so a bound till reads <span className="font-semibold">Claimed</span>{' '}
+        rather than Online, and Last seen falls back to the store&rsquo;s own heartbeat. Read-only: the
+        tenant exposes no per-device command API.
       </p>
     </div>
   );
