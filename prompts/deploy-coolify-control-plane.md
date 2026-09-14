@@ -8,8 +8,17 @@ Coolify (OCI) server:
 - **This control plane** — `~/apps/za-pos-control-plane` repo, one container,
   registry DB in its own volume.
 
-The control plane does **not** provision Coolify in v1 (no Coolify API
-integration) — deploying a store is manual, then you onboard it here.
+The control plane **does** provision Coolify when it has API credentials
+(`COOLIFY_API_URL` / `COOLIFY_API_TOKEN` / `COOLIFY_PROJECT_UUID` /
+`COOLIFY_SERVER_UUID` / `COOLIFY_GITHUB_APP_UUID`): the client wizard creates the
+application, its persistent volume and its environment variables, triggers the
+build, then health-checks the result. With any of those unset it degrades to
+manual provisioning, so Parts A–B below remain the reference for what a
+deployment actually needs.
+
+For a real multi-tenant host — the shared data tree, the ownership rule, and the
+checklist to close before cutover — see
+`~/apps/za-pos/prompts/deploy-production-vula-app.md`.
 
 ## Prerequisites
 
@@ -34,8 +43,12 @@ integration) — deploying a store is manual, then you onboard it here.
    NODE_ENV=production
    PORT=3000                  # Coolify injects; shown for clarity
    DB_PATH=/data/za-pos.db    # persistent volume below
+   BACKUP_DIR=/data/backups   # MUST be inside the volume — unset puts snapshots
+                              # in the container layer, where a rebuild eats them
    JWT_SECRET=<64-char random>
    CONTROL_PLANE_TOKEN=<token from step 1>   # enables /api/internal/*
+   LEASE_PUBLIC_KEY=<control plane's public verification key>
+   LEASE_KEY_ID=k1
    APP_URL=https://<slug>.vula-app.co.za
    ```
 4. **Persistent Storage:** named volume mounted at `/data` (this is the
@@ -63,6 +76,13 @@ integration) — deploying a store is manual, then you onboard it here.
 3. Confirm from the row: terminal chips `Till 1..N`, **Health** → `Up`, and
    optionally **Admin password** → the store resets its admin login and the
    temp password is shown once (never stored here).
+4. If this merchant has a Head Office, pair the branch credential — the panel
+   authenticates to the branch with `HEAD_OFFICE_TOKEN`, and the branch only
+   answers when its own `settings.head_office_token` matches. Register the branch
+   on the panel (`POST /api/internal/branches` on the panel, with the branch's
+   token) or set it on the panel's Stores page. Skip this and the panel reports a
+   perfectly healthy branch as **Offline** — the single most confusing failure in
+   this system, because it looks like an outage rather than a missing token.
 
 ## Part C — deploy the control plane itself
 
@@ -75,12 +95,27 @@ integration) — deploying a store is manual, then you onboard it here.
    NODE_ENV=production
    PORT=3000
    CP_DB_PATH=/data/control-plane.db
-   OFFICE_ADMIN_EMAIL=you@example.com      # boot fails without these
-   OFFICE_ADMIN_PASSWORD=<strong password> # placeholder → boot fails
-   JWT_SECRET=<64-char random>             # openssl rand -base64 64
+   OFFICE_ADMIN_EMAIL=you@example.com       # boot fails without these
+   OFFICE_ADMIN_PASSWORD=<strong password>  # placeholder → boot fails
+   JWT_SECRET=<64-char random>              # openssl rand -base64 64
+   LEASE_PRIVATE_KEY=<base64url PKCS#8 DER> # signs licences; without it the CP
+                                            # exits on first licence issue
+   LEASE_KEY_ID=k1
+   COOLIFY_API_URL / COOLIFY_API_TOKEN      # needed to auto-provision
+   COOLIFY_PROJECT_UUID / COOLIFY_SERVER_UUID / COOLIFY_GITHUB_APP_UUID
    LOG_LEVEL=info
    ```
-3. **Persistent Storage:** volume mounted at `/data` (registry DB + WAL).
+   Two traps in this image: its `EXPOSE`/`HEALTHCHECK` are pinned to **3240**
+   while Coolify injects `PORT=3000` for the proxy, so the container can serve
+   fine and still be marked unhealthy — pin the proxy port or align the image,
+   do not leave it to chance. And the licence key is checked **lazily**, not at
+   boot: a production CP with no key starts up looking healthy and exits the
+   first time it issues a licence.
+3. **Persistent Storage:** volume mounted at `/data` (registry DB + WAL), host
+   path `/data/apps/vula-app/cp` per the production layout. It must be owned by
+   uid 1000 before first start: the container runs as `node` and a bind mount
+   overrides the image's `chown`, so a root-owned directory stops SQLite creating
+   its WAL.
 4. **Domains:** `https://cp.vula-app.co.za` → **Deploy**. Healthcheck hits
    `/health` (`{ status: 'ok' }`).
 

@@ -1,5 +1,29 @@
 # Progress
 
+## 2026-09-14 — production deployment plan documented (shared with za-pos)
+
+Owner will register `vula-app.co.za`; the readiness answer is written down rather
+than coded. The runbook lives in the tenant repo —
+`za-pos/prompts/deploy-production-vula-app.md` — because it covers the shared
+host, and this playbook now links to it.
+
+CP-side findings it records, all tracked in `tidbits.md`:
+
+- **The image contradicts itself on ports**: `EXPOSE 3240` + healthcheck on
+  `localhost:3240`, while Coolify injects `PORT=3000` for the proxy.
+- **The licence key is checked lazily**, not at boot, so a keyless production CP
+  starts healthy and dies on the first licence issue.
+- **Provisioning injects neither `BACKUP_DIR` nor `HEAD_OFFICE_TOKEN`** — the
+  first loses store backups into the container layer, the second is the
+  two-sided-credential gap that has made the fleet look Offline twice by hand.
+- **The host tree needs uid-1000 ownership** before first start, because the
+  volumes are bind mounts and the container runs as `node`.
+
+Also corrected here: this playbook opened by claiming the CP does not provision
+Coolify, which `services/coolify.ts` has done since the recent work; and its
+store env block omitted `BACKUP_DIR` and the licence public key.
+
+
 Dated log of the build.
 
 ## 2026-09-14 — Devices page: client sections above the stores (owner follow-up)

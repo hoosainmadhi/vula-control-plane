@@ -2,6 +2,35 @@
 
 > Prioritised for the next workspace. ~~Struck~~ items are done.
 
+## Production deployment — close before cutover (2026-09-14)
+
+From the review behind `za-pos/prompts/deploy-production-vula-app.md` §10.
+
+- **This image pins `EXPOSE 3240` and probes `localhost:3240/health`, while
+  Coolify injects `PORT=3000` for the proxy.** The container can serve traffic
+  and still be marked unhealthy, which reads as a failed deploy. Align the image
+  (default `PORT=3000`) or pin the resource's proxy port — decide once.
+- **The licence private key refuses lazily.** `licenceSigner.loadKeys()` exits
+  with a FATAL log on first use in production, so a keyless CP boots looking
+  healthy and dies when the first client is onboarded. Make it a boot gate.
+- **`BACKUP_DIR` is not injected into store deployments.** Every provisioned
+  store therefore writes snapshots into the container's writable layer, where a
+  rebuild destroys them. Add it to the store env payload (`/data/backups`).
+- **`HEAD_OFFICE_TOKEN` is not injected either.** The branch is provisioned with
+  a merchant token but the merchant's panel is never told it, so the panel
+  reports a healthy branch as Offline — the failure that has now been repaired by
+  hand twice. Inject it, and register the branch with the panel
+  (`POST /api/internal/branches`) as part of provisioning.
+- **The data tree is not automatic.** The production layout
+  (`/data/apps/vula-app/{cp,store,ho}/…`) needs each host directory created and
+  `chown 1000:1000` before first start: these are bind mounts, so the host
+  ownership overrides the image's `chown /data`, and the container runs as
+  `node` (uid 1000). A root-owned directory means SQLite cannot create its WAL
+  and the container dies at boot. Have provisioning do it rather than document
+  it.
+- **Volume renames orphan data.** Coolify keys persistent storage by name, so a
+  change to the tree applies to new deployments only.
+
 ## Deferred SPOG surfaces (2026-09-14, after the Errors page)
 
 Spec: `~/Downloads/vula-control-plane-agent-ui-revision.md` (§25–§36, §39).
