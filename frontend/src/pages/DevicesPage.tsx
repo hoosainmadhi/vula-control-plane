@@ -322,7 +322,10 @@ export default function DevicesPage() {
                     >
                       <span className="w-3 text-[10px] text-slate-400">{open ? '▼' : '▶'}</span>
                       <HealthDot status={group.healthStatus} />
-                      <span className="font-semibold text-slate-800">{group.name}</span>
+                      {/* The store is the entity being scanned, so its name
+                          leads the row — larger and bolder than the chips and
+                          the summary that qualify it. */}
+                      <span className="text-lg font-bold text-slate-900">{group.name}</span>
                       {group.vertical && <VerticalChip vertical={group.vertical} />}
                       {/* Development is the local default, so the chip would be
                           noise on every row; anything else is worth flagging. */}
