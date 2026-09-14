@@ -408,11 +408,13 @@ const SEED_PLANS: Array<{
   setupFeeCents: number;
   sortOrder: number;
 }> = [
+  // Codes are derived from the names (Vula Start -> vula-start). Renaming a tier
+  // means renaming its code too, via `renamePlansToNameCodes` below.
   {
-    code: 'starter',
-    name: 'Starter',
+    code: 'vula-start',
+    name: 'Vula Start',
     maxStores: 1,
-    maxTerminals: 2,
+    maxTerminals: 1,
     features: [],
     pricingMode: 'per_terminal',
     terminalPriceCents: 50_000,
@@ -420,21 +422,54 @@ const SEED_PLANS: Array<{
     sortOrder: 1,
   },
   {
-    code: 'business',
-    name: 'Business',
+    code: 'vula-grow',
+    name: 'Vula Grow',
     maxStores: 1,
-    maxTerminals: 10,
-    features: ['customer_credit', 'advanced_reports', 'ecommerce_bridges'],
+    maxTerminals: 3,
+    features: ['customer_credit', 'advanced_reports'],
     pricingMode: 'per_terminal',
     terminalPriceCents: 50_000,
     setupFeeCents: 1_000_000,
     sortOrder: 2,
   },
   {
-    code: 'multi-store',
-    name: 'Multi-Store',
-    maxStores: 20,
+    code: 'vula-branch',
+    name: 'Vula Branch',
+    maxStores: 3,
+    maxTerminals: 2,
+    features: ['customer_credit', 'advanced_reports', 'multi_store'],
+    pricingMode: 'per_terminal',
+    terminalPriceCents: 50_000,
+    setupFeeCents: 1_000_000,
+    sortOrder: 3,
+  },
+  {
+    code: 'vula-network',
+    name: 'Vula Network',
+    maxStores: 5,
+    maxTerminals: 3,
+    features: ['customer_credit', 'advanced_reports', 'multi_store', 'stock_transfers'],
+    pricingMode: 'per_terminal',
+    terminalPriceCents: 50_000,
+    setupFeeCents: 1_000_000,
+    sortOrder: 4,
+  },
+  {
+    code: 'vula-market',
+    name: 'Vula Market',
+    maxStores: 1,
     maxTerminals: 10,
+    features: ['customer_credit', 'advanced_reports', 'ecommerce_bridges'],
+    pricingMode: 'per_terminal',
+    terminalPriceCents: 50_000,
+    setupFeeCents: 1_000_000,
+    sortOrder: 5,
+  },
+  {
+    code: 'vula-market-plus',
+    name: 'Vula Market Plus',
+    maxStores: 10,
+    maxTerminals: 15,
     features: [
       'customer_credit',
       'advanced_reports',
@@ -445,13 +480,13 @@ const SEED_PLANS: Array<{
     pricingMode: 'per_terminal',
     terminalPriceCents: 50_000,
     setupFeeCents: 1_000_000,
-    sortOrder: 3,
+    sortOrder: 6,
   },
   {
-    code: 'enterprise',
-    name: 'Enterprise',
+    code: 'vula-market-enterprise',
+    name: 'Vula Market Enterprise',
     maxStores: 50,
-    maxTerminals: 99,
+    maxTerminals: 20,
     features: [
       'customer_credit',
       'advanced_reports',
@@ -460,10 +495,21 @@ const SEED_PLANS: Array<{
       'ecommerce_bridges',
       'ai_assistant',
     ],
-    pricingMode: 'custom',
-    terminalPriceCents: 0,
-    setupFeeCents: 0,
-    sortOrder: 4,
+    pricingMode: 'per_terminal',
+    terminalPriceCents: 50_000,
+    setupFeeCents: 1_000_000,
+    sortOrder: 7,
+  },
+  {
+    code: 'vula-spares-network',
+    name: 'Vula Spares Network',
+    maxStores: 50,
+    maxTerminals: 5,
+    features: ['customer_credit', 'advanced_reports', 'multi_store', 'stock_transfers'],
+    pricingMode: 'per_terminal',
+    terminalPriceCents: 50_000,
+    setupFeeCents: 1_000_000,
+    sortOrder: 8,
   },
 ];
 
@@ -562,6 +608,7 @@ export const getRegistryDb = (): Database.Database => {
   restructurePlans(db);
   widenPlanBillingPeriod(db);
   renameRetailPlanToBusiness(db);
+  renamePlansToNameCodes(db);
   seedPlans(db);
   refreshSeedPlanDefaults(db);
   migrateInvoiceLines(db);
@@ -910,6 +957,33 @@ const widenPlanBillingPeriod = (db: Database.Database): void => {
  * carry, so the rename migrates existing rows once and the code is immutable
  * from the API afterwards.
  */
+/**
+ * Plan codes are derived from their names, so `starter`/`business`/`multi-store`/
+ * `enterprise` were retired in favour of `vula-start`/`vula-grow`/`vula-network`/
+ * `vula-market-enterprise`. A registry seeded before that change renames its rows
+ * rather than gaining a second catalogue beside them — ids are untouched, so
+ * every company's plan reference survives.
+ *
+ * Only renames when the target code is absent, so a registry that has already
+ * been reseeded is left alone.
+ */
+const renamePlansToNameCodes = (db: Database.Database): void => {
+  if (!tableExists(db, 'plans')) return;
+  const has = db.prepare('SELECT 1 FROM plans WHERE code = ?');
+  const rename = db.prepare(
+    "UPDATE plans SET code = ?, updated_at = datetime('now') WHERE code = ?",
+  );
+  const RETIRED: ReadonlyArray<readonly [string, string]> = [
+    ['starter', 'vula-start'],
+    ['business', 'vula-grow'],
+    ['multi-store', 'vula-network'],
+    ['enterprise', 'vula-market-enterprise'],
+  ];
+  for (const [from, to] of RETIRED) {
+    if (has.get(from) && !has.get(to)) rename.run(to, from);
+  }
+};
+
 const renameRetailPlanToBusiness = (db: Database.Database): void => {
   if (!tableExists(db, 'plans')) return;
   const hasRetail = db.prepare('SELECT 1 FROM plans WHERE code = ?').get('retail');

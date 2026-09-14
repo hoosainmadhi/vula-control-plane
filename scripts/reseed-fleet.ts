@@ -42,15 +42,11 @@ const FORCE = args.includes('--force');
 /**
  * The plan catalogue (owner, 2026-09-14): eight tiers, house-default pricing.
  *
- * Four of them reuse the control plane's bootstrap plan codes. That is
- * deliberate: `seedPlans` re-inserts any of its own codes that are missing, so a
- * catalogue built from scratch would gain those four back on the next restart
- * and the demo would show twelve tiers. Updating them in place is the only shape
- * that survives a restart without changing the product's seed.
- *
- * If these eight should be the product's real catalogue, they belong in
- * `SEED_PLANS` (src/config/registryDb.ts) — a bigger change, since the plan
- * migrations and their tests encode the current four.
+ * These are the control plane's own seeded plans (SEED_PLANS in
+ * src/config/registryDb.ts), so a fresh registry already holds all eight and this
+ * only refreshes their values — nothing is created here. The codes are derived
+ * from the names; an older registry renames its retired bootstrap codes through
+ * the `renamePlansToNameCodes` migration on the next boot.
  */
 interface PlanSpec {
   /** Existing bootstrap code, or a new one. */
@@ -64,18 +60,15 @@ interface PlanSpec {
 const HOUSE = { pricingMode: 'per_terminal' as const, terminalPriceCents: 50_000, setupFeeCents: 1_000_000 };
 
 const PLANS: PlanSpec[] = [
-  { code: 'starter', name: 'Vula Start', maxStores: 1, maxTillsPerStore: 1, features: [] },
-  { code: 'business', name: 'Vula Grow', maxStores: 1, maxTillsPerStore: 3, features: ['customer_credit', 'advanced_reports'] },
+  { code: 'vula-start', name: 'Vula Start', maxStores: 1, maxTillsPerStore: 1, features: [] },
+  { code: 'vula-grow', name: 'Vula Grow', maxStores: 1, maxTillsPerStore: 3, features: ['customer_credit', 'advanced_reports'] },
   { code: 'vula-branch', name: 'Vula Branch', maxStores: 3, maxTillsPerStore: 2, features: ['customer_credit', 'advanced_reports', 'multi_store'] },
-  { code: 'multi-store', name: 'Vula Network', maxStores: 5, maxTillsPerStore: 3, features: ['customer_credit', 'advanced_reports', 'multi_store', 'stock_transfers'] },
+  { code: 'vula-network', name: 'Vula Network', maxStores: 5, maxTillsPerStore: 3, features: ['customer_credit', 'advanced_reports', 'multi_store', 'stock_transfers'] },
   { code: 'vula-market', name: 'Vula Market', maxStores: 1, maxTillsPerStore: 10, features: ['customer_credit', 'advanced_reports', 'ecommerce_bridges'] },
   { code: 'vula-market-plus', name: 'Vula Market Plus', maxStores: 10, maxTillsPerStore: 15, features: ['customer_credit', 'advanced_reports', 'ecommerce_bridges', 'multi_store', 'stock_transfers'] },
-  { code: 'enterprise', name: 'Vula Market Enterprise', maxStores: 50, maxTillsPerStore: 20, features: ['customer_credit', 'advanced_reports', 'ecommerce_bridges', 'multi_store', 'stock_transfers', 'ai_assistant'] },
+  { code: 'vula-market-enterprise', name: 'Vula Market Enterprise', maxStores: 50, maxTillsPerStore: 20, features: ['customer_credit', 'advanced_reports', 'ecommerce_bridges', 'multi_store', 'stock_transfers', 'ai_assistant'] },
   { code: 'vula-spares-network', name: 'Vula Spares Network', maxStores: 50, maxTillsPerStore: 5, features: ['customer_credit', 'advanced_reports', 'multi_store', 'stock_transfers'] },
 ];
-
-/** The four codes the control plane seeds itself, so they must be updated, not created. */
-const BOOTSTRAP_CODES = new Set(['starter', 'business', 'multi-store', 'enterprise']);
 
 /** Which client owns each store, and the plan that client buys. */
 interface StoreSpec {
@@ -93,11 +86,11 @@ interface StoreSpec {
 /** One merchant = one client account = one plan. Slugs are kept from the old
  *  registry so existing links, licences and the Head Office panels still line up. */
 const CLIENTS: Array<{ slug: string; name: string; plan: string; billingEmail: string }> = [
-  { slug: 'urban-threads', name: 'Urban Threads Retail Group', plan: 'multi-store', billingEmail: 'ops@urban-threads.test' },
-  { slug: 'hm-spares', name: 'HM Spares', plan: 'starter', billingEmail: 'ops@hm-spares.test' }, // Vula Start
-  { slug: 'everyday-retail', name: 'Everyday Retail', plan: 'enterprise', billingEmail: 'ops@everyday-retail.test' }, // Vula Market Enterprise
+  { slug: 'urban-threads', name: 'Urban Threads Retail Group', plan: 'vula-network', billingEmail: 'ops@urban-threads.test' },
+  { slug: 'hm-spares', name: 'HM Spares', plan: 'vula-start', billingEmail: 'ops@hm-spares.test' },
+  { slug: 'everyday-retail', name: 'Everyday Retail', plan: 'vula-market-enterprise', billingEmail: 'ops@everyday-retail.test' },
   { slug: 'brake-bolt-spares', name: 'Brake & Bolt Spares', plan: 'vula-spares-network', billingEmail: 'ops@brake-bolt.test' },
-  { slug: 'builders-hardware', name: 'Builders Hardware', plan: 'business', billingEmail: 'ops@builders-hardware.test' }, // Vula Grow
+  { slug: 'builders-hardware', name: 'Builders Hardware', plan: 'vula-grow', billingEmail: 'ops@builders-hardware.test' },
   { slug: 'medisave-pharmacy', name: 'MediSave Pharmacy', plan: 'vula-market', billingEmail: 'ops@medisave.test' },
   { slug: 'mydiner', name: 'myDiner', plan: 'vula-branch', billingEmail: 'ops@mydiner.test' },
   // Kept as client names: they hold a Head Office panel but no local store.
@@ -161,6 +154,9 @@ const ensureHoInstance = (panel: { slug: string; port: number }): 'exists' | 'cr
   text = setEnvValue(text, 'PORT', String(panel.port));
   text = setEnvValue(text, 'HO_DB_PATH', path.join(DATA_DIR, `vula-${panel.slug}.db`));
   text = setEnvValue(text, 'HO_JWT_SECRET', crypto.randomBytes(32).toString('hex'));
+  // A panel in NODE_ENV=production seeds no users, so a fresh instance would have
+  // no way in. These are local demo panels: seed the executive.
+  text = setEnvValue(text, 'SEED_DEMO_DATA', 'true');
   fs.writeFileSync(file, text, { mode: 0o600 });
   return 'created';
 };
@@ -291,20 +287,14 @@ const main = async (): Promise<void> => {
     };
     const current = existingPlan.get(spec.code);
     if (DRY_RUN) {
-      console.log(`  ${current ? 'update' : 'create'} ${spec.code.padEnd(22)} ${spec.name.padEnd(24)} ${spec.maxStores} store(s) · ${spec.maxTillsPerStore} tills/store`);
+      console.log(`  ${spec.code.padEnd(22)} ${spec.name.padEnd(24)} ${spec.maxStores} store(s) · ${spec.maxTillsPerStore} tills/store`);
       continue;
     }
-    if (current) {
-      await api('PUT', `/plans/${current.id}`, body);
-    } else {
-      // A bootstrap code is never created here — it already exists and gets
-      // updated, so the boot seeder finds its codes present and stays quiet.
-      if (BOOTSTRAP_CODES.has(spec.code)) {
-        throw new Error(`Bootstrap plan '${spec.code}' is missing from a fresh registry — unexpected`);
-      }
-      await api('POST', '/plans', { code: spec.code, ...body });
+    if (!current) {
+      throw new Error(`Plan '${spec.code}' is not in a fresh registry's seed — expected SEED_PLANS to carry it`);
     }
-    console.log(`  ✓ ${current ? 'updated' : 'created'} ${spec.code.padEnd(22)} ${spec.name}`);
+    await api('PUT', `/plans/${current.id}`, body);
+    console.log(`  ✓ updated ${spec.code.padEnd(22)} ${spec.name}`);
   }
 
   const plans = await api<PlanOut[]>('GET', '/plans');

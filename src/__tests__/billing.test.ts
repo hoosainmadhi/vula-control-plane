@@ -41,7 +41,7 @@ const planIdByCode = async (code: string): Promise<number> => {
 };
 
 const makeCompany = async (over: Record<string, unknown> = {}) => {
-  const planId = await planIdByCode('business');
+  const planId = await planIdByCode('vula-grow');
   const res = await request(app)
     .post('/api/companies')
     .set(auth())
@@ -377,7 +377,14 @@ describe('L3 Billing & Invoicing', () => {
   });
 
   it('bills a custom plan`s agreed amount, but only when one is stated', async () => {
-    const planId = await planIdByCode('enterprise');
+    const planId = await planIdByCode('vula-market-enterprise');
+
+    // 0. The office marks the tier as negotiated but states no amount yet.
+    await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ pricingMode: 'custom', customAmountCents: 0 })
+      .expect(200);
 
     // 1. No agreed amount: strictly per-invoice, and the sweep leaves it alone.
     const undecided = await makeCompany({
@@ -439,7 +446,12 @@ describe('L3 Billing & Invoicing', () => {
   });
 
   it('never invents an amount for a custom-priced client — the office supplies it', async () => {
-    const planId = await planIdByCode('enterprise');
+    const planId = await planIdByCode('vula-market-enterprise');
+    await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ pricingMode: 'custom', customAmountCents: 0 })
+      .expect(200);
     const company = await makeCompany({
       name: 'Custom Co',
       slug: 'custom-co',

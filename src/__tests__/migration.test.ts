@@ -110,9 +110,9 @@ describe('plans billing_period migration', () => {
     seed
       .prepare(
         `INSERT INTO plans (id, code, name, max_stores, max_terminals_per_store, features_json, billing_period, sort_order)
-         VALUES (1, 'starter', 'Starter', 1, 2, '[]', 'monthly', 1),
+         VALUES (1, 'vula-start', 'Starter', 1, 2, '[]', 'monthly', 1),
                 (2, 'retail', 'Retail', 1, 8, '["customer_credit"]', 'monthly', 2),
-                (3, 'multi-store', 'Multi-Store', 10, 25, '["multi_store"]', 'annual', 3)`,
+                (3, 'vula-network', 'Multi-Store', 10, 25, '["multi_store"]', 'annual', 3)`,
       )
       .run();
     seed
@@ -204,10 +204,10 @@ describe('plans billing_period migration', () => {
 
     // The pre-existing tiers keep their ids and periods. (Seeding legitimately adds
     // the tiers my fixture omitted, so only these two rows are asserted.)
-    const starter = db.prepare("SELECT name, billing_period FROM plans WHERE code = 'starter'").get() as
+    const starter = db.prepare("SELECT name, billing_period FROM plans WHERE code = 'vula-start'").get() as
       | { name: string; billing_period: string }
       | undefined;
-    const multi = db.prepare("SELECT name, billing_period FROM plans WHERE code = 'multi-store'").get() as
+    const multi = db.prepare("SELECT name, billing_period FROM plans WHERE code = 'vula-network'").get() as
       | { name: string; billing_period: string }
       | undefined;
     expect(starter).toEqual({ name: 'Starter', billing_period: 'monthly' });
@@ -293,9 +293,9 @@ describe('plans billing_period migration', () => {
     const codes = getRegistryDb()
       .prepare('SELECT code, name FROM plans ORDER BY sort_order')
       .all() as Array<{ code: string; name: string }>;
-    expect(codes.map((p) => p.code)).toContain('business');
+    expect(codes.map((p) => p.code)).toContain('vula-grow');
     expect(codes.map((p) => p.code)).not.toContain('retail');
-    const business = codes.find((p) => p.code === 'business')!;
+    const business = codes.find((p) => p.code === 'vula-grow')!;
     expect(business.name).toBe('Business');
   });
 });
@@ -466,19 +466,19 @@ describe('licensed-terminal pricing migration', () => {
     }>;
 
     // A plan that carried a flat price is custom — NOT R3,000 × 9 terminals.
-    const business = rows.find((r) => r.code === 'business')!;
+    const business = rows.find((r) => r.code === 'vula-grow')!;
     expect(business.pricing_mode).toBe('custom');
     expect(business.terminal_price_cents).toBe(0);
 
-    const multi = rows.find((r) => r.code === 'multi-store')!;
+    const multi = rows.find((r) => r.code === 'vula-network')!;
     expect(multi.pricing_mode).toBe('custom');
     expect(multi.terminal_price_cents).toBe(0);
 
     // Enterprise was already custom.
-    expect(rows.find((r) => r.code === 'enterprise')!.pricing_mode).toBe('custom');
+    expect(rows.find((r) => r.code === 'vula-market-enterprise')!.pricing_mode).toBe('custom');
 
     // The never-priced seeded tier picks up the recommended model.
-    const starter = rows.find((r) => r.code === 'starter')!;
+    const starter = rows.find((r) => r.code === 'vula-start')!;
     expect(starter.pricing_mode).toBe('per_terminal');
     expect(starter.terminal_price_cents).toBe(50_000);
     expect(starter.setup_fee_cents).toBe(1_000_000);

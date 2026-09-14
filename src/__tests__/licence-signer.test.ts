@@ -13,7 +13,7 @@ describe('licence signing', () => {
     storeName: 'Urban Threads Jhb',
     companyId: 7,
     companyName: 'Urban Threads Retail Group',
-    planCode: 'multi-store',
+    planCode: 'vula-network',
     planName: 'Multi-Store',
     features: ['multi_store', 'stock_transfers'],
     maxStores: 10,
@@ -36,7 +36,7 @@ describe('licence signing', () => {
     expect(result.claims).toMatchObject({
       sequence: 1,
       storeSlug: 'urban-threads-jhb',
-      planCode: 'multi-store',
+      planCode: 'vula-network',
       features: ['multi_store', 'stock_transfers'],
       maxStores: 10,
       maxTerminalsPerStore: 25,

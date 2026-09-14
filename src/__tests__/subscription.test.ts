@@ -74,7 +74,7 @@ const planIdByCode = async (code: string): Promise<number> => {
 
 let seq = 0;
 const makeCompany = async (over: Record<string, unknown> = {}) => {
-  const planId = (over.planId as number | undefined) ?? (await planIdByCode('multi-store'));
+  const planId = (over.planId as number | undefined) ?? (await planIdByCode('vula-market-plus'));
   const slug = typeof over.slug === 'string' ? over.slug : `client-${++seq}`;
   const res = await request(app)
     .post('/api/companies')
@@ -173,12 +173,12 @@ describe('a client purchases terminal licences', () => {
   });
 
   it('refuses an allocation above the plan ceiling even when the licence total would allow it', async () => {
-    const planId = await planIdByCode('multi-store'); // ceiling 10 per store
+    const planId = await planIdByCode('vula-network'); // ceiling 3 per store
     const company = await makeCompany({ planId, licensedTerminalCount: 40 });
-    const res = await makeStore({ slug: 'mega', terminalCount: 11, companyId: company.id });
+    const res = await makeStore({ slug: 'mega', terminalCount: 4, companyId: company.id });
     expect(res.status).toBe(402);
     expect(res.body.code).toBe('terminal_cap_exceeded');
-    expect(res.body.error).toMatch(/allows 10 terminals per store/i);
+    expect(res.body.error).toMatch(/allows 3 terminals per store/i);
   });
 
   it('lets the office reallocate between branches, and refuses a total it did not buy', async () => {
@@ -225,7 +225,7 @@ describe('a client purchases terminal licences', () => {
     const claims = decodedLicenceClaims();
     expect(claims.maxTerminals).toBe(2);
     // The plan's ceiling is still carried, and is not the same thing.
-    expect(claims.maxTerminalsPerStore).toBe(10);
+    expect(claims.maxTerminalsPerStore).toBe(15);
   });
 });
 
@@ -320,7 +320,7 @@ describe('single store to multi-store upgrade keeps the subscription coherent', 
           terminalCount: 2,
           licensedTerminalCount: 2,
         },
-        planId: await planIdByCode('multi-store'),
+        planId: await planIdByCode('vula-network'),
         allocations: [{ storeId: cape.id, licensedTerminalCount: 3 }],
       })
       .expect(200);

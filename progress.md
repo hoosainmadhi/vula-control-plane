@@ -1209,3 +1209,34 @@ panels must never share a branch registry). It **adopts** the original
 that file's database path is where the running panel's branch registry lives.
 
 Final state: 8 plans · 10 clients · 9 stores · 5 Head Offices · 0 unassigned.
+
+## 2026-09-14 — plan codes derived from plan names
+
+Owner: "make sure plan codes are based on Plan name". The eight tiers were
+seeded with codes like `business`, `multi-store` and `enterprise` while their
+names read Vula Grow / Vula Network / Vula Market Enterprise — a mismatch
+invisible in the UI but wrong in the API, the licence claims and any script.
+
+Now the catalogue lives in `SEED_PLANS` under name-derived codes (`vula-start`,
+`vula-grow`, `vula-branch`, `vula-network`, `vula-market`, `vula-market-plus`,
+`vula-market-enterprise`, `vula-spares-network`), all eight priced per terminal
+at the house default.
+
+- **A migration renames rather than duplicates.** `seedPlans` re-inserts any of
+  its own codes that are missing, so retiring `business` without a migration
+  would leave a registry holding both `business` and `vula-grow` on the next
+  boot. `renamePlansToNameCodes` renames the four retired codes in place — ids
+  untouched, so every company's plan reference survives — and only when the
+  target is absent, so a reseeded registry is left alone.
+- **Two neighbouring migrations had to be corrected**, because they refer to the
+  codes of their own era and run *before* the rename: `restructurePlans` keys on
+  `enterprise` to keep that tier custom, and `renameRetailPlanToBusiness` maps
+  the historical `retail` onto `business` so the new step can carry it on to
+  `vula-grow`.
+- None of the eight is custom any more, so the two billing tests that relied on
+  the seeded Enterprise being custom now mark a tier as negotiated themselves —
+  which is what the Plans screen does.
+
+Verified on the live registry: after a restart the catalogue reads as the eight
+name-derived codes and all ten clients kept their plan. Tests: **195 green
+across 17 suites**.

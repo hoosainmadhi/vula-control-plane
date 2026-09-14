@@ -66,7 +66,7 @@ const daysFromToday = (n: number): string => {
 let companySeq = 0;
 
 const makeCompany = async (over: Record<string, unknown> = {}) => {
-  const planId = over.planId !== undefined ? over.planId : await planIdByCode('multi-store');
+  const planId = over.planId !== undefined ? over.planId : await planIdByCode('vula-network');
   const slug = typeof over.slug === 'string' ? over.slug : `urban-threads-${++companySeq}`;
   const res = await request(app)
     .post('/api/companies')
@@ -133,7 +133,7 @@ describe('feature vocabulary', () => {
   });
 
   it('refuses an unknown key on edit but accepts the known ones', async () => {
-    const planId = await planIdByCode('starter');
+    const planId = await planIdByCode('vula-start');
     await request(app)
       .put(`/api/plans/${planId}`)
       .set(auth())
@@ -151,7 +151,7 @@ describe('feature vocabulary', () => {
 
 describe('multi-store feature gate', () => {
   it('refuses multi-store onboarding for a plan without multi_store (402 feature_not_in_plan)', async () => {
-    const starterId = await planIdByCode('starter');
+    const starterId = await planIdByCode('vula-start');
     const res = await request(app)
       .post('/api/clients')
       .set(auth())
@@ -186,7 +186,7 @@ describe('multi-store feature gate', () => {
       .post(`/api/clients/${company.id}/upgrade-to-multistore`)
       .set(auth())
       .send({
-        planId: await planIdByCode('multi-store'),
+        planId: await planIdByCode('vula-network'),
         headOffice: { slug: 'urban-threads-ho', baseUrl: 'http://localhost:3260' },
       })
       .expect(200);

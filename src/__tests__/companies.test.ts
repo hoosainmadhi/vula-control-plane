@@ -49,7 +49,7 @@ const planIdByCode = async (code: string): Promise<number> => {
 };
 
 const makeCompany = async (over: Record<string, unknown> = {}) => {
-  const planId = await planIdByCode('multi-store');
+  const planId = await planIdByCode('vula-network');
   const res = await request(app)
     .post('/api/companies')
     .set(auth())
@@ -90,10 +90,19 @@ const makeStore = async (over: Record<string, unknown> = {}) => {
 };
 
 describe('plans', () => {
-  it('seeds four editable tiers', async () => {
+  it('seeds eight editable tiers, ordered, with codes derived from their names', async () => {
     const res = await request(app).get('/api/plans').set(auth()).expect(200);
     const codes = (res.body as Array<{ code: string }>).map((p) => p.code);
-    expect(codes).toEqual(['starter', 'business', 'multi-store', 'enterprise']);
+    expect(codes).toEqual([
+      'vula-start',
+      'vula-grow',
+      'vula-branch',
+      'vula-network',
+      'vula-market',
+      'vula-market-plus',
+      'vula-market-enterprise',
+      'vula-spares-network',
+    ]);
   });
 
   it('carries the per-store terminal ceiling, feature set and per-terminal pricing', async () => {
@@ -109,9 +118,9 @@ describe('plans', () => {
         setupFeeCents: number;
         billingPeriod: string;
       }>
-    ).find((p) => p.code === 'multi-store')!;
-    expect(multi.maxStores).toBe(20);
-    expect(multi.maxTerminalsPerStore).toBe(10);
+    ).find((p) => p.code === 'vula-network')!;
+    expect(multi.maxStores).toBe(5);
+    expect(multi.maxTerminalsPerStore).toBe(3);
     expect(multi.features).toContain('multi_store');
     expect(multi.features).toContain('stock_transfers');
     // R500 per licensed terminal per month, R10,000 once-off onboarding.
@@ -121,17 +130,21 @@ describe('plans', () => {
     expect(multi.billingPeriod).toBe('monthly');
   });
 
-  it('seeds Enterprise as custom pricing — never an invented rate', async () => {
+  it('prices every seeded tier per terminal — no tier is left without a rate', async () => {
     const res = await request(app).get('/api/plans').set(auth()).expect(200);
-    const enterprise = (
-      res.body as Array<{ code: string; pricingMode: string; terminalPriceCents: number }>
-    ).find((p) => p.code === 'enterprise')!;
-    expect(enterprise.pricingMode).toBe('custom');
-    expect(enterprise.terminalPriceCents).toBe(0);
+    const seeded = res.body as Array<{ code: string; pricingMode: string; terminalPriceCents: number }>;
+    expect(seeded).toHaveLength(8);
+    for (const plan of seeded) {
+      expect({ code: plan.code, mode: plan.pricingMode }).toEqual({
+        code: plan.code,
+        mode: 'per_terminal',
+      });
+      expect(plan.terminalPriceCents).toBeGreaterThan(0);
+    }
   });
 
   it('lets the operator edit a tier', async () => {
-    const planId = await planIdByCode('starter');
+    const planId = await planIdByCode('vula-start');
     const res = await request(app)
       .put(`/api/plans/${planId}`)
       .set(auth())
@@ -188,7 +201,7 @@ describe('plans', () => {
   });
 
   it('refuses to change a plan code — it is immutable after creation', async () => {
-    const planId = await planIdByCode('business');
+    const planId = await planIdByCode('vula-grow');
     const res = await request(app)
       .put(`/api/plans/${planId}`)
       .set(auth())
@@ -198,7 +211,7 @@ describe('plans', () => {
   });
 
   it('refuses assigning an inactive (archived) plan to a new company', async () => {
-    const planId = await planIdByCode('starter');
+    const planId = await planIdByCode('vula-start');
     await request(app)
       .put(`/api/plans/${planId}`)
       .set(auth())
@@ -216,8 +229,8 @@ describe('plans', () => {
 describe('companies', () => {
   it('creates a company and reports its plan entitlement', async () => {
     const company = await makeCompany({ paidThrough: '2026-12-31' });
-    expect(company.planCode).toBe('multi-store');
-    expect(company.maxStores).toBe(20);
+    expect(company.planCode).toBe('vula-network');
+    expect(company.maxStores).toBe(5);
   });
 
   it('counts the stores it owns', async () => {
@@ -267,9 +280,9 @@ describe('companies', () => {
 
 describe('store caps', () => {
   it('refuses a store beyond the plan cap with an upgrade message', async () => {
-    const planId = await planIdByCode('starter'); // 1 store
+    const planId = await planIdByCode('vula-grow'); // 1 store, 3 tills
     const company = await makeCompany({ name: 'Spaza', slug: 'spaza', planId, licensedTerminalCount: 4 });
-    // Starter allows 2 terminals, so this store fits under both caps.
+    // Vula Grow allows one store of up to 3 tills, so this store fits both caps.
     const first = await makeStore({ slug: 'first-store', terminalCount: 2, companyId: company.id });
     expect(first.status).toBe(201);
 
@@ -280,13 +293,13 @@ describe('store caps', () => {
   });
 
   it('refuses terminals beyond the per-store ceiling on create', async () => {
-    const planId = await planIdByCode('starter'); // 2 terminals
+    const planId = await planIdByCode('vula-start'); // 1 terminal
     const company = await makeCompany({ name: 'Spaza', slug: 'spaza', planId, licensedTerminalCount: 20 });
 
     const res = await makeStore({ slug: 'big-store', terminalCount: 9, companyId: company.id });
     expect(res.status).toBe(402);
     expect(res.body.code).toBe('terminal_cap_exceeded');
-    expect(res.body.error).toMatch(/allows 2 terminals/i);
+    expect(res.body.error).toMatch(/allows 1 terminal/i);
   });
 
   it('refuses a store the client has not licensed — the purchased quantity gates capacity', async () => {
@@ -309,7 +322,9 @@ describe('store caps', () => {
   });
 
   it('refuses configuring more tills than the store is licensed for', async () => {
-    const company = await makeCompany({ licensedTerminalCount: 6 });
+    // Vula Market: one store, up to 10 tills, so the ceiling is not what refuses here.
+    const planId = await planIdByCode('vula-market');
+    const company = await makeCompany({ name: 'Grocer', slug: 'grocer', planId, licensedTerminalCount: 6 });
     const created = await makeStore({ slug: 'shop', terminalCount: 2, companyId: company.id });
     const storeId = created.body.store.id;
     expect(created.body.store.licensedTerminalCount).toBe(2);
@@ -339,8 +354,8 @@ describe('store caps', () => {
   });
 
   it('refuses a push above the store allowance even if the registry row was changed directly', async () => {
-    const planId = await planIdByCode('starter'); // ceiling 2
-    const company = await makeCompany({ name: 'Spaza', slug: 'spaza', planId, licensedTerminalCount: 2 });
+    const planId = await planIdByCode('vula-grow'); // ceiling 3
+    const company = await makeCompany({ name: 'Spaza', slug: 'spaza', planId, licensedTerminalCount: 3 });
     const created = await makeStore({ slug: 'shop', terminalCount: 2, companyId: company.id });
     const storeId = created.body.store.id;
 
@@ -378,13 +393,13 @@ describe('licence claims carry the company and plan', () => {
 
     expect(claims.companyId).toBe(company.id);
     expect(claims.companyName).toBe('Urban Threads Retail Group');
-    expect(claims.planCode).toBe('multi-store');
+    expect(claims.planCode).toBe('vula-network');
     expect(claims.features).toContain('multi_store');
-    expect(claims.maxStores).toBe(20);
+    expect(claims.maxStores).toBe(5);
     // The store's own licence: 3 terminals (the allocation created with it), and
     // the plan's per-store ceiling beside it.
     expect(claims.maxTerminals).toBe(3);
-    expect(claims.maxTerminalsPerStore).toBe(10);
+    expect(claims.maxTerminalsPerStore).toBe(3);
     expect(claims.paidThrough).toBe('2027-01-31');
     // The quantity is what the client purchased — the licence never derives it
     // from configured tills alone.
@@ -423,7 +438,7 @@ describe('panels', () => {
     const res = await makePanel(company.id);
     expect(res.status).toBe(201);
     expect(res.body.panel.companyName).toBe('Urban Threads Retail Group');
-    expect(res.body.panel.planCode).toBe('multi-store');
+    expect(res.body.panel.planCode).toBe('vula-network');
     expect(res.body.firstLicence.ok).toBe(true);
   });
 

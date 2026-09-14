@@ -97,7 +97,7 @@ const auth = (): Record<string, string> => authHeader(token);
 const multiStorePlanId = async (): Promise<number> => {
   const res = await request(app).get('/api/plans').set(auth()).expect(200);
   const plan = (res.body as Array<{ id: number; code: string }>).find(
-    (p) => p.code === 'multi-store',
+    (p) => p.code === 'vula-network',
   );
   expect(plan).toBeDefined();
   return plan!.id;
