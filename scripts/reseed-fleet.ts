@@ -138,6 +138,8 @@ const PANELS: Array<{ slug: string; name: string; client: string; port: number }
   { slug: 'ahk-spares-ho', name: 'AHK Spares Head Office', client: 'ahk-spares', port: 3268 },
 ];
 
+const envSlugForPanel = (slug: string): string => slug;
+
 const panelUrl = (p: { slug: string; port: number }): string =>
   `http://${p.slug}.localhost:${p.port}`;
 
@@ -177,6 +179,28 @@ const ensureHoInstance = (panel: { slug: string; port: number }): 'exists' | 'cr
 // --- Reading the deployments -------------------------------------------------
 
 const envFile = (slug: string): string => path.join(DATA_DIR, 'env', `${slug}.env`);
+
+/**
+ * The per-branch credential the merchant's Head Office must present when it calls
+ * the store. It lives on the store (`settings.head_office_token`) and is
+ * provisioned by whoever wires the topology — `fleet.sh create` does it, but the
+ * demo seeder's `--force` wipe takes it away again, so renew it here rather than
+ * leave a branch the panel cannot talk to.
+ */
+const ensureBranchHeadOfficeToken = (slug: string, existing: string): string => {
+  if (existing) return existing;
+  const file = dbFile(slug);
+  const db = new Database(file);
+  try {
+    const token = crypto.randomBytes(32).toString('hex');
+    db.prepare(
+      'UPDATE settings SET head_office_token = ?, head_office_enabled = 1 WHERE id = 1',
+    ).run(token);
+    return token;
+  } finally {
+    db.close();
+  }
+};
 const dbFile = (slug: string): string => path.join(DATA_DIR, `vula-${slug}.db`);
 
 const readEnv = (slug: string): { token: string; port: number } => {
@@ -195,17 +219,24 @@ const readEnv = (slug: string): { token: string; port: number } => {
 
 /** The store's own view of itself — the name and vertical a demo will see in the
  *  POS, and the tills it is configured to run. */
-const readStoreDb = (slug: string): { name: string; vertical: string; tills: number } => {
+const readStoreDb = (
+  slug: string,
+): { name: string; vertical: string; tills: number; headOfficeToken: string } => {
   const file = dbFile(slug);
   if (!fs.existsSync(file)) throw new Error(`No store database for '${slug}': ${file}`);
   const db = new Database(file, { readonly: true, fileMustExist: true });
   try {
-    const row = db.prepare('SELECT store_name, vertical FROM settings WHERE id = 1').get() as
-      | { store_name: string; vertical: string }
+    const row = db.prepare('SELECT store_name, vertical, head_office_token FROM settings WHERE id = 1').get() as
+      | { store_name: string; vertical: string; head_office_token: string | null }
       | undefined;
     const tills = (db.prepare('SELECT COUNT(*) AS n FROM terminals').get() as { n: number }).n;
     if (!row) throw new Error(`No settings row in ${file}`);
-    return { name: row.store_name, vertical: row.vertical, tills };
+    return {
+      name: row.store_name,
+      vertical: row.vertical,
+      tills,
+      headOfficeToken: row.head_office_token ?? '',
+    };
   } finally {
     db.close();
   }
@@ -455,6 +486,43 @@ const main = async (): Promise<void> => {
     }
     await api('POST', '/panels', { name: p.name, slug: p.slug, companyId, baseUrl: panelUrl(p) });
     console.log(`  ✓ panel ${p.slug.padEnd(22)} instance ${instance === 'created' ? 'created' : 'already present'}`);
+  }
+
+  // 5. Branches into their merchant's Head Office. The panel upserts by slug, so
+  //    this is safe to re-run. It authenticates with its own CONTROL_PLANE_TOKEN,
+  //    which its env file holds (the registry never serialises it).
+  for (const p of PANELS) {
+    const companyId = companyIdBySlug.get(p.client);
+    const branches = resolved.filter((s) => companyIdBySlug.get(s.client) === companyId);
+    if (branches.length === 0) continue;
+    const panelToken = readEnv(envSlugForPanel(p.slug))?.token ?? '';
+    if (!panelToken) {
+      console.log(`  ! panel ${p.slug}: no env file, branches not registered`);
+      continue;
+    }
+    let ok = 0;
+    for (const branch of branches) {
+      const headOfficeToken = ensureBranchHeadOfficeToken(branch.envSlug, branch.headOfficeToken);
+      try {
+        const res = await fetch(`${panelUrl(p)}/api/internal/branches`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Control-Plane-Token': panelToken },
+          body: JSON.stringify({
+            slug: branch.cpSlug,
+            name: branch.name,
+            baseUrl: branch.baseUrl,
+            headOfficeToken,
+            vertical: branch.vertical,
+          }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (res.ok) ok += 1;
+        else console.log(`  ! ${p.slug} <- ${branch.cpSlug}: HTTP ${res.status}`);
+      } catch (err) {
+        console.log(`  ! ${p.slug} <- ${branch.cpSlug}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+    console.log(`  ✓ panel ${p.slug.padEnd(22)} ${ok}/${branches.length} branches registered`);
   }
 
   const [stores, panels] = await Promise.all([

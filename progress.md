@@ -1269,3 +1269,30 @@ populated by the control plane's topology wiring (or by hand on the panel's
 Stores page), and neither the reseed tool nor the store-create path does it —
 each new branch's `head_office_token` is provisioned on the store side but never
 registered with its merchant's panel.
+
+## 2026-09-14 — every Head Office gets its branches
+
+Owner: `http://kloof-auto-spares-ho.localhost:3264/stores` showed no stores —
+"register for all HO that don't have registered stores".
+
+`reseed-fleet.ts` now finishes the wiring: after registering the stores it calls
+each panel's `POST /api/internal/branches` (upsert by slug) for every branch of
+that merchant, authenticated with the panel's own `CONTROL_PLANE_TOKEN` from its
+env file — the registry never serialises that token, so the env file is where the
+tool can honestly get it.
+
+Two things the token work exposed:
+
+- **The demo seeder's `--force` wipe takes the branch's Head Office token with
+  it.** `fleet.sh create` provisions one, the wipe removes it, and the panel then
+  refuses the registration with a 400 — the same two-sided-credential gap that
+  made the whole fleet look Offline on the 14th, one layer down. The tool now
+  renews a missing token on the store (`settings.head_office_token` +
+  `head_office_enabled = 1`) before registering, which is the control plane's job
+  in this design anyway.
+- **`PUT /panels/:id` needs the numeric id, not the slug** (`400 Invalid store
+  id` otherwise) — caught on the first live run, after the stores had registered.
+
+Result, verified by reading each panel's `branch_stores` and comparing every
+token against the branch's own settings: **13 branches across 5 panels, all
+paired** — Urban Threads 3, HM Spares 1, Kloof 3, Cresta 3, AHK 3.
