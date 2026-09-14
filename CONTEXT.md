@@ -418,6 +418,36 @@ Endpoints: `GET /api/errors` returns the grouped feed (newest first, ties broken
 by occurrence count then fingerprint) and `GET /api/errors/:fingerprint` returns
 one group with every occurrence behind it.
 
+## 5b. Devices (SPOG §25)
+
+`GET /api/devices` is a **derived** view, not a table: there is no devices
+registry, and none is needed. Each store contributes one entry per **configured
+till** (from `terminalRoster`, so custom names and the roster order survive),
+and each Head Office contributes one `office` entry. Per-till state —
+`claimed`, `deviceId`, `sessionOpen`, `lastSeenAt` — is read out of the store's
+`last_telemetry_json`; the roster decides which tills exist, telemetry decides
+what state they are in. A till with no telemetry entry is `unclaimed`.
+
+Derivation lives in `services/fleetView.ts` — the same module the store list and
+store detail use for `healthState` / `configState` / the telemetry summary, so
+the SPOG cannot drift on how a state is computed.
+
+Honest limits, deliberately surfaced rather than papered over:
+
+- **A bound till reads `claimed`, not `online`.** `lastSeenAt` is a reserved
+  null in the v0.4.0 telemetry contract until the tenant ships device
+  heartbeats, so "claimed but not reporting" is its own status rather than a
+  guess between online and offline.
+- **`lastSeenAt` falls back to the store's heartbeat** (`last_heartbeat_at`) for
+  display; the table's footer says so.
+- **`version` is the store's build**, since every till in a store runs the same
+  one and the contract carries no per-device version.
+- **A Head Office has no environment** (the `panels` table has no such column)
+  and no till state, so those fields are null/false by construction.
+- **Read-only.** The spec's device actions (rename, rotate token, revoke, force
+  logout, run diagnostics) are not implemented because the tenant exposes no
+  per-device command API — §39 forbids shipping the controls as dead buttons.
+
 ## 6. Auth & session conventions
 
 - Single office admin from env; password bcrypt-hashed once at boot, compared

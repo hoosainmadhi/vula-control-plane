@@ -12,6 +12,7 @@ import CompaniesPage from './pages/CompaniesPage';
 import PlansPage from './pages/PlansPage';
 import BillingPage from './pages/BillingPage';
 import ErrorsPage from './pages/ErrorsPage';
+import DevicesPage from './pages/DevicesPage';
 
 function RequireOffice({ children }: { children: ReactNode }) {
   if (!getToken()) return <Navigate to="/login" replace />;
@@ -108,6 +109,16 @@ export default function App() {
           <RequireOffice>
             <Layout title="Errors">
               <ErrorsPage />
+            </Layout>
+          </RequireOffice>
+        }
+      />
+      <Route
+        path="/devices"
+        element={
+          <RequireOffice>
+            <Layout title="Devices">
+              <DevicesPage />
             </Layout>
           </RequireOffice>
         }

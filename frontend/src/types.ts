@@ -446,3 +446,38 @@ export interface ErrorGroupDetail {
   group: ErrorGroup;
   events: ErrorEvent[];
 }
+
+// --- Devices (§25) -----------------------------------------------------------
+
+/**
+ * `claimed`/`unclaimed` are POS-only: a till whose register has not reported a
+ * device heartbeat yet is bound but not reporting, which is neither online nor
+ * offline.
+ */
+export type DeviceStatus = 'online' | 'offline' | 'claimed' | 'unclaimed' | 'unknown';
+
+export interface Device {
+  id: string;
+  name: string;
+  type: 'pos' | 'office';
+  /** Roster position (1 = Till 1); null for a Head Office. */
+  till: number | null;
+  storeId: number | null;
+  /** The store's name, or a Head Office's own name. */
+  storeName: string;
+  storeSlug: string;
+  companyName: string | null;
+  environment: StoreEnvironment | null;
+  vertical: StoreVertical | null;
+  version: string | null;
+  claimed: boolean;
+  sessionOpen: boolean;
+  deviceId: string | null;
+  /** Per-device heartbeat — null until registers report one. */
+  lastSeenAt: string | null;
+  /** The store-level heartbeat, the fallback while the above is null. */
+  lastHeartbeatAt: string | null;
+  status: DeviceStatus;
+  configState: ConfigState;
+  healthStatus: HealthStatus;
+}

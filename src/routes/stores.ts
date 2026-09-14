@@ -53,6 +53,7 @@ import {
   type Entitlements,
   type RegisterEnforcement,
 } from '../services/subscriptions.js';
+import { configStateFor, healthStateFor, telemetrySummary } from '../services/fleetView.js';
 import {
   allocateTerminals,
   checkAllocation,
@@ -175,29 +176,6 @@ export interface HealthOutcome {
 /** Entitlements for a store, resolved from its owning company (or unassigned). */
 const entitlementsForStore = (store: StoreRecord): Entitlements => entitlementsForStoreService(store);
 
-/** Operator-facing health vocabulary (SPOG §9-§10): technical, not administrative. */
-const healthStateFor = (
-  store: StoreRecord,
-  registerState: RegisterEnforcement['registerState'],
-): 'healthy' | 'warning' | 'degraded' | 'offline' | 'unknown' => {
-  if (store.last_health_status === 'unknown') return 'unknown';
-  if (store.last_health_status === 'down') return 'offline';
-  // Reachable — raise a warning for drift and entitlement trouble, not outages.
-  const drift = configStateFor(store) !== 'current';
-  const licenceTrouble =
-    registerState === 'warn' || registerState === 'grace' || registerState === 'suspended';
-  return drift || licenceTrouble ? 'warning' : 'healthy';
-};
-
-/** Versioned configuration state (SPOG §12): desired vs applied, not just "pushed". */
-const configStateFor = (store: StoreRecord): 'current' | 'pending' | 'failed' | 'unknown' => {
-  if (store.last_config_status === 'failed') return 'failed';
-  const desired = store.desired_config_version ?? 1;
-  const applied = store.applied_config_version ?? 0;
-  if (store.last_config_status === 'pending' && applied === 0) return 'unknown';
-  return desired === applied ? 'current' : 'pending';
-};
-
 export const storeToOut = (store: StoreRecord): StoreOut => {
   const ent = entitlementsForStore(store);
   const enforcement = registerEnforcementFor(ent);
@@ -262,44 +240,6 @@ const snapshotTerminalCount = (store: StoreRecord): number => {
   const snapshot = parseSnapshot(store) as { applied?: { terminalCount?: unknown } } | null;
   const count = snapshot?.applied?.terminalCount;
   return typeof count === 'number' && Number.isInteger(count) && count >= 1 ? count : 0;
-};
-
-/** Derived SPOG telemetry summary from the last stored snapshot (technical only). */
-const telemetrySummary = (store: StoreRecord) => {
-  if (!store.last_telemetry_json) return null;
-  try {
-    const t = JSON.parse(store.last_telemetry_json) as {
-      version?: string;
-      generatedAt?: string;
-      sync?: { lastSyncAt: string | null; pendingEvents: number | null; failedEvents: number | null };
-      terminals?: Array<{ claimed?: boolean; sessionOpen?: boolean; lastSeenAt?: string | null }>;
-    };
-    const list = Array.isArray(t.terminals) ? t.terminals : [];
-    // A till counts as online when it has a device heartbeat fresher than 5 min.
-    const ONLINE_WINDOW_MS = 5 * 60 * 1000;
-    return {
-      version: t.version ?? null,
-      generatedAt: t.generatedAt ?? null,
-      sync: {
-        lastSyncAt: t.sync?.lastSyncAt ?? null,
-        pendingEvents: t.sync?.pendingEvents ?? null,
-        failedEvents: t.sync?.failedEvents ?? null,
-      },
-      terminals: {
-        configured: store.terminal_count,
-        claimed: list.filter((x) => x.claimed).length,
-        open: list.filter((x) => x.sessionOpen).length,
-        online: list.filter(
-          (x) =>
-            x.lastSeenAt !== null &&
-            x.lastSeenAt !== undefined &&
-            Date.now() - new Date(x.lastSeenAt).getTime() <= ONLINE_WINDOW_MS,
-        ).length,
-      },
-    };
-  } catch {
-    return null;
-  }
 };
 
 const terminalsFor = (store: StoreRecord): TerminalPreview[] => {

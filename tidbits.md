@@ -9,18 +9,13 @@ Order is buildable-first; each is its own increment.
 
 - ~~**Errors page (§30)**~~ **shipped 2026-09-14** (`error_events` feed, nav +
   `ErrorsPage`).
-- **Devices page (§25/§26)** — next. The data is already collected: per-till
-  `deviceId`/`claimed`/`sessionOpen`/`lastSeenAt` sit in
-  `stores.last_telemetry_json`, but `telemetrySummary` deliberately reduces them
-  to counts, so the work is exposing them (`GET /api/devices` or an added field)
-  plus a page. A Head Office panel can appear as an "Office" device with health +
-  `app_version`, but it has **no** `lastSeenAt`. Device actions (rename / rotate
-  token / revoke / force logout / run diagnostics) are **not** buildable — the
-  tenant exposes no per-device command API; ship the page read-only and say so.
-- **Versions page (§32)** — no schema change: aggregate `stores.app_version` /
-  `schema_version` + `panels.app_version` into a distribution with a filter.
-  **"Minimum supported" does not exist** anywhere (no config, no constant) —
-  decide whether it is env, a CP setting, or dropped before building.
+- ~~**Devices page (§25)**~~ **shipped 2026-09-14** (`GET /api/devices`, nav +
+  `DevicesPage`; read-only — no per-device command API exists).
+- **Versions page (§32)** — next; no schema change: aggregate
+  `stores.app_version` / `schema_version` + `panels.app_version` into a
+  distribution with a filter. **"Minimum supported" does not exist** anywhere (no
+  config, no constant) — decide whether it is env, a CP setting, or dropped
+  before building.
 - **Deployments page (§33, read-only)** — `deployment_jobs`/`deployment_job_steps`
   are durable and already API-exposed, but only **per client**
   (`GET /api/clients/:id/jobs`). A fleet-wide view needs a new read query. There

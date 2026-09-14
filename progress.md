@@ -2,6 +2,40 @@
 
 Dated log of the build.
 
+## 2026-09-14 — SPOG §25: the Devices page (second deferred surface)
+
+Device data was already being collected and then thrown away: per-till
+`claimed`/`deviceId`/`sessionOpen`/`lastSeenAt` sit in
+`stores.last_telemetry_json`, but `telemetrySummary` reduces them to four counts.
+So this slice **exposes** rather than collects.
+
+- **`services/fleetView.ts`** (new, shared): the derived read model moved out of
+  `routes/stores.ts` — `parseTelemetry`, `telemetrySummary`, `configStateFor`,
+  `healthStateFor` — plus the new device derivation. One module now owns how a
+  state is computed, so the store list, store detail and Devices page cannot
+  drift. `stores.ts` imports them instead of defining them.
+- **Devices are derived, not stored.** Each store contributes one entry per
+  **configured till** (from `terminalRoster`, so custom names and roster order
+  survive) and each Head Office one `office` entry. The roster decides which
+  tills exist; telemetry decides their state. A till with no telemetry entry is
+  `unclaimed`.
+- **Honest statuses.** A bound till reads `claimed` — not `online` — because
+  `lastSeenAt` is a reserved null until the tenant ships device heartbeats;
+  `online` requires a fresh heartbeat, `offline` means the store is down or the
+  heartbeat is stale. Last seen falls back to the store heartbeat and the footer
+  says so. `version` is the store's build (no per-device version exists).
+- **Two real bugs caught by the tests**: tills were sorting alphabetically by
+  name (so a renamed "Bakery" landed before "Front counter") — the view now
+  carries the roster position and sorts on it; and `POST /stores` silently
+  ignores `terminalNames` (it is an update field), which the first test fixture
+  had wrongly assumed.
+- `GET /api/devices` (office-gated, `routes/devices.ts`) + a **Devices** nav
+  entry and page: status/type tiles, search, type and status filters, and the
+  §25 columns. Read-only — the tenant exposes no per-device command API, so the
+  spec's rename/rotate/revoke actions are deliberately absent rather than dead.
+- Tests: `src/__tests__/devices.test.ts` (8) → CP **181 green (15 suites)**,
+  typecheck + production build clean. Doctrine: CONTEXT §5b.
+
 ## 2026-09-14 — SPOG §30: the Errors page (first of the deferred surfaces)
 
 Owner picked the deferred SPOG set; this lands its first slice after committing

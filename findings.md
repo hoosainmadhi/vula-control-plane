@@ -1,5 +1,35 @@
 # Findings
 
+## 2026-09-14 — the Devices surface: collected then discarded
+
+- **The data was already there.** Per-till `claimed`, `deviceId`, `sessionOpen`
+  and `lastSeenAt` have been in `stores.last_telemetry_json` since the v0.4.0
+  telemetry contract; `telemetrySummary` reduced them to
+  `{configured, claimed, open, online}` and dropped the rest. So §25 needed no
+  new collection — only exposure. Worth remembering before building any other
+  "the CP doesn't know X" surface: check `last_telemetry_json` first.
+- **`lastSeenAt` is a reserved null, not missing data.** The contract already
+  documents it (and `pendingEvents`/`failedEvents`) as null until the tenant
+  ships device heartbeats. That made "claimed but not reporting" a real,
+  distinct state rather than something to guess at, so it gets its own status
+  (`claimed`) instead of being rounded to online or offline.
+- **A name sort is not a roster order.** Sorting devices by name put a renamed
+  "Bakery" before "Front counter"; the view now carries the till number and
+  sorts on it. Caught by the test, not by review.
+- **`POST /stores` silently ignores unknown body keys.** Sending `terminalNames`
+  at create (a field `PUT /stores/:id` accepts) returns 201 with the names
+  quietly dropped — the same silent-ignore shape za-pos recorded for
+  `settings.head_office_token`. Worth knowing when a create-shaped test fixture
+  appears to do nothing.
+- **A Head Office is not a device with till state.** `panels` has no
+  `environment` column and no terminal/session/telemetry columns at all, so an
+  office device carries nulls and `claimed: true` (it is the app itself) — the
+  alternative was inventing values to fill the spec's columns.
+- **The spec's device *actions* are blocked, not deferred.** Rename / rotate
+  token / revoke / force logout / run diagnostics all need the tenant to expose
+  a per-device command API; the CP holds a store-level token and nothing
+  per-device. Shipped the page read-only rather than the buttons.
+
 ## 2026-09-14 — what the deferred SPOG set can actually be built on
 
 - **Most of the deferred nav has no data behind it.** Checked each surface

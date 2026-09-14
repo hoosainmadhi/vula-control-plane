@@ -147,9 +147,19 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       /head-offices fleet page stays reachable by URL for panel registration,
       like /stores and /companies). Tabs: Overview · Head Office · Stores ·
       Deployments.
-      **Deferred (spec "Next"/"Later"):** Devices page,
-      sync dashboard/inspector, backups, versions/deployments (errors shipped
-      2026-09-14 — below).
+      **Deferred (spec "Next"/"Later"):** sync dashboard/inspector, backups,
+      versions/deployments (errors and devices shipped 2026-09-14 — below).
+- [x] **SPOG — Devices page** (2026-09-14, §25): every configured till of every
+      store (claimed or not) plus one entry per Head Office, from `GET
+      /api/devices`. Derived, not stored: per-till `claimed`/`deviceId`/
+      `sessionOpen`/`lastSeenAt` come from `last_telemetry_json` and the roster
+      decides which tills exist. A bound till reads **Claimed**, not Online —
+      `lastSeenAt` is a reserved null until the tenant ships device heartbeats —
+      and Last seen falls back to the store heartbeat. Read-only: no per-device
+      command API exists, so the spec's device actions are not shipped as dead
+      buttons. `services/fleetView.ts` now owns the derived state that the store
+      list, store detail and Devices page share. Page + nav + type filter +
+      status filter. Doctrine: CONTEXT §5b. Tests: CP **181 green (15 suites)**.
 - [x] **SPOG — Errors page** (2026-09-14, §30 observability): the panel was
       blind by construction — a store's row keeps only the *latest* failure, so
       "how often, since when, how many stores" was unanswerable, and the
