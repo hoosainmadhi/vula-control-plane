@@ -6,6 +6,7 @@ import Modal from '../components/Modal';
 import Spinner from '../components/Spinner';
 import StatusBadge from '../components/StatusBadge';
 import type { Company, Plan } from '../types';
+import { rand } from '../lib/money';
 
 /**
  * Companies — the merchant accounts.
@@ -43,6 +44,8 @@ interface FormState {
   paidThrough: string;
   trialEndsAt: string;
   status: 'active' | 'suspended';
+  /** The purchased terminal quantity — a client with none cannot take a store. */
+  licensedTerminalCount: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -53,6 +56,7 @@ const EMPTY_FORM: FormState = {
   paidThrough: '',
   trialEndsAt: '',
   status: 'active',
+  licensedTerminalCount: '0',
 };
 
 export default function CompaniesPage() {
@@ -117,6 +121,7 @@ export default function CompaniesPage() {
       paidThrough: company.paidThrough ?? '',
       trialEndsAt: company.trialEndsAt ?? '',
       status: company.status,
+      licensedTerminalCount: String(company.subscription?.licensedTerminalCount ?? 0),
     });
     setFormError(null);
     setModalOpen(true);
@@ -133,6 +138,7 @@ export default function CompaniesPage() {
         paidThrough: form.paidThrough.trim() || null,
         trialEndsAt: form.trialEndsAt.trim() || null,
         status: form.status,
+        licensedTerminalCount: Number(form.licensedTerminalCount) || 0,
       };
       if (editingId !== null) {
         await api(`/companies/${editingId}`, { method: 'PUT', body });
@@ -278,6 +284,24 @@ export default function CompaniesPage() {
                   </div>
                   <div>
                     <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Licensed terminals
+                    </div>
+                    <div className="mt-0.5 font-mono text-xs text-slate-700">
+                      {company.subscription?.licensedTerminalCount ?? 0}
+                      <span className="text-slate-400">
+                        {' '}
+                        ({company.subscription?.allocatedTerminals ?? 0} allocated)
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      {company.subscription?.recurringAmountCents === null ||
+                      company.subscription === undefined
+                        ? 'Custom pricing'
+                        : `${rand(company.subscription.recurringAmountCents)} recurring`}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
                       Stores
                     </div>
                     <div className="mt-0.5 font-mono text-xs text-slate-700">
@@ -408,12 +432,29 @@ export default function CompaniesPage() {
                 {plans.map((plan) => (
                   <option key={plan.id} value={plan.id}>
                     {plan.name} — {plan.maxStores} store{plan.maxStores === 1 ? '' : 's'},{' '}
-                    {plan.maxTerminalsPerStore} tills each
+                    {plan.maxTerminalsPerStore} licensed terminals each
                   </option>
                 ))}
               </select>
               <p className="mt-1 text-xs text-slate-400">
                 Raising the plan here is what allows the next store to be created.
+              </p>
+            </div>
+
+            <div>
+              <label className={labelCls}>Licensed terminals</label>
+              <input
+                type="number"
+                min={0}
+                max={5000}
+                value={form.licensedTerminalCount}
+                onChange={(e) => setForm({ ...form, licensedTerminalCount: e.target.value })}
+                className={inputCls}
+              />
+              <p className="mt-1 text-xs text-slate-400">
+                What this client has purchased — the recurring fee is this quantity × the plan's rate.
+                It is distributed across the client's stores as allocations, and a client with none
+                cannot take a store. Not the same as configured tills or claimed devices.
               </p>
             </div>
 

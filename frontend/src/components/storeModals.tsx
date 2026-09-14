@@ -148,7 +148,7 @@ export function StoreFormModal({ modal, saving, error, companies, onClose, onSub
           </select>
         </div>
         <div>
-          <label className={labelCls}>Terminal count (1–99)</label>
+          <label className={labelCls}>Configured terminals (1–99)</label>
           <input
             required
             type="number"
@@ -158,6 +158,12 @@ export function StoreFormModal({ modal, saving, error, companies, onClose, onSub
             onChange={(e) => setForm({ ...form, terminalCount: e.target.value })}
             className={inputCls}
           />
+          <p className="mt-1 text-xs text-slate-400">
+            The till slots this store runs (pushed as Till 1..N).{' '}
+            {editing && editing.licensedTerminalCount !== undefined
+              ? `Bounded by the store's ${editing.licensedTerminalCount} licensed terminal${editing.licensedTerminalCount === 1 ? '' : 's'} — raise the licence on the client's subscription first.`
+              : "For a client-owned store this cannot exceed its licensed terminals."}
+          </p>
         </div>
         {editing && (
           <div>

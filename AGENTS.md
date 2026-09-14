@@ -54,14 +54,22 @@ za-pos-control-plane/
 ├── src/
 │   ├── config/
 │   │   ├── env.ts         # typed env (PORT, CP_DB_PATH, OFFICE_ADMIN_*, JWT_*)
-│   │   └── registryDb.ts  # stores DDL, lazy singleton (WAL), CRUD + record helpers
+│   │   └── registryDb.ts  # DDL (stores, plans, companies, subscriptions,
+│   │                      # licences, invoices, panels, jobs, audit), lazy
+│   │                      # singleton (WAL), CRUD + migrations
 │   ├── app.ts             # createApp(): headers, /health, /api, SPA, errors
 │   ├── middleware/
 │   │   ├── auth.ts        # signOfficeToken, verify, requireOffice (kind 'office')
-│   │   └── error.ts       # notFound + one { error } handler (err.status)
-│   ├── routes/            # auth.ts (login), stores.ts (fleet), index.ts barrel
-│   ├── services/
-│   │   └── storeClient.ts # pushTerminals/ping/resetAdmin vs /api/internal/*
+│   │   └── error.ts       # notFound + one { error, code? } handler (err.status)
+│   ├── routes/            # auth.ts (login), clients.ts (client-first wizard +
+│   │                      # subscription), stores.ts, companies.ts (+ plans),
+│   │                      # panels.ts, billing.ts
+│   ├── services/          # subscriptions (billing state + entitlements),
+│   │                      # pricing (THE recurring calculator),
+│   │                      # terminalLicences (purchase + allocations + caps),
+│   │                      # billing (invoices/licences), licenceSigner,
+│   │                      # storeClient, features, coolify, storeProvisioning,
+│   │                      # clientOrchestrator, healthSweep
 │   ├── utils/             # logger, asyncHandler, validate, errors (HttpError),
 │   │                      # rateLimiter
 │   └── __tests__/         # env-setup.ts, helpers.ts + suites (*.test.ts)
@@ -71,8 +79,10 @@ za-pos-control-plane/
 ├── frontend/              # React 19 + Vite + Tailwind v4 (own package)
 │   └── src/
 │       ├── api.ts         # fetch wrapper + token (localStorage 'zapos_cp_token')
-│       ├── components/    # Layout, Modal, StatusBadge, Spinner, ErrorBox
-│       ├── pages/         # LoginPage, StoresPage (table + modals)
+│       ├── lib/money.ts   # cents → ZAR, price labels (one formatter, all screens)
+│       ├── components/    # Layout, Modal, StatusBadge, Spinner, ErrorBox, cards
+│       ├── pages/         # Clients (+wizard), ClientDetail, StoreDetail, Plans,
+│       │                  # Billing, Companies (advanced), Panels (advanced)
 │       └── types.ts       # camelCase mirrors of the API types
 └── prompts/
     └── deploy-coolify-control-plane.md  # runbook: deploy stores + this CP
@@ -114,24 +124,33 @@ ambiguity alive. See `CONTEXT.md` §2a.
 | Method & path                                | Access                          | Purpose                                                                                                                                                                                       |
 | -------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | POST `/auth/login`                           | public (rate-limited 20/15 min) | office session → `{ token, user }`                                                                                                                                                            |
-| GET `/stores`                                | office                          | fleet list — company, plan, billing state; never returns the token                                                                                                                            |
-| POST `/stores`                               | office                          | create store + **first push and first licence**; refuses a duplicate URL and a Head Office URL; a generated token is returned **once**                                                        |
-| GET `/stores/:id`                            | office                          | detail: terminal preview Till 1..N + config snapshot                                                                                                                                          |
-| PUT `/stores/:id`                            | office                          | name/vatRegNo/terminalCount/baseUrl/companyId (slug immutable; **no auto-push**)                                                                                                              |
-| PATCH `/stores/:id/pause` · `/resume`        | office                          | paused stores 409 push/reset-admin/licence                                                                                                                                                    |
+| GET `/clients`, POST `/clients`              | office                          | client-first onboarding: wizard creates the company, its **subscription** (licensed terminals) and the deployment job                                                                          |
+| GET `/clients/:id`                            | office                          | client detail + `subscription` block (plan, licensed/allocated, recurring amount, setup fee + status, per-store allocations)                                                                  |
+| PUT `/clients/:id`                            | office                          | profile, plan, `licensedTerminalCount`, `allocations[]`, `setupFeeStatus`; re-pushes licences when the entitlement changes                                                                    |
+| POST `/clients/:id/upgrade-to-multistore`     | office                          | §7 upgrade: deploys Head Office + a branch, keeps existing store data, and extends the licensed total                                                                                          |
+| GET `/clients/jobs/:id`                       | office                          | deployment jobs (and their steps) for a client                                                                                                                                                 |
+| POST `/clients/jobs/:id/retry`                | office                          | resume a failed deployment job without duplicating resources                                                                                                                                   |
+| GET `/stores`                                | office                          | fleet list — company, plan, billing state, licensed vs configured terminals; never returns the token                                                                                            |
+| POST `/stores`                               | office                          | create store + **allocate its licensed terminals** + first push and first licence; refuses a duplicate URL, a Head Office URL, and a client with no licensed terminals; a generated token is returned **once** |
+| GET `/stores/:id`                            | office                          | detail: terminal preview Till 1..N + config snapshot + licensed allowance                                                                                                                      |
+| PUT `/stores/:id`                            | office                          | name/vatRegNo-free/terminalCount/baseUrl/companyId/terminalNames (slug immutable; **no auto-push**); refuses configuring above the licence                                                       |
+| PATCH `/stores/:id/pause` · `/resume`        | office                          | paused stores 409 push/reset-admin/licence                                                                                                                                                     |
 | DELETE `/stores/:id`                         | office                          | **pause-first teardown**: 409 `store_active` while active; removes the registry row only, never the deployment                                                                                |
-| POST `/stores/:id/push`                      | office                          | push `{terminalCount, terminals: Till 1..N}`; 402 if over the plan's till ceiling                                                                                                             |
+| POST `/stores/:id/push`                      | office                          | push `{terminalCount, terminals: Till 1..N}`; 402 if over the plan's till ceiling or the store's licence                                                                                       |
 | POST `/stores/:id/health`                    | office                          | ping `GET /api/internal/status`, record up/down, refresh the licence                                                                                                                          |
-| POST `/stores/:id/licence`                   | office                          | re-issue and deliver the signed licence                                                                                                                                                       |
+| POST `/stores/:id/licence`                   | office                          | re-issue and deliver the signed licence (carries the store's `maxTerminals`)                                                                                                                  |
 | POST `/stores/:id/reset-admin`               | office                          | store resets its admin pw; temp password shown once, never stored                                                                                                                             |
 | GET `/stores/licence/key`                    | office                          | the public verification key stores install (never the private key)                                                                                                                            |
-| GET/POST `/plans`, PUT `/plans/:id`          | office                          | plan catalogue: store cap, per-store till ceiling, features, price + `monthly`/`annual`/`once-off`                                                                                            |
-| GET `/plans/features`                        | office                          | the curated feature vocabulary (6 keys) plans may grant — validated on plan write; the store/head-office gates mirror it (L4)                                                                 |
-| GET/POST `/companies`, GET/PUT/DELETE `/:id` | office                          | merchant accounts — the unit of billing; owns the branches and the Head Office; DELETE is 409 `company_in_use` while it owns either; PUT re-pushes licences when the entitlement changes (L4) |
+| GET/POST `/plans`, PUT `/plans/:id`          | office                          | plan catalogue: store cap, per-store terminal ceiling, features, `pricingMode` + `terminalPriceCents` + `customAmountCents` (a custom plan's agreed flat charge per period; 0 = per-invoice) + `setupFeeCents` + `billingPeriod`; code immutable; per_terminal needs a rate > 0       |
+| GET `/plans/features`                        | office                          | the curated feature vocabulary (6 keys) plans may grant — validated on plan write; the store/head-office gates mirror it (L4)                                                                  |
+| GET/POST `/companies`, GET/PUT/DELETE `/:id` | office                          | merchant accounts — the unit of billing and owner of the subscription; DELETE is 409 `company_in_use` while it owns stores or a Head Office; PUT accepts `licensedTerminalCount` + `setupFeeStatus` |
 | GET/POST `/panels`, GET/PUT/DELETE `/:id`    | office                          | one Head Office per merchant; POST/DELETE are the registration only                                                                                                                           |
 | GET `/panels/licence/key`                    | office                          | as `/stores/licence/key`                                                                                                                                                                      |
 | POST `/panels/:id/health`                    | office                          | ping the panel's own `/api/internal/status`, record health + version                                                                                                                          |
 | POST `/panels/:id/licence`                   | office                          | re-issue and deliver the company licence to a panel                                                                                                                                           |
+| GET/POST `/billing/invoices`                 | office                          | invoices with their pricing evidence (`terminalCount` × `terminalPriceCents`, `setupFeeCents`); an amountless invoice for a custom-priced client is 400 `custom_pricing_requires_amount`       |
+| POST `/billing/invoices/:id/pay` · `/cancel` | office                          | settlement (advances `paid_through`, marks the onboarding charge paid, re-pushes licences) / cancel                                                                                            |
+| POST `/billing/renew-check`                  | office                          | renewal sweep: recurring-only invoices, explicit settlement, custom-priced clients skipped                                                                                                    |
 | GET `/health`                                | public                          | liveness (Coolify healthcheck)                                                                                                                                                                |
 
 ## Testing conventions

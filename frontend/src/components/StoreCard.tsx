@@ -337,6 +337,12 @@ export function StoreCard({
                       Terminals
                     </span>
                     <span
+                      className="rounded-full bg-brand-50 px-2 py-0.5 text-[11px] font-bold text-brand-700"
+                      title="Licensed — purchased and paid for. The register refuses device claims beyond this."
+                    >
+                      {store.licensedTerminalCount ?? store.terminalCount} licensed
+                    </span>
+                    <span
                       className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
                         terminalsPushed
                           ? 'bg-green-100 text-green-700'

@@ -2,6 +2,87 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import type { ClientListItem, Plan, StoreVertical } from '../types';
+import { rand, perTerminalLabel, PERIOD_LABEL } from '../lib/money';
+
+/**
+ * Clients, and the onboarding wizard that creates one.
+ *
+ * Two numbers matter commercially and are entered here: which PLAN the client
+ * takes, and how many LICENSED TERMINALS it buys. The wizard quotes both live —
+ * `licensed × rate` plus the once-off onboarding charge — because the licensed
+ * quantity is what the client pays for. The store's configured tills default to
+ * the licensed quantity; they can be trimmed later, never exceeded.
+ */
+/**
+ * The live commercial summary: what this onboarding will cost the client.
+ * Rendered from the plan's rate and the licensed quantity entered above, so the
+ * figure the operator quotes and the figure the first invoice carries agree.
+ */
+function WizardQuote({
+  plan,
+  licensedTerminals,
+  storeBreakdown,
+}: {
+  plan: Plan | undefined;
+  licensedTerminals: number;
+  storeBreakdown?: Array<{ label: string; licensed: number }>;
+}) {
+  if (!plan) return null;
+  const recurring = plan.pricingMode === 'per_terminal' ? plan.terminalPriceCents * licensedTerminals : null;
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs">
+      <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+        Commercial summary
+      </div>
+      {storeBreakdown && storeBreakdown.length > 0 && (
+        <div className="mt-2 space-y-1">
+          {storeBreakdown.map((s, i) => (
+            <div key={i} className="flex justify-between text-[11px]">
+              <span className="text-slate-500">{s.label}</span>
+              <span className="font-mono font-semibold text-slate-700">{s.licensed}</span>
+            </div>
+          ))}
+          <div className="flex justify-between border-t border-slate-200 pt-1 text-[11px]">
+            <span className="font-bold text-slate-600">Total licensed terminals</span>
+            <span className="font-mono font-black text-slate-900">{licensedTerminals}</span>
+          </div>
+        </div>
+      )}
+      <div className="mt-2 space-y-1">
+        {recurring === null ? (
+          <div className="flex justify-between">
+            <span className="text-slate-500">Recurring</span>
+            <span className="font-bold text-slate-800">Custom pricing — agreed per client</span>
+          </div>
+        ) : (
+          <div className="flex justify-between">
+            <span className="text-slate-500">
+              Recurring ({licensedTerminals} × {rand(plan.terminalPriceCents)})
+            </span>
+            <span className="font-mono font-black text-slate-900">
+              {rand(recurring)} {plan.billingPeriod === 'once-off' ? '' : PERIOD_LABEL[plan.billingPeriod]}
+            </span>
+          </div>
+        )}
+        <div className="flex justify-between">
+          <span className="text-slate-500">Once-off onboarding</span>
+          <span className="font-mono font-semibold text-slate-800">
+            {plan.setupFeeCents > 0 ? rand(plan.setupFeeCents) : 'None'}
+          </span>
+        </div>
+        {plan.features.includes('multi_store') && (
+          <div className="flex justify-between">
+            <span className="text-slate-500">Head Office</span>
+            <span className="font-semibold text-emerald-700">
+              {plan.features.includes('multi_store') ? 'Included' : '—'}
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function ClientsPage() {
   const [clients, setClients] = useState<ClientListItem[]>([]);
@@ -26,7 +107,7 @@ export default function ClientsPage() {
   const [singleStoreTills, setSingleStoreTills] = useState('2');
   const [singleStoreAdminEmail, setSingleStoreAdminEmail] = useState('');
 
-  // Multi store inputs
+  // Multi store inputs — `terminalCount` is the LICENSED quantity per branch.
   const [hoName, setHoName] = useState('');
   const [hoUrl, setHoUrl] = useState('');
   const [hoAdminEmail, setHoAdminEmail] = useState('');
@@ -103,12 +184,14 @@ export default function ClientsPage() {
       };
 
       if (deploymentType === 'single_store') {
+        const licensed = Number(singleStoreTills) || 1;
         payload.stores = [
           {
             name: singleStoreName || clientName,
             slug: clientSlug,
             baseUrl: singleStoreUrl || `https://${clientSlug}.vula-app.co.za`,
-            terminalCount: Number(singleStoreTills) || 1,
+            terminalCount: licensed,
+            licensedTerminalCount: licensed,
             adminEmail: singleStoreAdminEmail || billingEmail,
           },
         ];
@@ -119,12 +202,16 @@ export default function ClientsPage() {
           baseUrl: hoUrl || `https://${clientSlug}-ho.vula-app.co.za`,
           adminEmail: hoAdminEmail || billingEmail,
         };
-        payload.stores = multiStores.map((s, i) => ({
-          name: s.name || `${clientName} Branch ${i + 1}`,
-          slug: s.slug || `${clientSlug}-${i + 1}`,
-          baseUrl: s.baseUrl || `https://${clientSlug}-${i + 1}.vula-app.co.za`,
-          terminalCount: s.terminalCount || 1,
-        }));
+        payload.stores = multiStores.map((s, i) => {
+          const licensed = s.terminalCount || 1;
+          return {
+            name: s.name || `${clientName} Branch ${i + 1}`,
+            slug: s.slug || `${clientSlug}-${i + 1}`,
+            baseUrl: s.baseUrl || `https://${clientSlug}-${i + 1}.vula-app.co.za`,
+            terminalCount: licensed,
+            licensedTerminalCount: licensed,
+          };
+        });
       }
 
       await api('/clients', { method: 'POST', body: payload });
@@ -157,6 +244,8 @@ export default function ClientsPage() {
   const multiStoreCount = clients.filter((c) => c.topology === 'multi_store').length;
   const totalStores = clients.reduce((acc, c) => acc + c.storesCount, 0);
   const totalTills = clients.reduce((acc, c) => acc + c.totalTills, 0);
+  const licensedTotal = clients.reduce((acc, c) => acc + (c.licensedTerminalCount ?? 0), 0);
+  const selectedPlan = plans.find((p) => String(p.id) === planId);
 
   const filteredClients = clients.filter((c) => {
     if (!searchQuery.trim()) return true;
@@ -206,9 +295,13 @@ export default function ClientsPage() {
           <div className="mt-1 text-xs text-slate-500">Client executive panels</div>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-2xs">
-          <div className="text-xs font-bold uppercase tracking-wider text-emerald-600">Total Terminals</div>
-          <div className="mt-2 text-2xl font-black text-emerald-600">{totalTills}</div>
-          <div className="mt-1 text-xs text-slate-500">Licensed cash registers</div>
+          <div className="text-xs font-bold uppercase tracking-wider text-emerald-600">
+            Licensed Terminals
+          </div>
+          <div className="mt-2 text-2xl font-black text-emerald-600">{licensedTotal}</div>
+          <div className="mt-1 text-xs text-slate-500">
+            Paid for · {totalTills} configured across stores
+          </div>
         </div>
       </div>
 
@@ -312,7 +405,8 @@ export default function ClientsPage() {
                   <div>
                     <span className="text-[11px] font-semibold text-slate-400">Store Fleet:</span>
                     <div className="font-bold text-slate-800">
-                      {c.healthyStoresCount} / {c.storesCount} online ({c.totalTills} tills)
+                      {c.healthyStoresCount} / {c.storesCount} online ({c.licensedTerminalCount ?? 0} licensed
+                      · {c.totalTills} configured)
                     </div>
                   </div>
                   <div>
@@ -435,6 +529,9 @@ export default function ClientsPage() {
                       {plans.filter((p) => p.isActive).map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name}
+                          {p.pricingMode === 'per_terminal'
+                            ? ` — ${perTerminalLabel(p.terminalPriceCents, p.billingPeriod)}`
+                            : ' — custom pricing'}
                         </option>
                       ))}
                     </select>
@@ -547,15 +644,20 @@ export default function ClientsPage() {
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-xs font-bold text-slate-700">Tills Count</label>
+                        <label className="block text-xs font-bold text-slate-700">
+                          Licensed terminals
+                        </label>
                         <input
                           type="number"
                           min="1"
-                          max="20"
+                          max="99"
                           value={singleStoreTills}
                           onChange={(e) => setSingleStoreTills(e.target.value)}
                           className="mt-1 w-full rounded-lg border border-slate-300 p-2.5 text-sm"
                         />
+                        <p className="mt-1 text-[11px] text-slate-400">
+                          What the client pays for. The store is configured to run the same number.
+                        </p>
                       </div>
                       <div>
                         <label className="block text-xs font-bold text-slate-700">Store Manager Email</label>
@@ -568,6 +670,10 @@ export default function ClientsPage() {
                         />
                       </div>
                     </div>
+                    <WizardQuote
+                      plan={selectedPlan}
+                      licensedTerminals={Number(singleStoreTills) || 0}
+                    />
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -611,7 +717,7 @@ export default function ClientsPage() {
                       <div className="grid grid-cols-12 gap-2 text-[11px] font-bold uppercase tracking-wider text-slate-500 px-1 pb-1">
                         <div className="col-span-5">Store Name</div>
                         <div className="col-span-4">Store Base URL</div>
-                        <div className="col-span-3 text-right pr-2">Till Counter</div>
+                        <div className="col-span-3 text-right pr-2">Lic. terminals</div>
                       </div>
 
                       <div className="space-y-2">
@@ -640,12 +746,12 @@ export default function ClientsPage() {
                               className="col-span-4 rounded border border-slate-300 p-2 text-xs font-mono"
                             />
                             <div className="col-span-3 flex items-center justify-end gap-1.5">
-                              <span className="text-[10px] font-bold text-slate-500 uppercase shrink-0">Tills:</span>
+                              <span className="text-[10px] font-bold text-slate-500 uppercase shrink-0">Lic:</span>
                               <input
                                 type="number"
                                 min="1"
-                                max="50"
-                                title="Number of Till Registers"
+                                max="99"
+                                title="Licensed terminals for this branch — what the client pays for"
                                 value={ms.terminalCount}
                                 onChange={(e) => {
                                   const next = [...multiStores];
@@ -669,6 +775,14 @@ export default function ClientsPage() {
                         ))}
                       </div>
                     </div>
+                    <WizardQuote
+                      plan={selectedPlan}
+                      licensedTerminals={multiStores.reduce((n, s) => n + (s.terminalCount || 0), 0)}
+                      storeBreakdown={multiStores.map((s, i) => ({
+                        label: s.name || `${clientName || 'Branch'} ${i + 1}`,
+                        licensed: s.terminalCount || 0,
+                      }))}
+                    />
                   </div>
                 )}
 
@@ -725,6 +839,23 @@ export default function ClientsPage() {
                     </div>
                   )}
                 </div>
+
+                <WizardQuote
+                  plan={selectedPlan}
+                  licensedTerminals={
+                    deploymentType === 'single_store'
+                      ? Number(singleStoreTills) || 0
+                      : multiStores.reduce((n, s) => n + (s.terminalCount || 0), 0)
+                  }
+                  storeBreakdown={
+                    deploymentType === 'multi_store'
+                      ? multiStores.map((s, i) => ({
+                          label: s.name || `${clientName || 'Branch'} ${i + 1}`,
+                          licensed: s.terminalCount || 0,
+                        }))
+                      : undefined
+                  }
+                />
 
                 <div className="rounded-lg bg-amber-50 p-3 text-[11px] text-amber-800 border border-amber-200">
                   ⚡ Automatic orchestration will create client resources, configure initial terminals, issue signed trade licences, and verify fleet health.

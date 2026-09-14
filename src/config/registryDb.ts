@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
-import { env } from './env.js';
+import { env, logger } from './env.js';
 
 export type StoreStatus = 'active' | 'paused';
 export type ConfigStatus = 'pending' | 'ok' | 'failed';
@@ -125,18 +125,29 @@ const STORES_DDL = `
     updated_at             TEXT    NOT NULL DEFAULT (datetime('now'))
   )`;
 
+/**
+ * Invoices. The breakdown columns are the evidence for the amount, not a second
+ * source of truth for it: `terminal_count × terminal_price_cents` is the
+ * recurring line as it stood when the invoice was raised (the rate is a
+ * snapshot, so editing the plan afterwards cannot rewrite an issued invoice),
+ * and `setup_fee_cents` is the once-off onboarding charge when the invoice
+ * carried it. Renewals never carry the setup fee.
+ */
 const INVOICES_DDL = `
   CREATE TABLE IF NOT EXISTS invoices (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    company_id        INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-    invoice_number    TEXT    NOT NULL UNIQUE,
-    amount_cents      INTEGER NOT NULL,
-    status            TEXT    NOT NULL DEFAULT 'pending'
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id           INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    invoice_number       TEXT    NOT NULL UNIQUE,
+    amount_cents         INTEGER NOT NULL,
+    terminal_count       INTEGER,
+    terminal_price_cents INTEGER,
+    setup_fee_cents      INTEGER,
+    status               TEXT    NOT NULL DEFAULT 'pending'
       CHECK (status IN ('pending', 'paid', 'overdue', 'cancelled')),
-    due_date          TEXT,
-    paid_date         TEXT,
-    created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+    due_date             TEXT,
+    paid_date            TEXT,
+    created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
   )`;
 
 const PAYMENTS_DDL = `
@@ -218,8 +229,9 @@ let registry: Database.Database | null = null;
 /**
  * Subscription plans. Seeded with four editable SA-retail tiers; the operator can
  * change every value, because the first ten customers each want something slightly
- * different. A plan grants a store-count cap, a per-store terminal ceiling, and a
- * feature set.
+ * different. A plan grants a store-count cap, a per-store terminal ceiling, a
+ * feature set and its pricing: a rate per licensed terminal, or `custom` when the
+ * deal is negotiated (never auto-calculated).
  */
 const PLANS_DDL = `
   CREATE TABLE IF NOT EXISTS plans (
@@ -229,7 +241,14 @@ const PLANS_DDL = `
     max_stores              INTEGER NOT NULL DEFAULT 1,
     max_terminals_per_store INTEGER NOT NULL DEFAULT 2,
     features_json           TEXT    NOT NULL DEFAULT '[]',
-    price_cents             INTEGER NOT NULL DEFAULT 0,
+    pricing_mode            TEXT    NOT NULL DEFAULT 'per_terminal'
+      CHECK (pricing_mode IN ('per_terminal', 'custom')),
+    terminal_price_cents    INTEGER NOT NULL DEFAULT 0 CHECK (terminal_price_cents >= 0),
+    -- A custom plan's agreed charge per billing period (0 = negotiated per
+    -- client, so the control plane refuses to invoice without an explicit
+    -- amount). Ignored on a per_terminal plan, where the rate applies.
+    custom_amount_cents     INTEGER NOT NULL DEFAULT 0 CHECK (custom_amount_cents >= 0),
+    setup_fee_cents         INTEGER NOT NULL DEFAULT 0 CHECK (setup_fee_cents >= 0),
     billing_period          TEXT    NOT NULL DEFAULT 'monthly'
       CHECK (billing_period IN ('monthly', 'annual', 'once-off')),
     is_active               INTEGER NOT NULL DEFAULT 1,
@@ -256,6 +275,54 @@ const COMPANIES_DDL = `
       CHECK (status IN ('active', 'suspended')),
     created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+  )`;
+
+/** How the once-off onboarding charge stands for a client. */
+export type SetupFeeStatus = 'not_invoiced' | 'invoiced' | 'paid' | 'waived';
+
+export const SETUP_FEE_STATUSES: readonly SetupFeeStatus[] = [
+  'not_invoiced',
+  'invoiced',
+  'paid',
+  'waived',
+];
+
+/**
+ * What a client actually purchased. The plan says what a client MAY have; this
+ * says what it pays for: a quantity of licensed terminals and the state of the
+ * once-off onboarding charge. One row per company — the company *is* the
+ * subscription (it holds the plan and the paid-through date), so this table
+ * carries only the commercial facts that have no other home.
+ *
+ * Billing reads `licensed_terminal_count`; it is never derived from configured
+ * tills, device bindings, open sessions or heartbeats (§11/§12).
+ */
+const COMPANY_SUBSCRIPTIONS_DDL = `
+  CREATE TABLE IF NOT EXISTS company_subscriptions (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id              INTEGER NOT NULL UNIQUE REFERENCES companies(id) ON DELETE CASCADE,
+    licensed_terminal_count INTEGER NOT NULL DEFAULT 0 CHECK (licensed_terminal_count >= 0),
+    setup_fee_status        TEXT    NOT NULL DEFAULT 'not_invoiced'
+      CHECK (setup_fee_status IN ('not_invoiced', 'invoiced', 'paid', 'waived')),
+    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+  )`;
+
+/**
+ * Where the purchased terminal licences sit. A store's signed licence carries
+ * its allocation, and the tenant refuses device claims beyond it. Invariant,
+ * enforced in services/terminalLicences.ts: the sum of a client's allocations
+ * never exceeds its subscription's licensed count, and no single allocation
+ * exceeds the plan's per-store ceiling.
+ */
+const STORE_TERMINAL_LICENCES_DDL = `
+  CREATE TABLE IF NOT EXISTS store_terminal_licences (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id              INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    store_id                INTEGER NOT NULL UNIQUE REFERENCES stores(id) ON DELETE CASCADE,
+    licensed_terminal_count INTEGER NOT NULL DEFAULT 0 CHECK (licensed_terminal_count >= 0),
+    created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
   )`;
 
 /**
@@ -291,29 +358,50 @@ const PANELS_DDL = `
     updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
   )`;
 
-/** The four seeded tiers. Every value is editable from the control plane. */
+/**
+ * The four seeded tiers — a starting catalogue, not a closed one. Pricing is a
+ * rate per licensed terminal per period plus a once-off onboarding fee; the
+ * Enterprise tier is `custom`, so the control plane never invents a figure for a
+ * negotiated deal. Every value is editable from the control plane.
+ */
 const SEED_PLANS: Array<{
   code: string;
   name: string;
   maxStores: number;
   maxTerminals: number;
   features: string[];
+  pricingMode: PlanPricingMode;
+  terminalPriceCents: number;
+  setupFeeCents: number;
   sortOrder: number;
 }> = [
-  { code: 'starter', name: 'Starter', maxStores: 1, maxTerminals: 2, features: [], sortOrder: 1 },
+  {
+    code: 'starter',
+    name: 'Starter',
+    maxStores: 1,
+    maxTerminals: 2,
+    features: [],
+    pricingMode: 'per_terminal',
+    terminalPriceCents: 50_000,
+    setupFeeCents: 1_000_000,
+    sortOrder: 1,
+  },
   {
     code: 'business',
     name: 'Business',
     maxStores: 1,
-    maxTerminals: 8,
-    features: ['customer_credit', 'advanced_reports'],
+    maxTerminals: 10,
+    features: ['customer_credit', 'advanced_reports', 'ecommerce_bridges'],
+    pricingMode: 'per_terminal',
+    terminalPriceCents: 50_000,
+    setupFeeCents: 1_000_000,
     sortOrder: 2,
   },
   {
     code: 'multi-store',
     name: 'Multi-Store',
-    maxStores: 10,
-    maxTerminals: 25,
+    maxStores: 20,
+    maxTerminals: 10,
     features: [
       'customer_credit',
       'advanced_reports',
@@ -321,6 +409,9 @@ const SEED_PLANS: Array<{
       'stock_transfers',
       'ecommerce_bridges',
     ],
+    pricingMode: 'per_terminal',
+    terminalPriceCents: 50_000,
+    setupFeeCents: 1_000_000,
     sortOrder: 3,
   },
   {
@@ -336,6 +427,9 @@ const SEED_PLANS: Array<{
       'ecommerce_bridges',
       'ai_assistant',
     ],
+    pricingMode: 'custom',
+    terminalPriceCents: 0,
+    setupFeeCents: 0,
     sortOrder: 4,
   },
 ];
@@ -354,6 +448,8 @@ export const getRegistryDb = (): Database.Database => {
   db.exec(STORES_DDL);
   db.exec(PLANS_DDL);
   db.exec(COMPANIES_DDL);
+  db.exec(COMPANY_SUBSCRIPTIONS_DDL);
+  db.exec(STORE_TERMINAL_LICENCES_DDL);
   db.exec(PANELS_DDL);
   db.exec(INVOICES_DDL);
   db.exec(PAYMENTS_DDL);
@@ -368,6 +464,9 @@ export const getRegistryDb = (): Database.Database => {
   db.exec('CREATE INDEX IF NOT EXISTS idx_deployment_jobs_company ON deployment_jobs(company_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_deployment_job_steps_job ON deployment_job_steps(job_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id)');
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_store_terminal_licences_company ON store_terminal_licences(company_id)',
+  );
 
   // Lightweight auto-migrations for pre-existing databases.
   const storeCols = db.prepare('PRAGMA table_info(stores)').all() as Array<{ name: string }>;
@@ -420,9 +519,14 @@ export const getRegistryDb = (): Database.Database => {
     db.exec('ALTER TABLE deployment_job_steps ADD COLUMN warnings_json TEXT');
   }
 
+  migratePlanCustomAmount(db);
+  restructurePlans(db);
   widenPlanBillingPeriod(db);
   renameRetailPlanToBusiness(db);
   seedPlans(db);
+  refreshSeedPlanDefaults(db);
+  migrateInvoiceLines(db);
+  migrateSubscriptions(db);
   migrateBillingSettingsToPerCompany(db);
   return registry;
 };
@@ -432,7 +536,7 @@ export const getRegistryDb = (): Database.Database => {
  * rebuild cannot silently drop a column.
  */
 const PLAN_COLUMNS =
-  'id, code, name, max_stores, max_terminals_per_store, features_json, price_cents, billing_period, is_active, sort_order, created_at, updated_at';
+  'id, code, name, max_stores, max_terminals_per_store, features_json, pricing_mode, terminal_price_cents, custom_amount_cents, setup_fee_cents, billing_period, is_active, sort_order, created_at, updated_at';
 const COMPANY_COLUMNS =
   'id, name, slug, billing_email, plan_id, paid_through, trial_ends_at, status, created_at, updated_at';
 
@@ -440,8 +544,9 @@ const COMPANY_COLUMNS =
 const seedPlans = (db: Database.Database): void => {
   const has = db.prepare('SELECT id FROM plans WHERE code = ?');
   const insert = db.prepare(
-    `INSERT INTO plans (code, name, max_stores, max_terminals_per_store, features_json, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO plans (code, name, max_stores, max_terminals_per_store, features_json,
+                        pricing_mode, terminal_price_cents, setup_fee_cents, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const seed = db.transaction(() => {
     for (const plan of SEED_PLANS) {
@@ -452,11 +557,47 @@ const seedPlans = (db: Database.Database): void => {
         plan.maxStores,
         plan.maxTerminals,
         JSON.stringify(plan.features),
+        plan.pricingMode,
+        plan.terminalPriceCents,
+        plan.setupFeeCents,
         plan.sortOrder,
       );
     }
   });
   seed();
+};
+
+/**
+ * Fill in the recommended commercial values on seeded tiers that were never
+ * priced, so an existing development database picks up the R500 / R10,000 model
+ * without touching anything the operator configured. A plan is treated as
+ * "never priced" only when it is `per_terminal` with a zero rate: a plan that
+ * carries a price (the old flat model included) is left exactly as it is and
+ * shows as `custom` until the operator sets a per-terminal rate.
+ */
+const refreshSeedPlanDefaults = (db: Database.Database): void => {
+  const unpriced = db.prepare(
+    `SELECT id FROM plans WHERE code = ? AND pricing_mode = 'per_terminal' AND terminal_price_cents = 0`,
+  );
+  const refresh = db.prepare(
+    `UPDATE plans SET terminal_price_cents = ?, setup_fee_cents = ?,
+                      max_stores = ?, max_terminals_per_store = ?, updated_at = datetime('now')
+       WHERE id = ?`,
+  );
+  const run = db.transaction(() => {
+    for (const seed of SEED_PLANS) {
+      const row = unpriced.get(seed.code) as { id: number } | undefined;
+      if (!row) continue;
+      refresh.run(
+        seed.terminalPriceCents,
+        seed.setupFeeCents,
+        seed.maxStores,
+        seed.maxTerminals,
+        row.id,
+      );
+    }
+  });
+  run();
 };
 
 /**
@@ -470,12 +611,16 @@ const seedPlans = (db: Database.Database): void => {
  *    clauses to point at the temporary name. Without it, renaming `plans` to
  *    `plans_old` rewrote `companies.plan_id REFERENCES "plans_old"(id)`, and dropping
  *    the temp table left companies referring to a table that no longer existed.
+ *
+ * `sourceSelect` lets a rebuild also RENAME or reshape columns: it is the SELECT
+ * list feeding `targetColumns` (one expression per target column, in order).
  */
 const rebuildTable = (
   db: Database.Database,
   name: string,
   columns: string,
   ddl: string,
+  sourceSelect: string = columns,
 ): void => {
   const temp = `${name}_rebuild`;
   const tempDdl = ddl.replace(/CREATE TABLE IF NOT EXISTS\s+\w+/i, `CREATE TABLE ${temp}`);
@@ -486,7 +631,7 @@ const rebuildTable = (
     const run = db.transaction(() => {
       db.exec(`DROP TABLE IF EXISTS ${temp}`);
       db.exec(tempDdl);
-      db.exec(`INSERT INTO ${temp} (${columns}) SELECT ${columns} FROM ${name}`);
+      db.exec(`INSERT INTO ${temp} (${columns}) SELECT ${sourceSelect} FROM ${name}`);
       db.exec(`DROP TABLE ${name}`);
       db.exec(`ALTER TABLE ${temp} RENAME TO ${name}`);
     });
@@ -499,6 +644,176 @@ const rebuildTable = (
 
 const tableExists = (db: Database.Database, name: string): boolean =>
   !!db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+
+/** The column names of a table ([] when it does not exist). */
+const tableColumns = (db: Database.Database, name: string): Set<string> =>
+  new Set(
+    (db.prepare(`PRAGMA table_info(${name})`).all() as Array<{ name: string }>).map((c) => c.name),
+  );
+
+/**
+ * `custom` plans may carry an agreed charge (2026-09-13): the office states the
+ * negotiated amount once and invoices follow from it, rather than the control
+ * plane inventing a figure. Additive column; a 0 keeps the strict behaviour
+ * (an amountless invoice is refused).
+ */
+const migratePlanCustomAmount = (db: Database.Database): void => {
+  if (!tableExists(db, 'plans')) return;
+  if (tableColumns(db, 'plans').has('custom_amount_cents')) return;
+  db.exec('ALTER TABLE plans ADD COLUMN custom_amount_cents INTEGER NOT NULL DEFAULT 0');
+};
+
+/**
+ * Plans gain the licensed-terminal pricing model (2026-09-13): `pricing_mode`
+ * (`per_terminal` | `custom`), `terminal_price_cents` and `setup_fee_cents`
+ * replace the flat `price_cents`, and the never-used bundled fields
+ * (`included_terminals`, `extra_terminal_price_cents`,
+ * `additional_store_onboarding_cents`, `head_office_included`) go.
+ *
+ * The old flat price is deliberately NOT carried into `terminal_price_cents`: a
+ * flat client price is not a per-terminal rate, and copying it would silently
+ * multiply live customers' bills by their till count. A plan that carried a flat
+ * price becomes `custom` — the office sets the per-terminal rate deliberately,
+ * and nothing auto-calculates until it does. Column detection is dynamic so any
+ * intermediate development shape migrates cleanly.
+ */
+const restructurePlans = (db: Database.Database): void => {
+  if (!tableExists(db, 'plans')) return;
+  const ddl = storedDdl(db, 'plans');
+  if (ddl && ddl.includes('pricing_mode')) return; // already the new shape
+
+  const cols = tableColumns(db, 'plans');
+  const legacyModel = cols.has('pricing_model');
+  const legacyFlatPrice = cols.has('price_cents');
+
+  const modeExpr = legacyModel
+    ? `CASE WHEN code = 'enterprise' THEN 'custom'
+            WHEN pricing_model = 'per_terminal' THEN 'per_terminal'
+            ELSE 'custom' END`
+    : legacyFlatPrice
+      ? `CASE WHEN code = 'enterprise' OR COALESCE(price_cents, 0) > 0 THEN 'custom'
+              ELSE 'per_terminal' END`
+      : `'per_terminal'`;
+
+  const rateExpr = legacyModel
+    ? `CASE WHEN pricing_model = 'per_terminal' THEN COALESCE(price_cents, 0) ELSE 0 END`
+    : '0';
+
+  const setupExpr = cols.has('onboarding_fee_cents') ? 'COALESCE(onboarding_fee_cents, 0)' : '0';
+
+  const sourceSelect = [
+    'id',
+    'code',
+    'name',
+    'max_stores',
+    'max_terminals_per_store',
+    'features_json',
+    modeExpr,
+    rateExpr,
+    // Present on any database that has already booted this build (the additive
+    // migration above runs first); a legacy shape arrives with 0.
+    cols.has('custom_amount_cents') ? 'COALESCE(custom_amount_cents, 0)' : '0',
+    setupExpr,
+    cols.has('billing_period') ? 'billing_period' : `'monthly'`,
+    'is_active',
+    'sort_order',
+    'created_at',
+    'updated_at',
+  ].join(', ');
+
+  rebuildTable(db, 'plans', PLAN_COLUMNS, PLANS_DDL, sourceSelect);
+};
+
+/**
+ * Invoices carry their own pricing evidence: `terminal_count`,
+ * `terminal_price_cents` (a rate snapshot, so a later plan edit cannot rewrite
+ * an issued invoice) and `setup_fee_cents`. The flat-model columns
+ * (`base_amount_cents`, `terminal_amount_cents`, `onboarding_fee_cents`,
+ * `additional_store_onboarding_cents`) are folded in where they still mean
+ * something and dropped.
+ */
+const migrateInvoiceLines = (db: Database.Database): void => {
+  if (!tableExists(db, 'invoices')) return;
+  const cols = tableColumns(db, 'invoices');
+
+  for (const [name, ddl] of [
+    ['terminal_count', 'terminal_count INTEGER'],
+    ['terminal_price_cents', 'terminal_price_cents INTEGER'],
+    ['setup_fee_cents', 'setup_fee_cents INTEGER'],
+  ] as const) {
+    if (!cols.has(name)) db.exec(`ALTER TABLE invoices ADD COLUMN ${ddl}`);
+  }
+
+  // The once-off onboarding charge keeps its meaning under the new name. A zero
+  // is not a charge — those rows stay NULL ("this invoice carried no onboarding").
+  if (cols.has('onboarding_fee_cents')) {
+    db.exec(
+      `UPDATE invoices SET setup_fee_cents = onboarding_fee_cents
+        WHERE setup_fee_cents IS NULL AND COALESCE(onboarding_fee_cents, 0) > 0`,
+    );
+  }
+
+  for (const legacy of [
+    'base_amount_cents',
+    'terminal_amount_cents',
+    'onboarding_fee_cents',
+    'additional_store_onboarding_cents',
+  ]) {
+    if (cols.has(legacy)) db.exec(`ALTER TABLE invoices DROP COLUMN ${legacy}`);
+  }
+};
+
+/**
+ * Subscription backfill for databases that predate the licensed-terminal model.
+ * Every company gets a subscription row carrying the terminals its stores were
+ * already configured for, and every assigned store an allocation of the same
+ * size — so a live fleet keeps working, its licences keep permitting the tills
+ * it runs, and the office sees a purchased quantity it can edit. Unassigned
+ * stores get no allocation: they are unlicensed and stay unpoliced.
+ *
+ * The superseded `companies.onboarding_fee_charged` flag is read once (a
+ * charged onboarding fee is settled history → `paid`) and then dropped.
+ */
+const migrateSubscriptions = (db: Database.Database): void => {
+  if (!tableExists(db, 'companies')) return;
+  const companyCols = tableColumns(db, 'companies');
+  const hadOnboardingFlag = companyCols.has('onboarding_fee_charged');
+
+  const setupFeeExpr = hadOnboardingFlag
+    ? `CASE WHEN COALESCE(c.onboarding_fee_charged, 0) = 1 THEN 'paid' ELSE 'not_invoiced' END`
+    : `'not_invoiced'`;
+
+  const subs = db
+    .prepare(
+      `INSERT INTO company_subscriptions (company_id, licensed_terminal_count, setup_fee_status)
+       SELECT c.id,
+              COALESCE((SELECT SUM(s.terminal_count) FROM stores s WHERE s.company_id = c.id), 0),
+              ${setupFeeExpr}
+         FROM companies c
+        WHERE NOT EXISTS (SELECT 1 FROM company_subscriptions cs WHERE cs.company_id = c.id)`,
+    )
+    .run();
+
+  const allocations = db
+    .prepare(
+      `INSERT INTO store_terminal_licences (company_id, store_id, licensed_terminal_count)
+       SELECT s.company_id, s.id, s.terminal_count
+         FROM stores s
+        WHERE s.company_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM store_terminal_licences l WHERE l.store_id = s.id)`,
+    )
+    .run();
+
+  if (hadOnboardingFlag) {
+    db.exec('ALTER TABLE companies DROP COLUMN onboarding_fee_charged');
+  }
+
+  if (subs.changes > 0 || allocations.changes > 0) {
+    logger.info(
+      `Registry migration: ${subs.changes} subscription row(s) and ${allocations.changes} terminal allocation(s) backfilled`,
+    );
+  }
+};
 
 /** The DDL stored for a table, or null. */
 const storedDdl = (db: Database.Database, name: string): string | null =>
@@ -859,6 +1174,15 @@ export const recordTelemetry = (id: number, input: TelemetryRecordInput): StoreR
 
 // --- Plans -------------------------------------------------------------------
 
+/**
+ * How a plan prices its clients. `per_terminal` multiplies the rate by the
+ * licensed terminal quantity; `custom` means the deal is negotiated and the
+ * control plane never auto-calculates an amount for it.
+ */
+export type PlanPricingMode = 'per_terminal' | 'custom';
+
+export const PLAN_PRICING_MODES: readonly PlanPricingMode[] = ['per_terminal', 'custom'];
+
 export interface PlanRecord {
   id: number;
   code: string;
@@ -866,7 +1190,13 @@ export interface PlanRecord {
   max_stores: number;
   max_terminals_per_store: number;
   features_json: string;
-  price_cents: number;
+  pricing_mode: PlanPricingMode;
+  /** Rate per licensed terminal per billing period (0 on a custom plan). */
+  terminal_price_cents: number;
+  /** A custom plan's agreed charge per billing period (0 = nothing agreed yet). */
+  custom_amount_cents: number;
+  /** Once-off onboarding charge for the client (and its first store). */
+  setup_fee_cents: number;
   billing_period: PlanPeriod;
   is_active: number;
   sort_order: number;
@@ -889,7 +1219,10 @@ export interface PlanInput {
   maxStores: number;
   maxTerminalsPerStore: number;
   features: string[];
-  priceCents?: number;
+  pricingMode?: PlanPricingMode;
+  terminalPriceCents?: number;
+  customAmountCents?: number;
+  setupFeeCents?: number;
   billingPeriod?: PlanPeriod;
 }
 
@@ -899,8 +1232,10 @@ export const createPlan = (input: PlanInput): PlanRecord => {
   const db = getRegistryDb();
   const info = db
     .prepare(
-      `INSERT INTO plans (code, name, max_stores, max_terminals_per_store, features_json, price_cents, billing_period, sort_order)
-       VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) + 1 FROM plans), 1))`,
+      `INSERT INTO plans (code, name, max_stores, max_terminals_per_store, features_json,
+                          pricing_mode, terminal_price_cents, custom_amount_cents, setup_fee_cents,
+                          billing_period, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) + 1 FROM plans), 1))`,
     )
     .run(
       input.code,
@@ -908,7 +1243,10 @@ export const createPlan = (input: PlanInput): PlanRecord => {
       input.maxStores,
       input.maxTerminalsPerStore,
       JSON.stringify(input.features),
-      input.priceCents ?? 0,
+      input.pricingMode ?? 'per_terminal',
+      input.terminalPriceCents ?? 0,
+      input.customAmountCents ?? 0,
+      input.setupFeeCents ?? 0,
       input.billingPeriod ?? 'monthly',
     );
   return getPlanById(Number(info.lastInsertRowid))!;
@@ -926,7 +1264,10 @@ export const updatePlan = (id: number, input: Partial<PlanInput> & { isActive?: 
          max_stores = COALESCE(?, max_stores),
          max_terminals_per_store = COALESCE(?, max_terminals_per_store),
          features_json = COALESCE(?, features_json),
-         price_cents = COALESCE(?, price_cents),
+         pricing_mode = COALESCE(?, pricing_mode),
+         terminal_price_cents = COALESCE(?, terminal_price_cents),
+         custom_amount_cents = COALESCE(?, custom_amount_cents),
+         setup_fee_cents = COALESCE(?, setup_fee_cents),
          billing_period = COALESCE(?, billing_period),
          is_active = COALESCE(?, is_active),
          updated_at = datetime('now')
@@ -937,7 +1278,10 @@ export const updatePlan = (id: number, input: Partial<PlanInput> & { isActive?: 
       input.maxStores ?? null,
       input.maxTerminalsPerStore ?? null,
       input.features ? JSON.stringify(input.features) : null,
-      input.priceCents ?? null,
+      input.pricingMode ?? null,
+      input.terminalPriceCents ?? null,
+      input.customAmountCents ?? null,
+      input.setupFeeCents ?? null,
       input.billingPeriod ?? null,
       input.isActive === undefined ? null : input.isActive ? 1 : 0,
       id,
@@ -990,6 +1334,12 @@ export interface InvoiceRecord {
   company_id: number;
   invoice_number: string;
   amount_cents: number;
+  /** Licensed terminals billed on the recurring line; null on a manual invoice. */
+  terminal_count: number | null;
+  /** The plan's per-terminal rate when the invoice was raised (a snapshot). */
+  terminal_price_cents: number | null;
+  /** Once-off onboarding charge, when this invoice carried it. Never on renewals. */
+  setup_fee_cents: number | null;
   status: 'pending' | 'paid' | 'overdue' | 'cancelled';
   due_date: string | null;
   paid_date: string | null;
@@ -1095,6 +1445,113 @@ export const setStoreCompany = (storeId: number, companyId: number | null): Stor
     .run(companyId, storeId);
   return getStoreById(storeId);
 };
+
+// --- Subscriptions & terminal allocations -------------------------------------
+
+export interface CompanySubscriptionRecord {
+  id: number;
+  company_id: number;
+  licensed_terminal_count: number;
+  setup_fee_status: SetupFeeStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StoreTerminalLicenceRecord {
+  id: number;
+  company_id: number;
+  store_id: number;
+  licensed_terminal_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export const getSubscription = (companyId: number): CompanySubscriptionRecord | null =>
+  (getRegistryDb()
+    .prepare('SELECT * FROM company_subscriptions WHERE company_id = ?')
+    .get(companyId) as CompanySubscriptionRecord) ?? null;
+
+/** The subscription row for a company, created empty (0 licensed) if absent. */
+export const ensureSubscription = (companyId: number): CompanySubscriptionRecord => {
+  const db = getRegistryDb();
+  const existing = getSubscription(companyId);
+  if (existing) return existing;
+  db.prepare('INSERT OR IGNORE INTO company_subscriptions (company_id) VALUES (?)').run(companyId);
+  return getSubscription(companyId)!;
+};
+
+export const setLicensedTerminalCount = (
+  companyId: number,
+  licensedTerminalCount: number,
+): CompanySubscriptionRecord => {
+  ensureSubscription(companyId);
+  getRegistryDb()
+    .prepare(
+      `UPDATE company_subscriptions SET licensed_terminal_count = ?, updated_at = datetime('now')
+        WHERE company_id = ?`,
+    )
+    .run(licensedTerminalCount, companyId);
+  return getSubscription(companyId)!;
+};
+
+export const setSetupFeeStatus = (
+  companyId: number,
+  status: SetupFeeStatus,
+): CompanySubscriptionRecord => {
+  if (!SETUP_FEE_STATUSES.includes(status)) throw new Error('Invalid setup fee status');
+  ensureSubscription(companyId);
+  getRegistryDb()
+    .prepare(
+      `UPDATE company_subscriptions SET setup_fee_status = ?, updated_at = datetime('now')
+        WHERE company_id = ?`,
+    )
+    .run(status, companyId);
+  return getSubscription(companyId)!;
+};
+
+export const listAllocations = (companyId: number): StoreTerminalLicenceRecord[] =>
+  getRegistryDb()
+    .prepare('SELECT * FROM store_terminal_licences WHERE company_id = ? ORDER BY store_id')
+    .all(companyId) as StoreTerminalLicenceRecord[];
+
+/** The allocation for a store — one row per store, whichever client owns it. */
+export const getAllocationForStore = (storeId: number): StoreTerminalLicenceRecord | null =>
+  (getRegistryDb()
+    .prepare('SELECT * FROM store_terminal_licences WHERE store_id = ?')
+    .get(storeId) as StoreTerminalLicenceRecord) ?? null;
+
+export const setAllocation = (
+  companyId: number,
+  storeId: number,
+  licensedTerminalCount: number,
+): StoreTerminalLicenceRecord => {
+  const db = getRegistryDb();
+  db.prepare(
+    `INSERT INTO store_terminal_licences (company_id, store_id, licensed_terminal_count)
+     VALUES (?, ?, ?)
+     ON CONFLICT (store_id) DO UPDATE SET
+       company_id = excluded.company_id,
+       licensed_terminal_count = excluded.licensed_terminal_count,
+       updated_at = datetime('now')`,
+  ).run(companyId, storeId, licensedTerminalCount);
+  return getAllocationForStore(storeId)!;
+};
+
+export const deleteAllocationForStore = (storeId: number): boolean =>
+  getRegistryDb().prepare('DELETE FROM store_terminal_licences WHERE store_id = ?').run(storeId)
+    .changes > 0;
+
+/** Terminal licences allocated across a client's stores. */
+export const allocatedTerminalCount = (companyId: number): number =>
+  (getRegistryDb()
+    .prepare(
+      'SELECT COALESCE(SUM(licensed_terminal_count), 0) AS n FROM store_terminal_licences WHERE company_id = ?',
+    )
+    .get(companyId) as { n: number }).n;
+
+/** The quantity the client pays for — 0 when it has no subscription yet. */
+export const licensedTerminalCount = (companyId: number): number =>
+  getSubscription(companyId)?.licensed_terminal_count ?? 0;
 
 // --- Panels (Company Control Panel deployments) -------------------------------
 
@@ -1291,23 +1748,34 @@ export const getInvoiceByNumber = (invoiceNumber: string): InvoiceRecord | null 
   return row ? (row as InvoiceRecord) : null;
 };
 
+export interface InvoiceLines {
+  terminalCount?: number | null;
+  terminalPriceCents?: number | null;
+  setupFeeCents?: number | null;
+}
+
 export const createInvoice = (
   companyId: number,
   amountCents: number,
   dueDate: Date,
   invoiceNumber?: string,
+  lines?: InvoiceLines,
 ): InvoiceRecord => {
   const db = getRegistryDb();
   const info = db
     .prepare(
-      `INSERT INTO invoices (company_id, invoice_number, amount_cents, due_date, status)
-       VALUES (?, ?, ?, ?, 'pending')`,
+      `INSERT INTO invoices (company_id, invoice_number, amount_cents, due_date, status,
+                             terminal_count, terminal_price_cents, setup_fee_cents)
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`,
     )
     .run(
       companyId,
       invoiceNumber || `INV-${new Date().toISOString().slice(0, 10)}-${Math.floor(Math.random() * 10000)}`,
       amountCents,
       dueDate.toISOString().slice(0, 10),
+      lines?.terminalCount ?? null,
+      lines?.terminalPriceCents ?? null,
+      lines?.setupFeeCents ?? null,
     );
   return getInvoiceById(Number(info.lastInsertRowid))!;
 };
@@ -1366,10 +1834,13 @@ export const createPayment = (
   transactionId?: string,
 ): PaymentRecord => {
   const db = getRegistryDb();
+  // A payment row is only ever written when an operator (or, later, a provider
+  // webhook) confirms money arrived — so it is `completed`, not `processing`.
+  // The invoice/pending → payment/confirmed → invoice/paid flow is §27's.
   const info = db
     .prepare(
       `INSERT INTO payments (invoice_id, company_id, amount_cents, method, status, transaction_id)
-       VALUES (?, ?, ?, ?, 'processing', ?)`,
+       VALUES (?, ?, ?, ?, 'completed', ?)`,
     )
     .run(invoiceId, companyId, amountCents, method, transactionId || null);
   return getPaymentById(Number(info.lastInsertRowid))!;

@@ -2,6 +2,108 @@
 
 Dated log of the build.
 
+## 2026-09-13 (redesign, later) — a custom plan can carry an agreed amount; plan-row switch
+
+Owner feedback on the shipped Plans screen, two changes:
+
+- **Plan rows now carry an on/off switch** instead of a Deactivate button: the
+  archive/re-activate action is the switch itself (label and tooltip removed at the
+  owner's request; the accessible name survives). Edit stays a pencil icon.
+- **`custom` plans may hold a monthly charge.** Owner: *"so that the custom plans
+  hold a monthly charge"*. New additive column `plans.custom_amount_cents` (integer
+  cents, per `billing_period`) with `migratePlanCustomAmount` in the ensure-columns
+  block and the column added to `PLAN_COLUMNS`/the plan-restructure source select.
+  Semantics: a stated agreed amount bills **flat** each period (no terminal
+  arithmetic, no terminal line on the invoice) and the renewal sweep renews it; an
+  amount of **0 keeps the old strict behaviour** — an amountless invoice is refused
+  with `custom_pricing_requires_amount` and the sweep skips that client, so the
+  control plane still never invents a figure for a negotiated deal. Both figures
+  (rate and agreed amount) are stored whichever mode is active, so toggling the mode
+  never loses a value; only the mode's own figure is ever read or billed.
+  UI: the Pricing section shows **Agreed amount (R)** when the model is Custom, the
+  quote box states it (or "no agreed amount yet · invoices will need an amount typed
+  each time"), and the plan list shows "R 7 500,00 / month · Agreed amount, billed
+  flat". CONTEXT §2a, AGENTS' plan row, schema.sql and tidbits updated.
+- Tests: CP **160 green (13 suites)** (+1: a custom plan's agreed amount bills and
+  renews; without one it still refuses and is skipped); typecheck + production build
+  clean. No commit (house rule).
+
+## 2026-09-13 (redesign) — subscription model: licensed terminals × rate + once-off onboarding
+
+Owner brief (`~/Downloads/vula-pos-subscription-redesign-agent-prompt*.md`),
+planned with the owner first: the commercial model is now **licensed terminals ×
+price per terminal, plus a once-off onboarding fee** — and a plan may instead be
+`custom` (negotiated), which the control plane never prices on the client's behalf.
+
+**The working tree already held a half-finished, divergent pricing implementation**
+(9 modified files, 404 insertions, frontend not typechecking: it billed *configured*
+tills — expressly forbidden by the brief — kept the bundled `included_terminals`
+model the brief removes, and referenced fields that existed nowhere). It was saved
+to `/tmp/cp-per-term-pricing-wip.patch` and reverted, then rebuilt to the brief.
+
+- **Schema** (`src/config/registryDb.ts`, `schema.sql`): `plans` rebuilt to
+  `pricing_mode` (`per_terminal` | `custom`) + `terminal_price_cents` +
+  `setup_fee_cents`; new `company_subscriptions` (licensed quantity +
+  `setup_fee_status`) and `store_terminal_licences` (per-store allocations);
+  `invoices` carry their own evidence (`terminal_count`, a rate snapshot
+  `terminal_price_cents`, `setup_fee_cents`). The flat-model columns are gone.
+  Migrations are dynamic (any intermediate dev shape), FK-safe
+  (`rebuildTable` + an explicit source-select for the renames) and idempotent —
+  rehearsed against a copy of the live registry: 6 subscriptions, 11 allocations,
+  no FK violations, second boot changes nothing.
+- **A flat price is NOT a per-terminal rate.** Every existing priced plan (live:
+  Starter R1,500, Business R3,000, Multi-Store R5,000, "per-till" R499) became
+  `custom` rather than being copied into the rate field, which would have
+  multiplied live clients' bills by their till count. Unpriced seeded tiers
+  (`starter`/`business`/`multi-store`) picked up the recommended R500/terminal +
+  R10,000 setup. **Consequence for the live fleet:** those plans no longer
+  auto-invoice; the office sets a per-terminal rate in the Plans UI to restore
+  renewal, or raises custom invoices with an agreed amount.
+- **Domain services**: `services/pricing.ts` holds THE canonical calculator
+  (`licensed terminals × rate`; `null` for custom — never a guess);
+  `services/terminalLicences.ts` owns the purchase and its allocation rules
+  (sum of allocations ≤ licensed count, allocation ≤ plan ceiling, configured tills
+  ≤ allowance); `subscriptions.ts` entitlements gained the licensed quantity and a
+  per-store allowance; `billing.ts` bills the licensed quantity, puts the onboarding
+  charge on the first invoice only, refuses an amountless invoice for a
+  custom-priced client, and the renewal sweep skips custom (with a
+  `customPricingSkipped` count in its summary). Payments now record `completed`
+  rather than `processing` (§27's confirmed-settlement flow).
+- **Licence**: an additive `maxTerminals` claim carries **this store's** allowance
+  beside `maxTerminalsPerStore` (the plan ceiling); omitted on Head Office licences.
+  Every issue site passes it, and the store's licence is the register's cap.
+- **APIs**: `PlanOut`/`CompanyOut`/`StoreOut` carry the new fields (a
+  `subscription` block on companies and on `GET /api/clients/:id`); plan writes
+  validate integer cents and require a rate above zero for `per_terminal`;
+  `PUT /api/clients/:id` edits the purchased quantity, the allocations and the
+  onboarding status; store create/PUT/push refuse allocating or configuring beyond
+  the licence — including the honest gate that a client with **zero** licensed
+  terminals cannot take a store until the quantity is stated. `HttpError` gained an
+  optional machine-readable `code`, surfaced by the error handler.
+- **Tenant (za-pos)**: `maxTerminals` mirrored in the claims interface (store +
+  panel); `claimDevice` refuses a NEW claim beyond the allowance (402
+  `terminal_limit_reached`) while a device *moving* keeps its claim and existing
+  claims are never revoked; `configure` refuses a count above the allowance;
+  `/api/runtime-config` publishes `subscription.maxTerminals`; the register's types
+  carry it. **325 tenant tests green (32 suites)**; typecheck + build clean.
+- **UI**: Plans page rebuilt to PLAN / CAPACITY / PRICING / FEATURES with per-terminal
+  pricing and the list showing "R500.00 / terminal / month · Setup R10,000.00 once-off"
+  or "Custom pricing"; the client wizard takes **licensed terminals per store** and
+  quotes the recurring + onboarding figures live (§33/§34); the client page gained a
+  subscription card and a licence-allocation editor ("Total allocated 9 / 9"); the
+  invoice view itemises "N licensed terminals @ R500"; store cards show
+  `N licensed` beside configured/claimed/open; the advanced Companies page sets the
+  purchased quantity. One shared `lib/money.ts` formatter replaced the copies.
+- **Tests**: CP **159 green across 13 suites** (+27: `subscription.test.ts` ×10, new
+  billing cases, plan validation, the licence claim, migration reshape/backfill).
+  Verified the §36 list end to end, including "claiming/unclaiming devices does not
+  change the subscription amount" and "Enterprise custom pricing never
+  auto-calculates".
+- **No commit** (house rule). Deferred and documented in `tidbits.md`: pro-rata
+  upgrades, per-invoice VAT, subscription snapshots/grandfathering, a payment
+  gateway, the per-branch onboarding fee (§14), and the register's "N of M licensed"
+  display line.
+
 ## 2026-09-13 (later still) — panel 404s diagnosed: missing CONTROL_PLANE_TOKEN; token reveal added
 
 - Owner hit `urban-threads-ho is down: … status failed: Not found` on

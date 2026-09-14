@@ -38,6 +38,12 @@ export interface InvoiceOut {
   companyName: string;
   invoiceNumber: string;
   amountCents: number;
+  /** Licensed terminals on the recurring line; null on a manually-priced invoice. */
+  terminalCount: number | null;
+  /** The per-terminal rate when the invoice was raised (a snapshot). */
+  terminalPriceCents: number | null;
+  /** Once-off onboarding charge when this invoice carried it. */
+  setupFeeCents: number | null;
   status: 'pending' | 'paid' | 'overdue' | 'cancelled';
   dueDate: string | null;
   paidDate: string | null;
@@ -64,6 +70,9 @@ const invoiceToOut = (inv: InvoiceRecord): InvoiceOut => {
     companyName: company?.name ?? `Company #${inv.company_id}`,
     invoiceNumber: inv.invoice_number,
     amountCents: inv.amount_cents,
+    terminalCount: inv.terminal_count ?? null,
+    terminalPriceCents: inv.terminal_price_cents ?? null,
+    setupFeeCents: inv.setup_fee_cents ?? null,
     status: inv.status,
     dueDate: inv.due_date,
     paidDate: inv.paid_date,
@@ -110,6 +119,13 @@ billingRouter.post(
     const companyId = requireInt(req.body, 'companyId');
     const amountCents = optionalInt(req.body, 'amountCents');
     const dueDate = optionalString(req.body, 'dueDate');
+    // Without an amount the invoice is computed from the subscription: the
+    // recurring line, plus the once-off onboarding charge on an `initial`
+    // invoice. `renewal` never carries the onboarding charge again.
+    const purposeRaw = req.body?.purpose;
+    if (purposeRaw !== undefined && !['initial', 'renewal', 'manual'].includes(String(purposeRaw))) {
+      throw new HttpError(400, 'purpose must be one of: initial, renewal, manual');
+    }
 
     const company = getCompanyById(companyId);
     if (!company) throw new HttpError(404, 'Company not found');
@@ -117,6 +133,7 @@ billingRouter.post(
     const invoice = createInvoiceForCompany(companyId, {
       amountCents: amountCents ?? undefined,
       dueDate: dueDate ?? undefined,
+      purpose: purposeRaw as 'initial' | 'renewal' | 'manual' | undefined,
     });
 
     res.status(201).json(invoiceToOut(invoice));

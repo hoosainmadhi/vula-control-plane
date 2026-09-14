@@ -1,12 +1,16 @@
 import { env } from '../config/env.js';
 import {
+  allocatedTerminalCount,
   getCompanyById,
   getPlanById,
+  getSubscription,
   planFeatures,
   countStoresForCompany,
   type CompanyRecord,
   type PlanRecord,
+  type StoreRecord,
 } from '../config/registryDb.js';
+import { terminalAllowance } from './terminalLicences.js';
 
 /**
  * Subscription state and entitlement resolution.
@@ -27,6 +31,19 @@ export interface Entitlements {
   features: string[];
   maxStores: number;
   maxTerminalsPerStore: number;
+  /**
+   * Terminal licences the client has purchased — the billable quantity. 0 when
+   * no subscription is set up (which the office must fix before adding stores).
+   */
+  licensedTerminalCount: number;
+  /** How much of the purchased quantity has been placed on stores. */
+  allocatedTerminals: number;
+  /**
+   * This store's own licence allowance (its allocation), set by
+   * `entitlementsForStore`. Absent on a company-wide entitlement, where the
+   * meaningful numbers are `licensedTerminalCount` / `maxTerminalsPerStore`.
+   */
+  maxTerminals?: number;
   paidThrough: string | null;
   billingState: BillingState;
   /** Stores used vs allowed, for cap messaging. */
@@ -44,6 +61,8 @@ export const UNASSIGNED: Entitlements = {
   features: [],
   maxStores: 1,
   maxTerminalsPerStore: 1,
+  licensedTerminalCount: 0,
+  allocatedTerminals: 0,
   paidThrough: null,
   billingState: 'unlicensed',
   storesUsed: 0,
@@ -85,6 +104,9 @@ export function entitlementsFor(
   const plan: PlanRecord | null = company.plan_id ? getPlanById(company.plan_id) : null;
   const billingState = deriveBillingState(company, now);
   const storesUsed = countStoresForCompany(company.id);
+  const subscription = getSubscription(company.id);
+  const licensedTerminalCount = subscription?.licensed_terminal_count ?? 0;
+  const allocatedTerminals = allocatedTerminalCount(company.id);
 
   const notes: string[] = [];
   if (billingState === 'past_due') {
@@ -105,6 +127,15 @@ export function entitlementsFor(
       `Over the plan limit: ${storesUsed} stores on a ${plan.max_stores}-store plan. Upgrade to add more.`,
     );
   }
+  if (plan && licensedTerminalCount === 0) {
+    notes.push(
+      'No licensed terminals on the subscription — set the quantity the client has purchased before adding stores.',
+    );
+  } else if (allocatedTerminals > licensedTerminalCount) {
+    notes.push(
+      `Over-allocated: ${allocatedTerminals} terminals placed on stores but only ${licensedTerminalCount} licensed.`,
+    );
+  }
 
   return {
     companyId: company.id,
@@ -114,11 +145,24 @@ export function entitlementsFor(
     features: planFeatures(plan),
     maxStores: plan?.max_stores ?? 1,
     maxTerminalsPerStore: plan?.max_terminals_per_store ?? 1,
+    licensedTerminalCount,
+    allocatedTerminals,
     paidThrough: company.paid_through,
     billingState,
     storesUsed,
     note: notes.join(' '),
   };
+}
+
+/**
+ * Entitlements as they apply to ONE store: the company-wide set plus this
+ * store's own licence allowance, which is what its signed licence carries as
+ * `maxTerminals`.
+ */
+export function entitlementsForStore(store: StoreRecord, now: Date = new Date()): Entitlements {
+  const company = store.company_id ? getCompanyById(store.company_id) : null;
+  const ent = entitlementsFor(company, now);
+  return { ...ent, maxTerminals: terminalAllowance(store).count };
 }
 
 export interface CapCheck {
@@ -139,19 +183,6 @@ export function canAddStore(company: CompanyRecord | null): CapCheck {
     return {
       ok: false,
       reason: `${company.name} already has ${used} of ${max} stores on the ${plan?.name ?? 'assigned'} plan. Upgrade the plan to add another store.`,
-    };
-  }
-  return { ok: true };
-}
-
-export function canUseTerminals(company: CompanyRecord | null, terminalCount: number): CapCheck {
-  if (!company) return { ok: true };
-  const plan = company.plan_id ? getPlanById(company.plan_id) : null;
-  const max = plan?.max_terminals_per_store ?? 1;
-  if (terminalCount > max) {
-    return {
-      ok: false,
-      reason: `${company.name}'s ${plan?.name ?? 'assigned'} plan allows ${max} terminals per store; ${terminalCount} requested. Upgrade the plan to add tills.`,
     };
   }
   return { ok: true };

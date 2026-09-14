@@ -2,6 +2,33 @@
 
 > Prioritised for the next workspace. ~~Struck~~ items are done.
 
+## Deferred from the subscription redesign (2026-09-13)
+
+- **The live fleet's plans arrived as `custom`.** Starter/Business/Multi-Store
+  carried flat prices; rather than re-interpret them as per-terminal rates (which
+  would have multiplied live bills by till count) they became `custom`. To restore
+  automatic renewal either set a per-terminal rate, or put the old flat figure in
+  the plan's **agreed amount** (2026-09-13) so it bills flat each period. (See
+  findings.md 2026-09-13.)
+- **Pro-rata upgrades** — changing the licensed quantity mid-period bills the new
+  quantity from the next period, not pro rata. Decide the policy before real money.
+- **Per-invoice VAT** — the invoice still has no subtotal/VAT/total split (see the
+  older item below); the redesign put the arithmetic in place, not the tax.
+- **Subscription snapshots / grandfathering** — a plan edit still changes every
+  client on it. Snapshot the rate onto the subscription before changing a price on a
+  live customer.
+- **Additional-branch onboarding fee (§14 of the brief)** — deliberately not built.
+  The architecture allows it (a plan column + a per-store charged flag); today the
+  onboarding charge is once per client.
+- **Payment gateway** — settlement is still recorded by hand (payments now record
+  `completed`, and the sweep never fabricates one). A provider webhook is the next
+  step; nothing in the invoice model blocks it.
+- **Register display of the allowance** — `/api/runtime-config` publishes
+  `subscription.maxTerminals` and the register's type carries it; the "N of M
+  licensed" line in the till picker is not drawn yet (the gate itself is live).
+- **Legacy `branch_stores.control_plane_token`** in za-pos is still named for the
+  vendor credential; the additive `head_office_token` is what wires topology.
+
 ## Deferred from the production-readiness review (2026-09-12)
 
 Source: the deep-dive report (see findings.md, 2026-09-12) — items too

@@ -71,7 +71,15 @@ const makeCompany = async (over: Record<string, unknown> = {}) => {
   const res = await request(app)
     .post('/api/companies')
     .set(auth())
-    .send({ name: 'Urban Threads Retail Group', slug, planId, ...over })
+    .send({
+      name: 'Urban Threads Retail Group',
+      slug,
+      planId,
+      // Capacity is purchased: a client with no licensed terminals cannot take
+      // a store, so the fixture states the quantity.
+      licensedTerminalCount: 25,
+      ...over,
+    })
     .expect(201);
   return res.body as {
     id: number;

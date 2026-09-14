@@ -16,7 +16,31 @@ CONTEXT.md "Internal API contract").
 
 ## Current Phase
 
-**L4 Enforcement — control-plane authority side (2026-09-11).** Plans no longer
+**Subscription model redesign — licensed terminals × rate + once-off onboarding
+(2026-09-13, complete).** The owner brief
+(`~/Downloads/vula-pos-subscription-redesign-agent-prompt*.md`) sets the commercial
+model: recurring = **licensed terminals × price per terminal**, plus a **once-off
+onboarding** charge on the first invoice; a plan may be `per_terminal` or `custom`.
+Shipped in this repo and in za-pos (both sides of the terminal-allowance gate):
+
+- **Plan / subscription / billing are now three concepts.** The plan is the
+  catalogue (caps, features, `pricing_mode`, `terminal_price_cents`,
+  `setup_fee_cents`, `billing_period`); the subscription is what the client bought
+  (`company_subscriptions.licensed_terminal_count` + `setup_fee_status`);
+  `store_terminal_licences` says where those licences sit; billing is
+  `licensed × rate` (+ onboarding once).
+- **Only licensed terminals are billable** — never configured tills, claimed
+  devices, open tills or heartbeats. `services/pricing.ts` is the one calculator.
+- **`custom` never auto-calculates**: an amountless invoice for a custom-priced
+  client is refused, and the renewal sweep skips it.
+- **The licence carries the allowance** (`maxTerminals`, additive, per store); the
+  register refuses new device claims beyond it (za-pos). Existing flat-priced plans
+  became `custom` rather than being re-interpreted as rates — see findings.md.
+- Tests: CP **159 green (13 suites)**, za-pos **325 green (32 suites)**; typecheck
+  and both production builds clean; migration rehearsed against a copy of the live
+  registry. **No commit** (house rule).
+
+Previous — **L4 Enforcement — control-plane authority side (2026-09-11).** Plans no longer
 gate nothing. Shipped in this repo:
 
 - **Curated feature vocabulary** (`src/services/features.ts`) — the six locked
@@ -355,8 +379,10 @@ run as the tenant workstream in parallel.
       auto-renewal no longer records a synthetic payment — the sweep only
       creates the invoice, settlement is explicit
       (`BILLING_SIMULATE_RENEWAL_SETTLEMENT=true` restores demo behaviour).
-      **Still deferred:** per-store pricing (`plan_prices`), subscription
-      snapshots, annual discount mechanics.
+      **Superseded by the 2026-09-13 redesign** (licensed quantity + allocations
+      + per-terminal pricing + once-off onboarding): per-store pricing is
+      expressed as allocations, and subscription snapshots remain deferred
+      (tidbits.md).
 - [x] **P2 (partial) Privacy boundary** (2026-09-12) — `vat_reg_no` dropped
       from the CP stores DDL/DTOs/forms (with a DROP COLUMN migration) and
       from za-pos `/api/internal/control/status`; the CP-token fallback on

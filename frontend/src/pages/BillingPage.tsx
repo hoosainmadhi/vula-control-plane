@@ -192,6 +192,8 @@ export default function BillingPage() {
   const totalPaidCents = invoices.reduce((acc, inv) => acc + (inv.status === 'paid' ? inv.amountCents : 0), 0);
   const totalPendingCents = invoices.reduce((acc, inv) => acc + (inv.status === 'pending' || inv.status === 'overdue' ? inv.amountCents : 0), 0);
 
+  const selectedCompany = companies.find((c) => String(c.id) === newCompanyId);
+
   const formatRand = (cents: number): string =>
     new Intl.NumberFormat('en-ZA', { style: 'currency', currency: 'ZAR' }).format(cents / 100);
 
@@ -433,12 +435,43 @@ export default function BillingPage() {
                   ))}
                 </select>
               </div>
+
+              {selectedCompany && (
+                <div className="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                  {selectedCompany.subscription.recurringAmountCents === null ? (
+                    <span className="font-semibold text-amber-700">
+                      {selectedCompany.name} is on custom pricing — enter the agreed amount.
+                    </span>
+                  ) : (
+                    <>
+                      Plan default:{' '}
+                      <span className="font-mono font-bold text-slate-800">
+                        {formatRand(selectedCompany.subscription.recurringAmountCents)}
+                      </span>{' '}
+                      ({selectedCompany.subscription.licensedTerminalCount} licensed terminals ×{' '}
+                      {formatRand(selectedCompany.subscription.rateCents)})
+                      {selectedCompany.subscription.setupFeeStatus === 'not_invoiced' &&
+                        selectedCompany.subscription.setupFeeCents > 0 && (
+                          <>
+                            {' '}
+                            + {formatRand(selectedCompany.subscription.setupFeeCents)} once-off onboarding
+                          </>
+                        )}
+                    </>
+                  )}
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-bold text-slate-700">Amount (ZAR)</label>
                 <input
                   type="number"
                   step="0.01"
-                  placeholder="Leave empty to use plan default price"
+                  placeholder={
+                    selectedCompany?.subscription.recurringAmountCents === null
+                      ? 'Required for custom-priced clients'
+                      : 'Leave empty to use the subscription amount'
+                  }
                   value={newAmountRands}
                   onChange={(e) => setNewAmountRands(e.target.value)}
                   className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm"
@@ -584,17 +617,64 @@ export default function BillingPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  <tr>
-                    <td className="py-3">
-                      <div className="font-bold text-slate-800">Vula POS Subscription</div>
-                      <div className="text-[11px] text-slate-500">
-                        Tier: {companies.find((c) => c.id === viewingInvoice.companyId)?.planName || 'Standard Plan'}
-                      </div>
-                    </td>
-                    <td className="py-3 text-right font-mono font-bold text-slate-900">
-                      {formatRand(viewingInvoice.amountCents)}
-                    </td>
-                  </tr>
+                  {viewingInvoice.terminalCount !== null &&
+                  viewingInvoice.terminalPriceCents !== null ? (
+                    <>
+                      {/* Recurring line: licensed terminals × the rate at the time
+                          of issue. Never derived from claimed devices or open tills. */}
+                      <tr>
+                        <td className="py-3">
+                          <div className="font-bold text-slate-800">
+                            {viewingInvoice.terminalCount} licensed terminal
+                            {viewingInvoice.terminalCount === 1 ? '' : 's'}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            @ {formatRand(viewingInvoice.terminalPriceCents)} per terminal ·{' '}
+                            {companies.find((c) => c.id === viewingInvoice.companyId)?.planName ??
+                              'Subscription'}
+                          </div>
+                        </td>
+                        <td className="py-3 text-right font-mono font-bold text-slate-900">
+                          {formatRand(viewingInvoice.terminalCount * viewingInvoice.terminalPriceCents)}
+                        </td>
+                      </tr>
+                      {(viewingInvoice.setupFeeCents ?? 0) > 0 && (
+                        <tr>
+                          <td className="py-3">
+                            <div className="font-bold text-slate-800">
+                              Vula onboarding and deployment
+                            </div>
+                            <div className="text-[11px] text-slate-500">
+                              Once-off — not repeated on renewals
+                            </div>
+                          </td>
+                          <td className="py-3 text-right font-mono font-bold text-slate-900">
+                            {formatRand(viewingInvoice.setupFeeCents ?? 0)}
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  ) : (
+                    <tr>
+                      <td className="py-3">
+                        <div className="font-bold text-slate-800">Vula POS Subscription</div>
+                        <div className="text-[11px] text-slate-500">
+                          {viewingInvoice.setupFeeCents && viewingInvoice.setupFeeCents > 0
+                            ? `Agreed amount · Tier: ${
+                                companies.find((c) => c.id === viewingInvoice.companyId)?.planName ??
+                                'Custom'
+                              }`
+                            : `Tier: ${
+                                companies.find((c) => c.id === viewingInvoice.companyId)?.planName ??
+                                'Custom'
+                              }`}
+                        </div>
+                      </td>
+                      <td className="py-3 text-right font-mono font-bold text-slate-900">
+                        {formatRand(viewingInvoice.amountCents)}
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-slate-200 font-bold">

@@ -52,17 +52,46 @@ control plane is what makes the two confusable in conversation. Do not write
   the branch stores and the Company Control Panel. It holds a plan, a `paid_through`
   date and an optional trial. Without it, a plan granting "N stores" has nothing to
   count against.
-- **A plan grants** a store-count cap, a per-store terminal ceiling, and a feature
-  set. Four tiers are seeded and every value is editable: `starter` (1 store /
-  2 tills), `retail` (1/8), `multi-store` (10/25), `enterprise` (50/99). Operators
-  can also **create their own plans** — the seeded four are a starting point, not a
-  closed catalogue.
+- **Plan · subscription · billing are three different things** (2026-09-13). The
+  **plan** is the catalogue entry: what a client *may* buy (store cap, per-store
+  terminal ceiling, features, rate per licensed terminal, once-off onboarding).
+  The **subscription** is what this client *did* buy — one row per company in
+  `company_subscriptions` (`licensed_terminal_count` + `setup_fee_status`) plus a
+  `store_terminal_licences` row per store saying where those licences sit.
+  **Billing** is the arithmetic: `licensed terminals × rate`, plus the once-off
+  onboarding charge on the first invoice. Only the first is editable as a
+  catalogue; the others are per-customer facts.
+- **A plan grants** a store-count cap, a per-store terminal ceiling, a feature set,
+  and its pricing. Four tiers are seeded and every value is editable: `starter`
+  (1 store / 2 terminals), `business` (1/10), `multi-store` (20/10), `enterprise`
+  (custom pricing). All three per-terminal tiers are R500 per licensed terminal per
+  month plus R10,000 once-off onboarding. Operators can also **create their own
+  plans** — the seeded four are a starting point, not a closed catalogue.
+- **Four terminal quantities, and only one of them is billable.** **Licensed** is
+  the commercial quantity (bought from the vendor, drives the fee). **Configured**
+  is the terminal slots the POS is told to run (`stores.terminal_count`). **Claimed**
+  is the actual device/browser binding at the register. **Open** is a trading session
+  running right now. Claimed devices, open tills, heartbeats and configured counts
+  never change what a client pays; a store may not be *configured* above what it is
+  *licensed* for, so the POS slots and the signed licence cannot drift apart.
 - **A plan's price always carries its recurrence.** `billing_period` is one of
   `monthly` | `annual` | `once-off`, and the UI never shows a bare number — a figure
-  without its period is not a price. `once-off` means a perpetual licence rather than
-  a subscription. **The control plane does not charge anyone**: the price list exists
-  so a quote and an invoice raised elsewhere agree. Billing/payment recording is L3
-  and unbuilt.
+  without its period is not a price. `pricing_mode` is `per_terminal` (recurring
+  rate × licensed terminals) or `custom` (a negotiated deal). A custom plan may
+  carry an **agreed amount** (`custom_amount_cents`, billed flat per period — the
+  office states it once and renewals follow from it), or 0, which means "negotiated
+  per client": an amountless invoice is then refused and the renewal sweep skips
+  that client rather than inventing a figure. Either way nothing is ever derived
+  from a terminal count on a custom plan. `once-off` means a perpetual licence
+  rather than a subscription.
+- **Money is integer cents everywhere** — storage, wire and arithmetic. Rands exist
+  only inside form inputs and labels.
+- **The licensed quantity gates capacity.** Creating a store allocates its terminals
+  out of what the client bought (defaulting to the requested configured count), and
+  a client with **zero** licensed terminals cannot take a store until the purchased
+  quantity is stated. Over-allocating is refused with **402
+  `terminal_allocation_exceeded`**; exceeding the plan's per-store ceiling is
+  **402 `terminal_cap_exceeded`**.
 - **A Head Office belongs to exactly one company**, which is why creating one asks
   for the merchant. The flow creates the merchant inline when the client is new, so
   onboarding does not require visiting two screens.
@@ -88,9 +117,20 @@ control plane is what makes the two confusable in conversation. Do not write
 - **Billing state is derived, never stored**: `active` → `past_due` (inside the
   grace window after `paid_through`) → `suspended` (beyond grace). A manual company
   `suspension` is a separate operator override. Nothing runs on a schedule.
-- **Caps fail loudly.** Creating a store beyond the cap or pushing more terminals
-  than the plan allows returns **402** with an upgrade message. An unassigned store
-  is not cap-policed, so a store predating companies keeps working.
+- **Caps fail loudly.** Creating a store beyond the plan's store cap (**402
+  `store_cap_reached`**), configuring more terminals than the plan or the store's
+  licence allows (**402 `terminal_cap_exceeded` / `terminal_allocation_exceeded`**),
+  or invoicing a custom-priced client without an agreed amount (**400
+  `custom_pricing_requires_amount`**) are all refused with a message that names the
+  next step. An unassigned store is not cap-policed, so a store predating companies
+  keeps working.
+- **Invoices carry their own pricing evidence.** `terminal_count` ×
+  `terminal_price_cents` (a rate snapshot, so editing a plan cannot rewrite an
+  issued invoice) is the recurring line, and `setup_fee_cents` marks the once-off
+  onboarding charge — which rides the client's **first** invoice only and never a
+  renewal. Settlement is explicit: the sweep creates renewal invoices and never
+  records a payment itself (`BILLING_SIMULATE_RENEWAL_SETTLEMENT=true` restores the
+  old demo behaviour for disposable environments).
 - **The Company Control Panel is a managed application in the vendor's fleet.** One
   per merchant (e.g. `urban-threads-ho.vula-app.co.za`), it is a _separate_ app with
   its own database and its own `ho_users` logins. The control plane **provisions,
@@ -108,8 +148,9 @@ control plane is what makes the two confusable in conversation. Do not write
 
 Before L4 a plan's feature set was informational — nothing anywhere read it. L4 makes
 it a contract shared by all three applications. The licence remains the source of
-truth at the store: it carries `features[]`, `billingState`, `paidThrough` and
-`maxOfflineUntil`, and each application derives its own gate from those claims.
+truth at the store: it carries `features[]`, `billingState`, `paidThrough`,
+`maxTerminals` and `maxOfflineUntil`, and each application derives its own gate from
+those claims.
 
 ### The curated feature vocabulary (six keys, locked with the owner)
 
@@ -126,6 +167,28 @@ Served machine-readably at `GET /api/plans/features` (see `src/services/features
 | `stock_transfers`   | Stock transfers    | Head Office                         |
 | `ecommerce_bridges` | E-commerce bridges | store                               |
 | `ai_assistant`      | AI assistant       | store                               |
+
+### The licensed terminal allowance (2026-09-13)
+
+The subscription's purchased quantity reaches the register through the licence, per
+store:
+
+| Claim                 | Meaning                                                                                   |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| `maxTerminalsPerStore` | The PLAN's ceiling for any one store (unchanged; informational at the register)          |
+| `maxTerminals`         | **This store's allowance** — its allocation on the client's subscription. Additive claim |
+
+The store refuses a **new device claim** once it holds `maxTerminals` bindings
+(402 `terminal_limit_reached`), and refuses a `configure` that would create more
+terminal slots than the licence covers. The count is of CLAIMED terminals against
+the signed licence — never of devices that happen to be online — and a device
+*moving* between tills keeps its claim. **Existing claims are never revoked** when a
+subscription shrinks: reducing a quantity must not strand a till mid-shift. A
+deployment with no licence (or a licence whose `billingState` is `unlicensed`) has
+no allowance and stays uncapped. A licence issued before the claim exists falls back
+to `maxTerminalsPerStore`, which can never be lower than what the store already runs.
+`/api/runtime-config` publishes `subscription.maxTerminals` so the register can show
+"N of M licensed"; the gate itself is server-side.
 
 ### Who enforces what
 
@@ -147,7 +210,7 @@ Served machine-readably at `GET /api/plans/features` (see `src/services/features
     `{ error, code: 'subscription_suspended' }`**. Config and licence pushes are
     never blocked — that is how a store learns it has been unsuspended.
 - **The Head Office panel** verifies the company licence and gates `multi_store` on
-  it (L5, pending).
+  it (L5). It has no tills, so the terminal allowance does not apply to it.
 
 ### Enforcement propagation
 
@@ -244,6 +307,7 @@ domains stay separate; see za-pos §14/§14a). The store-side
 when the operator sets `ALLOW_CONTROL_PLANE_TOKEN_FALLBACK=true` — a
 migration-only opt-in, default off since 2026-09-12.
 | `POST /api/internal/admin/reset` | `resetAdmin`    | —                                                                                                                                                                                 | `{ ok: true, tempPassword: "<one-time>" }` — the **store generates** the temp password; the CP only proxies it (shown once, never persisted) |
+| `POST /api/internal/licence`     | `pushLicence`   | `{ token: "<signed licence>" }`                                                                                                                                                  | `{ ok: true }` on a verified, newer-sequence licence; **409** on a stale sequence. Claims as issued by `services/licenceSigner.ts`: `licenceId, keyId, sequence, companyId, companyName, storeSlug, storeName, planCode, planName, features[], maxStores, maxTerminalsPerStore, maxTerminals?, paidThrough, billingState, issuedAt, maxOfflineUntil`. `maxTerminals` is the store's own allowance (2026-09-13) and is **absent on a Head Office licence** — the claim is additive, so a verifier that does not know it keeps working |
 | `GET /api/internal/telemetry`    | `fetchTelemetry` | —                                                                                                                                                                                | **v0.4.0 (2026-09-12)**: `{ ok, app: 'vula', version, environment, schemaVersion, generatedAt, sync: { lastSyncAt, pendingEvents, failedEvents }, terminals: [{ till, name, claimed, deviceId, sessionOpen, lastSeenAt }] }` — technical metadata only (§40). `pendingEvents`/`failedEvents`/`lastSeenAt` are `null` until the tenant ships device heartbeats; the fields are reserved so the shape will not change. Stub mirrors it |
 
 Every CP push includes `vertical` (CP-owned). The store validates it (400
@@ -251,6 +315,12 @@ listing the allowed values when unknown), writes it to `settings.vertical`
 and seeds the type's starter category pack (idempotent); an absent `vertical`
 leaves the store's current type untouched (backward compatible with older
 CP builds).
+
+Since 2026-09-13 the store also refuses a `configure` whose `terminalCount`
+exceeds the licence's `maxTerminals` (**402 `terminal_limit_reached`**) — defence
+in depth behind the claim gate, so terminal slots and the licence cannot drift.
+Configured count ≤ licensed count is enforced at BOTH ends; the CP refuses the
+push first (§2a).
 
 Error handling: non-2xx → CP throws `StoreClientError` (502) with the store's
 `error` message when present; network failure/timeout (5 s) also 502. Health
@@ -267,7 +337,7 @@ and push _outcomes_ are recorded on the registry row regardless.
 | `name`                      | TEXT NOT NULL                                  | Display name                                                                                                                   |
 | `head_office_token`         | TEXT NULL                                      | Per-branch credential the merchant's Head Office uses to call this store; set by topology wiring (2026-09-12). Distinct from `control_plane_token` by design |
 | `vertical`                  | TEXT NOT NULL DEFAULT 'general'                | Store type; enum enforced at the API layer (no CHECK — SQLite can't add one via the auto-migration). Pushed on every configure |
-| `terminal_count`            | INTEGER NOT NULL DEFAULT 1 CHECK 1–99          | Pushed as Till 1..N                                                                                                            |
+| `terminal_count`            | INTEGER NOT NULL DEFAULT 1 CHECK 1–99          | **Configured** terminal slots, pushed as Till 1..N. Bounded by the store's licence allowance; never a billing input |
 | `base_url`                  | TEXT NOT NULL CHECK http(s)%                   | Trailing slash stripped at write                                                                                               |
 | `control_plane_token`       | TEXT NOT NULL                                  | Never serialized by the API                                                                                                    |
 | `status`                    | TEXT DEFAULT 'active' CHECK active/paused      | Paused blocks push + reset-admin                                                                                               |
@@ -278,9 +348,30 @@ and push _outcomes_ are recorded on the registry row regardless.
 | `last_health_status`        | TEXT DEFAULT 'unknown' CHECK up/down/unknown   | up/down recorded on each manual check                                                                                          |
 | `created_at` / `updated_at` | TEXT NOT NULL DEFAULT (datetime('now'))        | UTC                                                                                                                            |
 
+`plans` — the catalogue (source of truth for the DDL is `src/config/registryDb.ts`):
+`code` (unique, immutable), `name`, `max_stores`, `max_terminals_per_store`,
+`features_json`, `pricing_mode` (`per_terminal` | `custom`), `terminal_price_cents`,
+`setup_fee_cents`, `billing_period`, `is_active`, `sort_order`, timestamps. All
+money is integer cents with a `>= 0` CHECK; a `per_terminal` plan must carry a rate
+above zero (refused at the API).
+
+`company_subscriptions` — one row per client: `company_id` (UNIQUE),
+`licensed_terminal_count` (>= 0), `setup_fee_status`
+(`not_invoiced` | `invoiced` | `paid` | `waived`).
+
+`store_terminal_licences` — where the purchased licences sit: `company_id`,
+`store_id` (UNIQUE), `licensed_terminal_count` (>= 0). Invariants enforced in
+`services/terminalLicences.ts`: the sum of a client's allocations never exceeds its
+subscription's licensed count, and no allocation exceeds the plan's per-store
+ceiling.
+
+`invoices` — `amount_cents` plus its evidence: `terminal_count`,
+`terminal_price_cents` (rate snapshot), `setup_fee_cents`; `payments` records a
+settlement (status `completed`) with a method and reference.
+
 Conventions: snake_case columns, CHECK-constrained enums, ISO-ish UTC
-timestamps, JSON text for snapshots. No audit table, no users table, no
-delete route in v1 (see `tidbits.md`).
+timestamps, JSON text for snapshots. The audit table, the users table and the
+DELETE routes shipped after v1 (see `tidbits.md` for what is still open).
 
 ## 6. Auth & session conventions
 

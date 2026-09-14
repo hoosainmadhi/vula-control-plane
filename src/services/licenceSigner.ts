@@ -31,7 +31,16 @@ export interface LicenceClaims {
   planName: string;
   features: string[];
   maxStores: number;
+  /** The plan's ceiling for any one store. */
   maxTerminalsPerStore: number;
+  /**
+   * THIS store's terminal licence allowance (its allocation on the client's
+   * subscription) — the quantity the register may bind devices to. Additive
+   * claim (2026-09-13): the register gates new claims on it and treats its
+   * absence as "no terminal limit" so older licences keep working. Omitted on a
+   * Head Office licence, which has no tills.
+   */
+  maxTerminals?: number;
   paidThrough: string | null;
   billingState: BillingState;
   issuedAt: string;
@@ -140,6 +149,8 @@ export interface IssueLicenceInput {
   features?: string[];
   maxStores?: number;
   maxTerminalsPerStore?: number;
+  /** This store's licence allowance; omit on a Head Office licence. */
+  maxTerminals?: number;
   paidThrough?: string | null;
   billingState?: BillingState;
   now?: Date;
@@ -178,6 +189,7 @@ export function issueLicence(input: IssueLicenceInput): SignedLicence {
     features: input.features ?? [],
     maxStores: input.maxStores ?? 1,
     maxTerminalsPerStore: input.maxTerminalsPerStore ?? 1,
+    ...(input.maxTerminals !== undefined ? { maxTerminals: input.maxTerminals } : {}),
     paidThrough: input.paidThrough ?? null,
     billingState: input.billingState ?? 'active',
     issuedAt: now.toISOString(),

@@ -14,18 +14,47 @@ export type StoreVertical =
 
 export type PlanPeriod = 'monthly' | 'annual' | 'once-off';
 
+/** How a plan charges: a rate per licensed terminal, or a negotiated deal. */
+export type PricingMode = 'per_terminal' | 'custom';
+
 export interface Plan {
   id: number;
   code: string;
   name: string;
+  /** Store-count cap. */
   maxStores: number;
+  /** Entitlement limit per store — NOT a configured/claimed till count. */
   maxTerminalsPerStore: number;
   features: string[];
-  priceCents: number;
+  pricingMode: PricingMode;
+  /** Rate per licensed terminal per billing period (0 on a custom plan). */
+  terminalPriceCents: number;
+  /**
+   * A custom plan's agreed charge per billing period. 0 means "negotiated per
+   * client": invoices then need an explicit amount.
+   */
+  customAmountCents: number;
+  /** Once-off onboarding charge for the client. */
+  setupFeeCents: number;
   /** How the price recurs — 'once-off' is a perpetual licence, not a subscription. */
-  billingPeriod: 'monthly' | 'annual' | 'once-off';
+  billingPeriod: PlanPeriod;
   isActive: boolean;
   createdAt: string;
+}
+
+export type SetupFeeStatus = 'not_invoiced' | 'invoiced' | 'paid' | 'waived';
+
+/** What a client purchased, priced — the subscription behind its plan. */
+export interface Subscription {
+  licensedTerminalCount: number;
+  allocatedTerminals: number;
+  unallocatedTerminals: number;
+  /** null when the plan is custom-priced (or absent) — never a guessed figure. */
+  recurringAmountCents: number | null;
+  rateCents: number;
+  setupFeeCents: number;
+  setupFeeStatus: SetupFeeStatus;
+  allocations: Array<{ storeId: number; licensedTerminalCount: number }>;
 }
 
 export type BillingState = 'active' | 'trial' | 'past_due' | 'suspended' | 'unlicensed';
@@ -60,6 +89,8 @@ export interface Company {
   registerState: RegisterState;
   /** True when the register refuses new sales for this company. */
   tradingBlocked: boolean;
+  /** The purchased quantity and what it costs. */
+  subscription: Subscription;
   createdAt: string;
 }
 
@@ -130,7 +161,10 @@ export interface Store {
     terminals: { configured: number; claimed: number; open: number; online: number };
   } | null;
   vertical: StoreVertical;
+  /** Terminal slots this store is configured to run (pushed as Till 1..N). */
   terminalCount: number;
+  /** Terminal licences this store holds — what its signed licence permits. */
+  licensedTerminalCount: number;
   baseUrl: string;
   status: StoreStatus;
   lastConfigStatus: ConfigStatus;
@@ -229,6 +263,12 @@ export interface Invoice {
   companyName: string;
   invoiceNumber: string;
   amountCents: number;
+  /** Licensed terminals on the recurring line; null on a manually-priced invoice. */
+  terminalCount: number | null;
+  /** The per-terminal rate when the invoice was raised (a snapshot). */
+  terminalPriceCents: number | null;
+  /** Once-off onboarding charge when this invoice carried it. */
+  setupFeeCents: number | null;
   status: 'pending' | 'paid' | 'overdue' | 'cancelled';
   dueDate: string | null;
   paidDate: string | null;
@@ -277,7 +317,14 @@ export interface ClientListItem {
   } | null;
   storesCount: number;
   healthyStoresCount: number;
+  /** Configured terminal slots across the client's stores. */
   totalTills: number;
+  /** Purchased terminal licences — the billable quantity. */
+  licensedTerminalCount: number;
+  allocatedTerminals: number;
+  recurringAmountCents: number | null;
+  setupFeeCents: number;
+  setupFeeStatus: SetupFeeStatus;
   latestJobStatus: string | null;
   /** Light store rows so the client card links straight into each store. */
   stores: Array<{
@@ -319,8 +366,35 @@ export interface DeploymentJob {
   steps?: DeploymentJobStep[];
 }
 
+/** The client detail surface: what a client pays, plan by plan and store by store. */
+export interface ClientSubscriptionDetail {
+  planId: number | null;
+  pricingMode: PricingMode | 'none';
+  rateCents: number;
+  billingPeriod: PlanPeriod | null;
+  licensedTerminalCount: number;
+  allocatedTerminals: number;
+  unallocatedTerminals: number;
+  recurringAmountCents: number | null;
+  initialInvoiceTotalCents: number | null;
+  setupFeeCents: number;
+  setupFeeStatus: SetupFeeStatus;
+  setupFeeDueCents: number;
+  note: string;
+  allocations: Array<{
+    storeId: number;
+    storeName: string;
+    storeSlug: string;
+    /** Terminal slots that store is configured to run. */
+    terminalCount: number;
+    licensedTerminalCount: number;
+  }>;
+}
+
 export interface ClientDetailResponse {
   client: ClientListItem;
+  /** What the client purchased, priced (present on the client detail endpoint). */
+  subscription?: ClientSubscriptionDetail;
   headOffice: Panel | null;
   /** Full SPOG store rows (same shape as GET /api/stores). */
   stores: Store[];

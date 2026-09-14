@@ -1,5 +1,60 @@
 # Findings
 
+## 2026-09-13 — the pricing redesign: what the code said vs what the brief assumed
+
+- **The working tree already contained a half-finished pricing implementation that
+  contradicted the brief.** 9 modified files (registryDb, billing service/route,
+  companies, stores, clientOrchestrator, PlansPage, BillingPage, types) added
+  `pricing_model: flat|per_terminal`, billed `plan.price_cents × SUM(stores.
+  terminal_count)` — i.e. **configured** tills, which the brief's §12 explicitly
+  forbids — kept the bundled `included_terminals`/`extra_terminal_price_cents`
+  fields the brief removes (§5), and left the frontend not typechecking (`Plan`
+  declared two fields the API never sent while using four it did). Verified before
+  touching anything, saved as a patch, reverted, rebuilt to the brief.
+- **The live registry had already been booted with that WIP build** — its `plans`
+  table carried `included_terminals`, `extra_terminal_price_cents` and
+  `onboarding_fee_cents`, and `invoices` carried `terminal_amount_cents`. So the
+  migration could not assume "the pre-pricing shape": it detects columns
+  dynamically. Rehearsed against a copy: clean, idempotent, no FK violations.
+- **A flat client price is not a per-terminal rate, and mapping it would have
+  silently re-priced live customers.** The live fleet's plans carried flat prices
+  (Starter R1,500, Business R3,000, Multi-Store R5,000, a custom "per-till" R499).
+  Copying those into `terminal_price_cents` would have billed Urban Threads
+  R5,000 × its 9 licensed terminals. Decision: a plan that carried a price becomes
+  `custom` (no auto-calculation, invoices raised with an agreed amount), and only
+  genuinely unpriced seeded tiers pick up the recommended R500/R10,000 defaults.
+  The visible consequence — those plans no longer auto-invoice until the office sets
+  a rate — is recorded in progress.md for the owner.
+- **Billing needed a purchased quantity that did not exist.** Before this change the
+  only quantity in the registry was `stores.terminal_count` (configured slots), so
+  "bill the licensed quantity" had nothing to read. Hence
+  `company_subscriptions.licensed_terminal_count` + `store_terminal_licences`
+  (per-store allocations), backfilled from what stores already ran so a live fleet
+  keeps working and every existing licence still permits its tills.
+- **Zero licensed terminals is a real state, and it must be a gate, not a default.**
+  A client whose purchased quantity was never stated cannot take a store
+  (`402 terminal_allocation_exceeded` with "no licensed terminals yet") — otherwise
+  the CP would be inventing commercial terms. The client-first wizard always states
+  the quantity, so normal onboarding never meets the gate; the advanced Companies
+  form now asks for it.
+- **The privacy-boundary test constrains field NAMES.** Its forbidden pattern
+  (`/revenue|sales|profit|margin|payment|invoice|cost|transaction|…/`) is walked over
+  `/api/plans` and `/api/companies` too, so `terminalPriceCents`,
+  `recurringAmountCents`, `setupFeeCents` and `licensedTerminalCount` were chosen to
+  clear it. (Earlier lesson, still true: a field merely *named* `salesBlocked` fails
+  it.)
+- **The tenant enforced no terminal cap at all.** `claimDevice` validated only that
+  the till existed and was unique; `configure` accepted any 1–99. The licence
+  carried `maxTerminalsPerStore` since 2026-09-10 but nothing read it. Now the store
+  gates NEW claims on the licence's `maxTerminals` — claimed terminals against the
+  signed entitlement, never devices online — keeps a device's *move* working, and
+  never revokes existing claims when a subscription shrinks (a reduction must not
+  strand a till mid-shift).
+- **`createPayment` wrote status `processing` and never advanced it**, while the
+  invoice it belonged to was marked `paid` — an incoherent pair (§27's warning about
+  fabricated settlement). A payment row is only written on a confirmed settlement,
+  so it now records `completed`.
+
 ## 2026-09-12 — external production-readiness review received and code-verified
 
 A deep-dive review of both repos landed (full text:

@@ -41,6 +41,7 @@ import {
 } from './storeClient.js';
 import { issueLicence, licencePublicKey } from './licenceSigner.js';
 import { entitlementsFor } from './subscriptions.js';
+import { allocateTerminals, checkAllocation, terminalAllowance } from './terminalLicences.js';
 import { bootstrapStoreAdmin, generateAdminPassword } from './storeProvisioning.js';
 import { logger } from '../config/env.js';
 
@@ -48,7 +49,13 @@ export interface StoreDeploymentInput {
   name: string;
   slug: string;
   baseUrl: string;
+  /** Terminal slots the POS is configured to run (pushed as Till 1..N). */
   terminalCount: number;
+  /**
+   * Licences to place on this store from the client's subscription. Absent means
+   * "the same as the configured count" — the wizard's default.
+   */
+  licensedTerminalCount?: number;
   adminEmail?: string;
 }
 
@@ -106,6 +113,7 @@ export async function orchestrateClientDeployment(
       slug: s.slug,
       baseUrl: s.baseUrl,
       terminalCount: s.terminalCount,
+      licensedTerminalCount: s.licensedTerminalCount,
       adminEmail: s.adminEmail,
     });
   }
@@ -242,6 +250,17 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
           setStoreCompany(store.id, company.id);
         }
 
+        // Place the client's licences on the store from the moment it exists —
+        // every configure push and licence the store receives is bounded by this
+        // allowance, and a store with no allocation would fall back to its
+        // configured count instead of the purchased quantity.
+        const allocation = meta.licensedTerminalCount ?? meta.terminalCount ?? 1;
+        const allocationCheck = checkAllocation(company, store.id, allocation);
+        if (!allocationCheck.ok) {
+          throw new Error(allocationCheck.reason ?? 'Terminal allocation refused');
+        }
+        allocateTerminals(company, store.id, allocation);
+
         // Coolify container deployment — REQUIRED. Idempotent: an application
         // that already exists is never created twice.
         if (autoDeploy && isCoolifyConfigured()) {
@@ -361,6 +380,8 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
               features: ent.features,
               maxStores: ent.maxStores,
               maxTerminalsPerStore: ent.maxTerminalsPerStore,
+              // The store's own allocation: what the register may bind devices to.
+              maxTerminals: terminalAllowance(store).count,
               paidThrough: ent.paidThrough,
               billingState: ent.billingState,
             });

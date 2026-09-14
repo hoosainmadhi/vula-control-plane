@@ -6,7 +6,7 @@ export const notFoundHandler: RequestHandler = (req: Request, res: Response) => 
 };
 
 export const errorHandler: ErrorRequestHandler = (
-  err: { message?: string; status?: number },
+  err: { message?: string; status?: number; code?: string },
   req: Request,
   res: Response,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -16,5 +16,8 @@ export const errorHandler: ErrorRequestHandler = (
   if (status >= 500) {
     logger.error(`${req.method} ${req.originalUrl} failed: ${err.message ?? 'unknown error'}`);
   }
-  res.status(status).json({ error: err.message || 'Internal server error' });
+  res.status(status).json({
+    error: err.message || 'Internal server error',
+    ...(err.code ? { code: err.code } : {}),
+  });
 };

@@ -42,7 +42,10 @@ CREATE TABLE IF NOT EXISTS stores (
   updated_at             TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
--- Subscription plans (four SA-retail tiers seeded; every value editable).
+-- Subscription plans (four tiers seeded; every value editable). Pricing is a rate
+-- per licensed terminal per period plus a once-off onboarding fee; `custom` means
+-- the deal is negotiated — it may carry an agreed amount (billed flat, never
+-- calculated from terminals) or 0, which leaves each invoice to the office.
 CREATE TABLE IF NOT EXISTS plans (
   id                      INTEGER PRIMARY KEY AUTOINCREMENT,
   code                    TEXT    NOT NULL UNIQUE,
@@ -50,7 +53,13 @@ CREATE TABLE IF NOT EXISTS plans (
   max_stores              INTEGER NOT NULL DEFAULT 1,
   max_terminals_per_store INTEGER NOT NULL DEFAULT 2,
   features_json           TEXT    NOT NULL DEFAULT '[]',
-  price_cents             INTEGER NOT NULL DEFAULT 0,
+  pricing_mode            TEXT    NOT NULL DEFAULT 'per_terminal'
+    CHECK (pricing_mode IN ('per_terminal', 'custom')),
+  terminal_price_cents    INTEGER NOT NULL DEFAULT 0 CHECK (terminal_price_cents >= 0),
+  -- A custom plan's agreed charge per period (0 = negotiated per client, so an
+  -- amountless invoice is refused). Ignored on a per_terminal plan.
+  custom_amount_cents     INTEGER NOT NULL DEFAULT 0 CHECK (custom_amount_cents >= 0),
+  setup_fee_cents         INTEGER NOT NULL DEFAULT 0 CHECK (setup_fee_cents >= 0),
   billing_period          TEXT    NOT NULL DEFAULT 'monthly'
     CHECK (billing_period IN ('monthly', 'annual', 'once-off')),
   is_active               INTEGER NOT NULL DEFAULT 1,
@@ -73,6 +82,32 @@ CREATE TABLE IF NOT EXISTS companies (
     CHECK (status IN ('active', 'suspended')),
   created_at     TEXT    NOT NULL DEFAULT (datetime('now')),
   updated_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- What a client purchased: the quantity of licensed terminals it pays for and the
+-- state of the once-off onboarding charge. One row per company — the company holds
+-- the plan and the paid-through date, so this carries only the commercial facts.
+CREATE TABLE IF NOT EXISTS company_subscriptions (
+  id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_id              INTEGER NOT NULL UNIQUE REFERENCES companies(id) ON DELETE CASCADE,
+  licensed_terminal_count INTEGER NOT NULL DEFAULT 0 CHECK (licensed_terminal_count >= 0),
+  setup_fee_status        TEXT    NOT NULL DEFAULT 'not_invoiced'
+    CHECK (setup_fee_status IN ('not_invoiced', 'invoiced', 'paid', 'waived')),
+  created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Where the purchased licences sit. A store's signed licence carries its
+-- allocation and the tenant refuses device claims beyond it. The sum of a
+-- client's allocations never exceeds its licensed count, and no allocation
+-- exceeds the plan's per-store ceiling (enforced in services/terminalLicences.ts).
+CREATE TABLE IF NOT EXISTS store_terminal_licences (
+  id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_id              INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  store_id                INTEGER NOT NULL UNIQUE REFERENCES stores(id) ON DELETE CASCADE,
+  licensed_terminal_count INTEGER NOT NULL DEFAULT 0 CHECK (licensed_terminal_count >= 0),
+  created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- One Company Control Panel per merchant. A separate application from a store, so
@@ -103,18 +138,24 @@ CREATE TABLE IF NOT EXISTS panels (
   updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
--- Subscription invoices
+-- Subscription invoices. The breakdown columns are the evidence for the amount:
+-- terminal_count × terminal_price_cents is the recurring line as it stood when the
+-- invoice was raised (rate snapshot), and setup_fee_cents is the once-off
+-- onboarding charge — never repeated on a renewal.
 CREATE TABLE IF NOT EXISTS invoices (
-  id                INTEGER PRIMARY KEY AUTOINCREMENT,
-  company_id        INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
-  invoice_number    TEXT    NOT NULL UNIQUE,
-  amount_cents      INTEGER NOT NULL,
-  status            TEXT    NOT NULL DEFAULT 'pending'
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_id           INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  invoice_number       TEXT    NOT NULL UNIQUE,
+  amount_cents         INTEGER NOT NULL,
+  terminal_count       INTEGER,
+  terminal_price_cents INTEGER,
+  setup_fee_cents      INTEGER,
+  status               TEXT    NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'paid', 'overdue', 'cancelled')),
-  due_date          TEXT,
-  paid_date         TEXT,
-  created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
-  updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+  due_date             TEXT,
+  paid_date            TEXT,
+  created_at           TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at           TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Payments for invoices
@@ -146,6 +187,7 @@ CREATE INDEX IF NOT EXISTS idx_invoices_company ON invoices(company_id);
 CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
 CREATE INDEX IF NOT EXISTS idx_payments_company ON payments(company_id);
 CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_store_terminal_licences_company ON store_terminal_licences(company_id);
 
 -- Durable deployment jobs for client orchestration (§11, §27)
 CREATE TABLE IF NOT EXISTS deployment_jobs (

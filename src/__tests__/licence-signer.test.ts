@@ -44,8 +44,23 @@ describe('licence signing', () => {
     });
   });
 
-  it('rejects a tampered payload', () => {
-    const signed = issueLicence(base);
+  it('carries the store`s own terminal allowance as an additive claim', () => {
+    // A store licence states the terminals THIS store may bind devices to,
+    // beside the plan's per-store ceiling — the register gates new claims on it.
+    const store = issueLicence({ ...base, maxTerminals: 4 });
+    const storeClaims = verifyLicenceToken(store.token).claims!;
+    expect(storeClaims.maxTerminals).toBe(4);
+    expect(storeClaims.maxTerminalsPerStore).toBe(25);
+
+    // A Head Office licence has no tills, so the claim is simply absent — an
+    // older verifier that does not know the field keeps working.
+    const panel = issueLicence({ ...base, storeSlug: 'urban-threads-ho' });
+    const panelClaims = verifyLicenceToken(panel.token).claims!;
+    expect(panelClaims.maxTerminals).toBeUndefined();
+    expect(panelClaims.maxTerminalsPerStore).toBe(25);
+  });
+
+  it('rejects a tampered payload', () => {    const signed = issueLicence(base);
     const [payload, sig] = signed.token.split('.');
     const swapped = payload!.slice(0, -4) + 'AAAA';
     const result = verifyLicenceToken(`${swapped}.${sig}`);

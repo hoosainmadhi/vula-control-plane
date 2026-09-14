@@ -4,8 +4,47 @@ import { api } from '../api';
 import { StoreCard } from '../components/StoreCard';
 import { AdminPasswordModal, DiagnosticsModal, StoreFormModal, SupportModal } from '../components/storeModals';
 import { useStoreActions } from '../hooks/useStoreActions';
-import type { ClientDetailResponse, Company, Plan, Store, StoreFormValues } from '../types';
+import type { ClientDetailResponse, Company, Plan, SetupFeeStatus, Store, StoreFormValues } from '../types';
 import type { Notice } from '../lib/storeVocab';
+import { rand, PERIOD_LABEL, perTerminalLabel } from '../lib/money';
+
+const SETUP_FEE_LABELS: Record<SetupFeeStatus, string> = {
+  not_invoiced: 'Not invoiced yet',
+  invoiced: 'Invoiced',
+  paid: 'Paid',
+  waived: 'Waived',
+};
+
+/** The live quote inside the subscription editor — the figure the invoice will carry. */
+function SubscriptionQuotePreview({ plan, licensed }: { plan: Plan | undefined; licensed: number }) {
+  if (!plan) return null;
+  const recurring = plan.pricingMode === 'per_terminal' ? plan.terminalPriceCents * licensed : null;
+  return (
+    <div className="rounded-xl bg-slate-50 px-3.5 py-3 text-xs">
+      {recurring === null ? (
+        <div className="flex justify-between">
+          <span className="text-slate-500">Recurring</span>
+          <span className="font-bold text-slate-800">Custom pricing — agreed per client</span>
+        </div>
+      ) : (
+        <div className="flex justify-between">
+          <span className="text-slate-500">
+            Recurring ({licensed} × {rand(plan.terminalPriceCents)})
+          </span>
+          <span className="font-mono font-black text-slate-900">
+            {rand(recurring)} {plan.billingPeriod === 'once-off' ? '' : PERIOD_LABEL[plan.billingPeriod]}
+          </span>
+        </div>
+      )}
+      <div className="mt-1 flex justify-between">
+        <span className="text-slate-500">Once-off onboarding</span>
+        <span className="font-mono font-semibold text-slate-800">
+          {plan.setupFeeCents > 0 ? rand(plan.setupFeeCents) : 'None'}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 export default function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -21,6 +60,16 @@ export default function ClientDetailPage() {
   const [editClientEmail, setEditClientEmail] = useState('');
   const [editClientPlanId, setEditClientPlanId] = useState('');
   const [savingClient, setSavingClient] = useState(false);
+
+  // Subscription editor (plan + licensed terminals + allocations + onboarding)
+  const [subscriptionOpen, setSubscriptionOpen] = useState(false);
+  const [subPlanId, setSubPlanId] = useState('');
+  const [subLicensed, setSubLicensed] = useState('0');
+  const [subSetupFeeStatus, setSubSetupFeeStatus] = useState<SetupFeeStatus>('not_invoiced');
+  const [subAllocations, setSubAllocations] = useState<
+    Array<{ storeId: number; name: string; licensed: string }>
+  >([]);
+  const [savingSubscription, setSavingSubscription] = useState(false);
 
   // Upgrade modal state (§7)
   const [upgradeOpen, setUpgradeOpen] = useState(false);
@@ -105,6 +154,61 @@ export default function ClientDetailPage() {
     setEditClientOpen(true);
   };
 
+  /**
+   * The subscription editor: the plan, the licensed quantity (per store for a
+   * multi-store client, so the allocation can be distributed), and the state of
+   * the once-off onboarding charge.
+   */
+  const handleOpenSubscription = () => {
+    if (!data) return;
+    const sub = data.subscription;
+    setSubPlanId(data.client.planId ? String(data.client.planId) : '');
+    setSubLicensed(String(sub?.licensedTerminalCount ?? data.client.licensedTerminalCount ?? 0));
+    setSubSetupFeeStatus(sub?.setupFeeStatus ?? data.client.setupFeeStatus ?? 'not_invoiced');
+    setSubAllocations(
+      (data.stores ?? []).map((store) => {
+        const allocation = sub?.allocations.find((a) => a.storeId === store.id);
+        return {
+          storeId: store.id,
+          name: store.name,
+          licensed: String(allocation?.licensedTerminalCount ?? 0),
+        };
+      }),
+    );
+    setSubscriptionOpen(true);
+  };
+
+  const handleSaveSubscription = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id) return;
+    setSavingSubscription(true);
+    setError(null);
+    try {
+      const isMulti = (data?.client.topology ?? 'single_store') === 'multi_store';
+      await api(`/clients/${id}`, {
+        method: 'PUT',
+        body: {
+          planId: subPlanId ? Number(subPlanId) : null,
+          setupFeeStatus: subSetupFeeStatus,
+          ...(isMulti
+            ? {
+                allocations: subAllocations.map((a) => ({
+                  storeId: a.storeId,
+                  licensedTerminalCount: Number(a.licensed) || 0,
+                })),
+              }
+            : { licensedTerminalCount: Number(subLicensed) || 0 }),
+        },
+      });
+      setSubscriptionOpen(false);
+      await loadData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update the subscription');
+    } finally {
+      setSavingSubscription(false);
+    }
+  };
+
   const handleSaveClient = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!id || !editClientName.trim()) return;
@@ -146,6 +250,9 @@ export default function ClientDetailPage() {
                 name: newStoreName,
                 baseUrl: newStoreUrl,
                 terminalCount: Number(newStoreTills) || 1,
+                // The new branch's licences, drawn from the client's purchased
+                // total — the upgrade route sums them with the existing stores.
+                licensedTerminalCount: Number(newStoreTills) || 1,
               }
             : undefined,
           planId: upgradePlanId ? Number(upgradePlanId) : undefined,
@@ -343,6 +450,9 @@ export default function ClientDetailPage() {
           slug: addStoreSlug.trim(),
           baseUrl: addStoreUrl.trim() || `https://${addStoreSlug.trim()}.vula-app.co.za`,
           terminalCount: Number(addStoreTills) || 1,
+          // Licences come out of the client's purchased quantity; the API refuses
+          // a store the client has not licensed.
+          licensedTerminalCount: Number(addStoreTills) || 1,
           companyId: Number(id),
           vertical: 'general',
         },
@@ -368,6 +478,7 @@ export default function ClientDetailPage() {
   }
 
   const { client, headOffice, stores, latestDeployment } = data;
+  const subscription = data.subscription;
 
   return (
     <div className="space-y-6">
@@ -452,49 +563,160 @@ export default function ClientDetailPage() {
 
       {/* 1. Overview */}
       {activeTab === 'overview' && (
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs space-y-3">
-            <h4 className="text-sm font-bold text-slate-900">Subscription & Commercial State</h4>
-            <div className="divide-y divide-slate-100 text-xs">
-              <div className="flex justify-between py-2">
-                <span className="text-slate-500 font-medium">Assigned Plan:</span>
-                <span className="font-bold text-slate-900">{client.planName}</span>
+        <div className="space-y-5">
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <h4 className="text-sm font-bold text-slate-900">Subscription</h4>
+                <button
+                  type="button"
+                  onClick={handleOpenSubscription}
+                  className="rounded-lg border border-brand-200 px-3 py-1.5 text-xs font-bold text-brand-700 hover:bg-brand-50"
+                >
+                  Edit subscription
+                </button>
               </div>
-              <div className="flex justify-between py-2">
-                <span className="text-slate-500 font-medium">Billing State:</span>
-                <span className="font-bold text-emerald-700 uppercase">{client.billingState}</span>
+              <div className="divide-y divide-slate-100 text-xs">
+                <div className="flex justify-between py-2">
+                  <span className="text-slate-500 font-medium">Plan:</span>
+                  <span className="font-bold text-slate-900">
+                    {client.planName}
+                    {subscription?.pricingMode === 'custom' && (
+                      <span className="ml-1.5 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-600">
+                        Custom
+                      </span>
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between py-2">
+                  <span className="text-slate-500 font-medium">Licensed terminals:</span>
+                  <span className="font-bold text-slate-900">
+                    {client.licensedTerminalCount ?? 0}
+                    <span className="ml-1.5 font-normal text-slate-400">
+                      ({client.allocatedTerminals ?? 0} allocated to stores)
+                    </span>
+                  </span>
+                </div>
+                <div className="flex justify-between py-2">
+                  <span className="text-slate-500 font-medium">Monthly recurring:</span>
+                  <span className="font-mono font-bold text-slate-900">
+                    {subscription && subscription.recurringAmountCents !== null
+                      ? `${rand(subscription.recurringAmountCents)} ${PERIOD_LABEL[subscription.billingPeriod ?? 'monthly']}`
+                      : subscription?.pricingMode === 'custom'
+                        ? 'Negotiated per client'
+                        : '—'}
+                  </span>
+                </div>
+                <div className="flex justify-between py-2">
+                  <span className="text-slate-500 font-medium">Once-off onboarding:</span>
+                  <span className="font-semibold text-slate-800">
+                    {subscription && subscription.setupFeeCents > 0
+                      ? `${rand(subscription.setupFeeCents)} · ${SETUP_FEE_LABELS[subscription.setupFeeStatus]}`
+                      : 'None'}
+                  </span>
+                </div>
+                <div className="flex justify-between py-2">
+                  <span className="text-slate-500 font-medium">Billing state:</span>
+                  <span className="font-bold uppercase text-emerald-700">{client.billingState}</span>
+                </div>
+                <div className="flex justify-between py-2">
+                  <span className="text-slate-500 font-medium">Paid up to:</span>
+                  <span className="font-semibold text-slate-900">{client.paidThrough || '—'}</span>
+                </div>
+                <div className="flex justify-between py-2">
+                  <span className="text-slate-500 font-medium">Trial ends:</span>
+                  <span className="text-slate-700">{client.trialEndsAt || 'No active trial'}</span>
+                </div>
               </div>
-              <div className="flex justify-between py-2">
-                <span className="text-slate-500 font-medium">Subscription Paid Up To:</span>
-                <span className="font-semibold text-slate-900">{client.paidThrough || '—'}</span>
-              </div>
-              <div className="flex justify-between py-2">
-                <span className="text-slate-500 font-medium">Trial Ends:</span>
-                <span className="text-slate-700">{client.trialEndsAt || 'No active trial'}</span>
+              {subscription?.note && (
+                <p className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-800">
+                  {subscription.note}
+                </p>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs space-y-3">
+              <h4 className="text-sm font-bold text-slate-900">Topology & Fleet Health</h4>
+              <div className="divide-y divide-slate-100 text-xs">
+                <div className="flex justify-between py-2">
+                  <span className="text-slate-500 font-medium">Retail Topology:</span>
+                  <span className="font-bold text-slate-900">{client.topology === 'multi_store' ? 'Multi-Store (Group + Branches)' : 'Single Store'}</span>
+                </div>
+                <div className="flex justify-between py-2">
+                  <span className="text-slate-500 font-medium">Store Fleet:</span>
+                  <span className="font-bold text-slate-900">{client.healthyStoresCount} of {client.storesCount} healthy</span>
+                </div>
+                <div className="flex justify-between py-2">
+                  <span className="text-slate-500 font-medium">Terminals:</span>
+                  <span className="font-bold text-slate-900">
+                    {client.licensedTerminalCount ?? 0} licensed · {client.totalTills} configured
+                  </span>
+                </div>
+                <div className="flex justify-between py-2">
+                  <span className="text-slate-500 font-medium">Head Office Executive Panel:</span>
+                  <span className="font-semibold">{headOffice ? 'Active (Connected)' : 'None'}</span>
+                </div>
               </div>
             </div>
           </div>
 
+          {/* Licence allocation (§20): what the client bought, placed per store. */}
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs space-y-3">
-            <h4 className="text-sm font-bold text-slate-900">Topology & Fleet Health</h4>
-            <div className="divide-y divide-slate-100 text-xs">
-              <div className="flex justify-between py-2">
-                <span className="text-slate-500 font-medium">Retail Topology:</span>
-                <span className="font-bold text-slate-900">{client.topology === 'multi_store' ? 'Multi-Store (Group + Branches)' : 'Single Store'}</span>
-              </div>
-              <div className="flex justify-between py-2">
-                <span className="text-slate-500 font-medium">Store Fleet:</span>
-                <span className="font-bold text-slate-900">{client.healthyStoresCount} of {client.storesCount} healthy</span>
-              </div>
-              <div className="flex justify-between py-2">
-                <span className="text-slate-500 font-medium">Licensed Registers:</span>
-                <span className="font-bold text-slate-900">{client.totalTills} total terminals</span>
-              </div>
-              <div className="flex justify-between py-2">
-                <span className="text-slate-500 font-medium">Head Office Executive Panel:</span>
-                <span className="font-semibold">{headOffice ? 'Active (Connected)' : 'None'}</span>
-              </div>
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-bold text-slate-900">Terminal licence allocation</h4>
+              <span className="text-xs font-bold text-slate-500">
+                Total allocated {subscription?.allocatedTerminals ?? 0} /{' '}
+                {subscription?.licensedTerminalCount ?? 0}
+              </span>
             </div>
+            {(subscription?.allocations ?? []).length === 0 ? (
+              <p className="text-xs text-slate-400">
+                No terminals allocated yet. Edit the subscription to place licensed terminals on this
+                client's stores.
+              </p>
+            ) : (
+              <table className="w-full text-xs">
+                <thead className="text-left text-[11px] uppercase tracking-wide text-slate-400">
+                  <tr>
+                    <th className="py-1.5">Store</th>
+                    <th className="py-1.5 text-right">Licensed</th>
+                    <th className="py-1.5 text-right">Configured tills</th>
+                    <th className="py-1.5 text-right">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {(subscription?.allocations ?? []).map((a) => (
+                    <tr key={a.storeId}>
+                      <td className="py-2 font-semibold text-slate-800">
+                        <Link to={`/stores/${a.storeId}`} className="hover:text-brand-700 hover:underline">
+                          {a.storeName}
+                        </Link>
+                      </td>
+                      <td className="py-2 text-right font-mono font-bold text-slate-900">
+                        {a.licensedTerminalCount}
+                      </td>
+                      <td className="py-2 text-right font-mono text-slate-600">{a.terminalCount}</td>
+                      <td className="py-2 text-right">
+                        {a.terminalCount > a.licensedTerminalCount ? (
+                          <span className="font-bold text-amber-700">
+                            Configured above licence
+                          </span>
+                        ) : (
+                          <span className="text-emerald-700">Within licence</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {(subscription?.unallocatedTerminals ?? 0) > 0 && (
+              <p className="text-[11px] text-slate-500">
+                {subscription?.unallocatedTerminals} licensed terminal
+                {(subscription?.unallocatedTerminals ?? 0) === 1 ? '' : 's'} not yet placed on a store —
+                the client pays for them regardless.
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -840,6 +1062,147 @@ export default function ClientDetailPage() {
                   className="rounded-lg bg-brand-600 px-5 py-2 text-xs font-bold text-white shadow-xs hover:bg-brand-700 disabled:opacity-50 cursor-pointer"
                 >
                   {savingClient ? 'Saving…' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Subscription editor: plan, purchased quantity, allocation, onboarding state */}
+      {subscriptionOpen && data && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-2xs">
+          <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl border border-slate-200">
+            <h3 className="text-lg font-bold text-slate-900">Subscription for {client.name}</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              What the client has purchased. The recurring fee is the licensed quantity × the plan's
+              rate; configured tills and claimed devices never change it.
+            </p>
+            <form onSubmit={handleSaveSubscription} className="mt-4 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700">Plan</label>
+                <select
+                  value={subPlanId}
+                  onChange={(e) => setSubPlanId(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm"
+                >
+                  <option value="">No plan assigned</option>
+                  {plans.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                      {p.pricingMode === 'per_terminal'
+                        ? ` — ${perTerminalLabel(p.terminalPriceCents, p.billingPeriod)}`
+                        : ' — custom pricing'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {client.topology === 'multi_store' ? (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700">Licensed terminals</label>
+                  <p className="mt-0.5 text-[11px] text-slate-400">
+                    Distribute the client's purchased terminals across its stores. Each store's signed
+                    licence permits exactly its allocation.
+                  </p>
+                  <div className="mt-2 space-y-2">
+                    {subAllocations.map((a, idx) => (
+                      <div key={a.storeId} className="flex items-center justify-between gap-3">
+                        <Link
+                          to={`/stores/${a.storeId}`}
+                          className="text-xs font-semibold text-slate-700 hover:text-brand-700 hover:underline"
+                        >
+                          {a.name}
+                        </Link>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min={0}
+                            max={99}
+                            value={a.licensed}
+                            onChange={(e) => {
+                              const next = [...subAllocations];
+                              next[idx] = { ...next[idx], licensed: e.target.value };
+                              setSubAllocations(next);
+                            }}
+                            className="w-20 rounded-lg border border-slate-300 p-2 text-center text-sm font-bold"
+                          />
+                          <span className="text-[11px] text-slate-400">
+                            configured {data.stores.find((s) => s.id === a.storeId)?.terminalCount ?? 0}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-2 flex justify-between border-t border-slate-100 pt-2 text-xs font-bold">
+                    <span className="text-slate-600">Total licensed</span>
+                    <span className="font-mono text-slate-900">
+                      {subAllocations.reduce((n, a) => n + (Number(a.licensed) || 0), 0)}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[11px] text-slate-400">
+                    Adding a branch later draws from the same total, so raise this first if the client is
+                    buying more terminals.
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700">Licensed terminals</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={99}
+                    value={subLicensed}
+                    onChange={(e) => setSubLicensed(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 p-2.5 text-sm"
+                  />
+                  <p className="mt-1 text-[11px] text-slate-400">
+                    The store may be configured for at most this many tills.
+                  </p>
+                </div>
+              )}
+
+              <SubscriptionQuotePreview
+                plan={plans.find((p) => String(p.id) === subPlanId)}
+                licensed={
+                  client.topology === 'multi_store'
+                    ? subAllocations.reduce((n, a) => n + (Number(a.licensed) || 0), 0)
+                    : Number(subLicensed) || 0
+                }
+              />
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700">Once-off onboarding</label>
+                <select
+                  value={subSetupFeeStatus}
+                  onChange={(e) => setSubSetupFeeStatus(e.target.value as SetupFeeStatus)}
+                  className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm"
+                >
+                  {(Object.keys(SETUP_FEE_LABELS) as SetupFeeStatus[]).map((s) => (
+                    <option key={s} value={s}>
+                      {SETUP_FEE_LABELS[s]}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  The onboarding charge rides the client's first invoice only — never a renewal.
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setSubscriptionOpen(false)}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingSubscription}
+                  className="rounded-lg bg-brand-600 px-5 py-2 text-xs font-bold text-white shadow-xs hover:bg-brand-700 disabled:opacity-50 cursor-pointer"
+                >
+                  {savingSubscription ? 'Saving…' : 'Save subscription'}
                 </button>
               </div>
             </form>

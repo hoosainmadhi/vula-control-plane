@@ -13,6 +13,7 @@ import {
 import { pushTerminals, pushLicence } from './storeClient.js';
 import { issueLicence } from './licenceSigner.js';
 import { entitlementsFor } from './subscriptions.js';
+import { terminalAllowance } from './terminalLicences.js';
 import { getCompanyById, nextLicenceSequence, recordLicencePush, recordConfigResult } from '../config/registryDb.js';
 import { logger } from '../utils/logger.js';
 
@@ -164,6 +165,9 @@ export async function runStoreProvisioning(
         features: ent.features,
         maxStores: ent.maxStores,
         maxTerminalsPerStore: ent.maxTerminalsPerStore,
+        // The store's own licence allowance (its allocation, or what it is
+        // already configured for before a subscription exists).
+        maxTerminals: terminalAllowance(store).count,
         paidThrough: ent.paidThrough,
         billingState: ent.billingState,
       });

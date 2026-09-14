@@ -6,6 +6,7 @@ import type {
   StoreRecord,
   StoreEnvironment,
   StoreVertical,
+  CompanyRecord,
 } from '../config/registryDb.js';
 import {
   STORE_ENVIRONMENTS,
@@ -46,13 +47,20 @@ import {
 } from '../services/licenceSigner.js';
 import {
   canAddStore,
-  canUseTerminals,
   deriveBillingState,
-  entitlementsFor,
+  entitlementsForStore as entitlementsForStoreService,
   registerEnforcementFor,
   type Entitlements,
   type RegisterEnforcement,
 } from '../services/subscriptions.js';
+import {
+  allocateTerminals,
+  checkAllocation,
+  checkConfiguredTerminals,
+  checkNewStoreAllocation,
+  releaseStoreAllocation,
+  terminalAllowance,
+} from '../services/terminalLicences.js';
 import { requireOffice } from '../middleware/auth.js';
 import { env } from '../config/env.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -60,6 +68,7 @@ import { HttpError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 import {
   ValidationError,
+  optionalInt,
   optionalString,
   parseIdParam,
   requireBaseUrl,
@@ -78,7 +87,14 @@ export interface StoreOut {
   slug: string;
   name: string;
   vertical: StoreVertical;
+  /** Terminal slots this store is configured to run (pushed as Till 1..N). */
   terminalCount: number;
+  /**
+   * Terminal licences this store holds on its client's subscription — what its
+   * signed licence permits the register to bind devices to. Equals the store's
+   * own number; never billing usage (the client's licensed total is).
+   */
+  licensedTerminalCount: number;
   baseUrl: string;
   status: StoreRecord['status'];
   lastConfigStatus: ConfigStatus;
@@ -157,8 +173,7 @@ export interface HealthOutcome {
 }
 
 /** Entitlements for a store, resolved from its owning company (or unassigned). */
-const entitlementsForStore = (store: StoreRecord): Entitlements =>
-  entitlementsFor(store.company_id ? getCompanyById(store.company_id) : null);
+const entitlementsForStore = (store: StoreRecord): Entitlements => entitlementsForStoreService(store);
 
 /** Operator-facing health vocabulary (SPOG §9-§10): technical, not administrative. */
 const healthStateFor = (
@@ -192,6 +207,7 @@ export const storeToOut = (store: StoreRecord): StoreOut => {
   name: store.name,
   vertical: store.vertical,
   terminalCount: store.terminal_count,
+  licensedTerminalCount: ent.maxTerminals ?? terminalAllowance(store).count,
   baseUrl: store.base_url,
   status: store.status,
   lastConfigStatus: store.last_config_status,
@@ -376,6 +392,8 @@ const attemptLicencePush = async (
       features: ent.features,
       maxStores: ent.maxStores,
       maxTerminalsPerStore: ent.maxTerminalsPerStore,
+      // This store's own allowance — the register gates new device claims on it.
+      maxTerminals: ent.maxTerminals ?? store.terminal_count,
       paidThrough: ent.paidThrough,
       billingState: ent.billingState,
     });
@@ -492,6 +510,8 @@ storesRouter.post(
     // loudly with an upgrade path, never quietly succeed and be billed later.
     const companyIdRaw = req.body?.['companyId'];
     let companyId: number | null = null;
+    /** When the store joins a client, the licences to place on it. */
+    let allocation: { company: CompanyRecord; count: number } | null = null;
     if (companyIdRaw !== undefined && companyIdRaw !== null) {
       const parsed = Number(companyIdRaw);
       const company = Number.isInteger(parsed) && parsed > 0 ? getCompanyById(parsed) : null;
@@ -510,11 +530,22 @@ storesRouter.post(
         res.status(402).json({ error: addOk.reason, code: 'store_cap_reached' });
         return;
       }
-      const termOk = canUseTerminals(company, terminalCount);
+      // Terminal licences are a purchased quantity: the store must be allocated
+      // its terminals out of what the client pays for (`terminalCount`, unless
+      // the caller allocates a different number). A client with no licensed
+      // terminals is refused rather than silently given capacity.
+      const requestedAllocation = optionalInt(req.body, 'licensedTerminalCount') ?? terminalCount;
+      const termOk = checkNewStoreAllocation(company, requestedAllocation);
       if (!termOk.ok) {
-        res.status(402).json({ error: termOk.reason, code: 'terminal_cap_exceeded' });
+        res.status(402).json({ error: termOk.reason, code: termOk.code });
         return;
       }
+      const ceilingOk = checkNewStoreAllocation(company, terminalCount);
+      if (!ceilingOk.ok) {
+        res.status(402).json({ error: ceilingOk.reason, code: ceilingOk.code });
+        return;
+      }
+      allocation = { company, count: requestedAllocation };
       companyId = company.id;
     }
 
@@ -523,6 +554,9 @@ storesRouter.post(
       controlPlaneToken,
     );
     if (companyId !== null) setStoreCompany(store.id, companyId);
+    // Place the client's licences on the store BEFORE the first licence push, so
+    // the licence it receives already permits its own terminal count.
+    if (allocation) allocateTerminals(allocation.company, store.id, allocation.count);
 
     const provision = Boolean(req.body?.provision);
     const adminEmail =
@@ -650,16 +684,54 @@ storesRouter.put(
       }
     }
 
-    // Reassign the store to another merchant, or clear the link with null.
+    // Reassign the store to another client, or clear the link with null. The
+    // licences travel with the store: its allocation is validated against the
+    // NEW client's purchased quantity, then written (or released on unassign).
+    const nextCount = input.terminalCount ?? store.terminal_count;
+    let reassign: { company: CompanyRecord; count: number } | null = null;
+    let release = false;
     if (body['companyId'] !== undefined) {
       if (body['companyId'] === null) {
-        setStoreCompany(store.id, null);
+        release = true;
       } else {
         const parsed = Number(body['companyId']);
         const company = Number.isInteger(parsed) && parsed > 0 ? getCompanyById(parsed) : null;
         if (!company) throw new ValidationError('companyId does not match a known company');
-        setStoreCompany(store.id, company.id);
+        const requestedAllocation =
+          optionalInt(req.body, 'licensedTerminalCount') ?? nextCount;
+        const check = checkAllocation(company, store.id, requestedAllocation);
+        if (!check.ok) {
+          res.status(402).json({ error: check.reason, code: check.code });
+          return;
+        }
+        if (company.id !== store.company_id || requestedAllocation !== terminalAllowance(store).count) {
+          reassign = { company, count: requestedAllocation };
+        }
       }
+    }
+
+    // A store may not be CONFIGURED for more tills than it is licensed for, so
+    // the POS slots and the signed licence cannot drift apart.
+    if (input.terminalCount !== undefined) {
+      const owningCompany = reassign
+        ? reassign.company
+        : store.company_id
+          ? getCompanyById(store.company_id)
+          : null;
+      const check = checkConfiguredTerminals(owningCompany, store, input.terminalCount);
+      if (!check.ok) {
+        res.status(402).json({ error: check.reason, code: check.code });
+        return;
+      }
+    }
+
+    if (release) {
+      setStoreCompany(store.id, null);
+      releaseStoreAllocation(store.id);
+    }
+    if (reassign) {
+      setStoreCompany(store.id, reassign.company.id);
+      allocateTerminals(reassign.company, store.id, reassign.count);
     }
     const updated = updateStore(store.id, input) ?? store;
     res.json(storeToOut(updated));
@@ -690,13 +762,15 @@ storesRouter.post(
       res.status(409).json({ error: 'Store is paused — resume before pushing terminals' });
       return;
     }
-    // A push could raise the till count past the plan's per-store ceiling.
-    const termOk = canUseTerminals(
+    // A push could raise the till count past the plan's per-store ceiling or the
+    // store's own licence allowance.
+    const termOk = checkConfiguredTerminals(
       store.company_id ? getCompanyById(store.company_id) : null,
+      store,
       store.terminal_count,
     );
     if (!termOk.ok) {
-      res.status(402).json({ error: termOk.reason, code: 'terminal_cap_exceeded' });
+      res.status(402).json({ error: termOk.reason, code: termOk.code });
       return;
     }
     res.json(await attemptPush(store));

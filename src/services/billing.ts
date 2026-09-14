@@ -13,15 +13,20 @@ import {
   listInvoices,
   createPayment as dbCreatePayment,
   getBillingSettings,
+  getSubscription,
+  setSetupFeeStatus,
   updateCompany,
   type CompanyRecord,
+  type InvoiceLines,
   type PlanPeriod,
   type InvoiceRecord,
   type PaymentRecord,
 } from '../config/registryDb.js';
 import { issueLicence } from './licenceSigner.js';
 import { pushLicence, pushLicenceToPanel } from './storeClient.js';
-import { entitlementsFor } from './subscriptions.js';
+import { entitlementsFor, entitlementsForStore } from './subscriptions.js';
+import { quoteForSubscription } from './pricing.js';
+import { HttpError } from '../utils/errors.js';
 import { logger } from '../config/env.js';
 
 export interface RenewalResult {
@@ -39,7 +44,19 @@ export interface AutomatedRenewalSummary {
   companiesEvaluated: number;
   invoicesCreated: number;
   renewalsProcessed: number;
+  /** Companies on negotiated pricing — the sweep never invents an amount for them. */
+  customPricingSkipped: number;
   errors: string[];
+}
+
+/** What an invoice is for. Only `initial` may carry the once-off onboarding fee. */
+export type InvoicePurpose = 'initial' | 'renewal' | 'manual';
+
+export interface CreateInvoiceOptions {
+  amountCents?: number;
+  dueDate?: string;
+  invoiceNumber?: string;
+  purpose?: InvoicePurpose;
 }
 
 /**
@@ -107,24 +124,28 @@ export async function pushLicencesForCompany(companyId: number): Promise<{
   let storesUpdated = 0;
   let panelsUpdated = 0;
 
-  // 1. Stores
+  // 1. Stores — each licence carries the store's OWN terminal allowance
+  // (`maxTerminals`) beside the plan ceiling, because the register gates device
+  // claims on it.
   const stores = listStores().filter((s) => s.company_id === companyId);
   for (const store of stores) {
     try {
+      const storeEnt = entitlementsForStore(store);
       const sequence = nextLicenceSequence(store.id);
       const signed = issueLicence({
         sequence,
         storeSlug: store.slug,
         storeName: store.name,
-        companyId: ent.companyId,
-        companyName: ent.companyName,
-        planCode: ent.planCode,
-        planName: ent.planName,
-        features: ent.features,
-        maxStores: ent.maxStores,
-        maxTerminalsPerStore: ent.maxTerminalsPerStore,
-        paidThrough: ent.paidThrough,
-        billingState: ent.billingState,
+        companyId: storeEnt.companyId,
+        companyName: storeEnt.companyName,
+        planCode: storeEnt.planCode,
+        planName: storeEnt.planName,
+        features: storeEnt.features,
+        maxStores: storeEnt.maxStores,
+        maxTerminalsPerStore: storeEnt.maxTerminalsPerStore,
+        maxTerminals: storeEnt.maxTerminals ?? store.terminal_count,
+        paidThrough: storeEnt.paidThrough,
+        billingState: storeEnt.billingState,
       });
       await pushLicence(store, signed.token);
       recordLicencePush(store.id, 'ok');
@@ -137,7 +158,8 @@ export async function pushLicencesForCompany(companyId: number): Promise<{
     }
   }
 
-  // 2. Head Office Panels
+  // 2. Head Office Panels — company-wide entitlement; a panel has no terminals,
+  // so no `maxTerminals` claim.
   const panels = listPanelsForCompany(companyId);
   for (const panel of panels) {
     try {
@@ -174,23 +196,58 @@ export async function pushLicencesForCompany(companyId: number): Promise<{
 }
 
 /**
- * Create a new billing invoice for a company.
+ * Create a billing invoice for a company.
+ *
+ * Without an explicit amount the invoice is computed from the subscription: the
+ * recurring line is `licensed terminals × rate` (services/pricing.ts), plus the
+ * once-off onboarding charge when `purpose` is `initial` and it has not been
+ * charged yet. A `renewal` never carries the onboarding charge again, and a
+ * `custom`-priced plan is refused rather than guessed at.
  */
 export function createInvoiceForCompany(
   companyId: number,
-  options?: {
-    amountCents?: number;
-    dueDate?: string;
-    invoiceNumber?: string;
-  },
+  options?: CreateInvoiceOptions,
 ): InvoiceRecord {
   const company = getCompanyById(companyId);
   if (!company) {
-    throw new Error(`Company ${companyId} not found`);
+    throw new HttpError(404, `Company ${companyId} not found`);
   }
 
   const plan = company.plan_id ? getPlanById(company.plan_id) : null;
-  const amountCents = options?.amountCents ?? plan?.price_cents ?? 0;
+  const quote = quoteForSubscription(company, plan);
+  const explicit = options?.amountCents !== undefined;
+  const purpose: InvoicePurpose = options?.purpose ?? (explicit ? 'manual' : 'initial');
+
+  let amountCents: number;
+  let lines: InvoiceLines | undefined;
+
+  if (explicit) {
+    amountCents = options!.amountCents!;
+  } else {
+    if (quote.recurringAmountCents === null) {
+      throw new HttpError(
+        400,
+        `${company.name} is on ${quote.planName} custom pricing with no agreed amount on the plan — enter the amount for this invoice, or set an agreed amount on the plan.`,
+        'custom_pricing_requires_amount',
+      );
+    }
+    if (quote.licensedTerminalCount === 0) {
+      throw new HttpError(
+        400,
+        `${company.name} has no licensed terminals, so there is nothing to bill. Set the subscription's licensed terminal quantity or enter an amount.`,
+        'no_licensed_terminals',
+      );
+    }
+    const setupFeeDue = purpose === 'initial' ? quote.setupFeeDueCents : 0;
+    amountCents = quote.recurringAmountCents + setupFeeDue;
+    lines = {
+      // A per-terminal plan itemises its arithmetic; a custom plan's agreed
+      // amount is a flat line, so no terminal count or rate is recorded.
+      terminalCount: quote.pricingMode === 'per_terminal' ? quote.licensedTerminalCount : null,
+      terminalPriceCents: quote.pricingMode === 'per_terminal' ? quote.rateCents : null,
+      setupFeeCents: setupFeeDue > 0 ? setupFeeDue : null,
+    };
+  }
 
   const due = options?.dueDate
     ? new Date(`${options.dueDate}T12:00:00.000Z`)
@@ -198,7 +255,15 @@ export function createInvoiceForCompany(
 
   const invoiceNumber = options?.invoiceNumber || generateInvoiceNumber();
 
-  return dbCreateInvoice(companyId, amountCents, due, invoiceNumber);
+  const invoice = dbCreateInvoice(companyId, amountCents, due, invoiceNumber, lines);
+
+  // The onboarding charge is once-off: the moment an invoice carries it, the
+  // subscription records it as invoiced so no later invoice repeats it.
+  if (!explicit && lines?.setupFeeCents && lines.setupFeeCents > 0) {
+    setSetupFeeStatus(companyId, 'invoiced');
+  }
+
+  return invoice;
 }
 
 /**
@@ -245,6 +310,11 @@ export async function processPaymentAndRenew(input: {
     paidDate: now,
   })!;
 
+  // The once-off onboarding charge is settled with the invoice that carried it.
+  if ((invoice.setup_fee_cents ?? 0) > 0 && getSubscription(company.id)?.setup_fee_status === 'invoiced') {
+    setSetupFeeStatus(company.id, 'paid');
+  }
+
   // 3. Compute and advance paid_through date
   const plan = company.plan_id ? getPlanById(company.plan_id) : null;
   const billingPeriod = plan?.billing_period ?? 'monthly';
@@ -270,6 +340,11 @@ export async function processPaymentAndRenew(input: {
  * Automated renewal cycle: checks all active companies with paid plans.
  * If renewal is due, generates (or reuses) the invoice.
  *
+ * Amounts come from the canonical calculator: licensed terminals × the plan's
+ * rate. A `custom`-priced plan has no formula, so the sweep leaves it alone
+ * rather than inventing a figure — the office raises those invoices with the
+ * agreed amount.
+ *
  * Settlement truthfulness (production-readiness review, 2026-09-12): the sweep
  * NEVER records a payment by itself — a subscription is only extended by an
  * explicitly confirmed settlement (an office user recording the payment, or a
@@ -287,6 +362,7 @@ export async function runAutomatedRenewals(options?: {
     companiesEvaluated: 0,
     invoicesCreated: 0,
     renewalsProcessed: 0,
+    customPricingSkipped: 0,
     errors: [],
   };
 
@@ -297,6 +373,16 @@ export async function runAutomatedRenewals(options?: {
     summary.companiesEvaluated++;
     const plan = getPlanById(company.plan_id!);
     if (!plan) continue;
+
+    // A custom plan renews from its agreed amount; a custom plan with none has
+    // no formula, so the sweep leaves it for the office rather than inventing one.
+    if (plan.pricing_mode === 'custom' && plan.custom_amount_cents <= 0) {
+      summary.customPricingSkipped++;
+      logger.info(
+        `Renewal sweep skipped ${company.slug}: ${plan.name} is custom-priced with no agreed amount — raise its invoice with the agreed amount`,
+      );
+      continue;
+    }
 
     const settings = getBillingSettings(company.id);
     const autoRenewEnabled = settings?.auto_renew ?? 1;
@@ -324,10 +410,10 @@ export async function runAutomatedRenewals(options?: {
     if (existingInvoices.length > 0) {
       invoiceToPay = existingInvoices[0];
     } else {
-      // Create new invoice
+      // Create the renewal invoice: recurring charges only, never the setup fee.
       invoiceToPay = createInvoiceForCompany(company.id, {
-        amountCents: plan.price_cents,
         dueDate: paidThrough || nowDateStr,
+        purpose: 'renewal',
       });
       summary.invoicesCreated++;
     }

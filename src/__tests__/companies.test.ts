@@ -53,9 +53,23 @@ const makeCompany = async (over: Record<string, unknown> = {}) => {
   const res = await request(app)
     .post('/api/companies')
     .set(auth())
-    .send({ name: 'Urban Threads Retail Group', slug: 'urban-threads', planId, ...over })
+    .send({
+      name: 'Urban Threads Retail Group',
+      slug: 'urban-threads',
+      planId,
+      // What the client purchased. A client with no licensed terminals cannot
+      // take stores, so every fixture states the quantity up front.
+      licensedTerminalCount: 25,
+      ...over,
+    })
     .expect(201);
-  return res.body as { id: number; name: string; planCode: string; maxStores: number };
+  return res.body as {
+    id: number;
+    name: string;
+    planCode: string;
+    maxStores: number;
+    subscription: { licensedTerminalCount: number; recurringAmountCents: number | null };
+  };
 };
 
 const makeStore = async (over: Record<string, unknown> = {}) => {
@@ -82,15 +96,38 @@ describe('plans', () => {
     expect(codes).toEqual(['starter', 'business', 'multi-store', 'enterprise']);
   });
 
-  it('carries the per-store terminal ceiling and feature set', async () => {
+  it('carries the per-store terminal ceiling, feature set and per-terminal pricing', async () => {
     const res = await request(app).get('/api/plans').set(auth()).expect(200);
-    const multi = (res.body as Array<{ code: string; maxStores: number; maxTerminalsPerStore: number; features: string[] }>).find(
-      (p) => p.code === 'multi-store',
-    )!;
-    expect(multi.maxStores).toBe(10);
-    expect(multi.maxTerminalsPerStore).toBe(25);
+    const multi = (
+      res.body as Array<{
+        code: string;
+        maxStores: number;
+        maxTerminalsPerStore: number;
+        features: string[];
+        pricingMode: string;
+        terminalPriceCents: number;
+        setupFeeCents: number;
+        billingPeriod: string;
+      }>
+    ).find((p) => p.code === 'multi-store')!;
+    expect(multi.maxStores).toBe(20);
+    expect(multi.maxTerminalsPerStore).toBe(10);
     expect(multi.features).toContain('multi_store');
     expect(multi.features).toContain('stock_transfers');
+    // R500 per licensed terminal per month, R10,000 once-off onboarding.
+    expect(multi.pricingMode).toBe('per_terminal');
+    expect(multi.terminalPriceCents).toBe(50_000);
+    expect(multi.setupFeeCents).toBe(1_000_000);
+    expect(multi.billingPeriod).toBe('monthly');
+  });
+
+  it('seeds Enterprise as custom pricing — never an invented rate', async () => {
+    const res = await request(app).get('/api/plans').set(auth()).expect(200);
+    const enterprise = (
+      res.body as Array<{ code: string; pricingMode: string; terminalPriceCents: number }>
+    ).find((p) => p.code === 'enterprise')!;
+    expect(enterprise.pricingMode).toBe('custom');
+    expect(enterprise.terminalPriceCents).toBe(0);
   });
 
   it('lets the operator edit a tier', async () => {
@@ -102,6 +139,52 @@ describe('plans', () => {
       .expect(200);
     expect(res.body.maxTerminalsPerStore).toBe(4);
     expect(res.body.features).toEqual(['advanced_reports']);
+  });
+
+  it('creates a plan with the per-terminal model', async () => {
+    const res = await request(app)
+      .post('/api/plans')
+      .set(auth())
+      .send({
+        code: 'business-plus',
+        name: 'Business Plus',
+        maxStores: 2,
+        maxTerminalsPerStore: 6,
+        pricingMode: 'per_terminal',
+        terminalPriceCents: 65_000,
+        setupFeeCents: 1_500_000,
+        billingPeriod: 'monthly',
+        features: ['customer_credit'],
+      })
+      .expect(201);
+    expect(res.body.terminalPriceCents).toBe(65_000);
+    expect(res.body.setupFeeCents).toBe(1_500_000);
+    expect(res.body.pricingMode).toBe('per_terminal');
+  });
+
+  it('refuses a per-terminal plan with no rate, and non-integer money', async () => {
+    const noRate = await request(app)
+      .post('/api/plans')
+      .set(auth())
+      .send({ code: 'free-tier', name: 'Free', pricingMode: 'per_terminal', terminalPriceCents: 0 })
+      .expect(400);
+    expect(noRate.body.error).toMatch(/above zero/i);
+
+    const floatMoney = await request(app)
+      .post('/api/plans')
+      .set(auth())
+      .send({ code: 'float-tier', name: 'Float', terminalPriceCents: 499.5 })
+      .expect(400);
+    expect(floatMoney.body.error).toMatch(/whole number of cents/i);
+
+    // A custom plan carries no rate at all — a negotiated deal has no formula.
+    const custom = await request(app)
+      .post('/api/plans')
+      .set(auth())
+      .send({ code: 'bespoke', name: 'Bespoke', pricingMode: 'custom', maxStores: 3 })
+      .expect(201);
+    expect(custom.body.pricingMode).toBe('custom');
+    expect(custom.body.terminalPriceCents).toBe(0);
   });
 
   it('refuses to change a plan code — it is immutable after creation', async () => {
@@ -134,7 +217,7 @@ describe('companies', () => {
   it('creates a company and reports its plan entitlement', async () => {
     const company = await makeCompany({ paidThrough: '2026-12-31' });
     expect(company.planCode).toBe('multi-store');
-    expect(company.maxStores).toBe(10);
+    expect(company.maxStores).toBe(20);
   });
 
   it('counts the stores it owns', async () => {
@@ -185,7 +268,7 @@ describe('companies', () => {
 describe('store caps', () => {
   it('refuses a store beyond the plan cap with an upgrade message', async () => {
     const planId = await planIdByCode('starter'); // 1 store
-    const company = await makeCompany({ name: 'Spaza', slug: 'spaza', planId });
+    const company = await makeCompany({ name: 'Spaza', slug: 'spaza', planId, licensedTerminalCount: 4 });
     // Starter allows 2 terminals, so this store fits under both caps.
     const first = await makeStore({ slug: 'first-store', terminalCount: 2, companyId: company.id });
     expect(first.status).toBe(201);
@@ -198,7 +281,7 @@ describe('store caps', () => {
 
   it('refuses terminals beyond the per-store ceiling on create', async () => {
     const planId = await planIdByCode('starter'); // 2 terminals
-    const company = await makeCompany({ name: 'Spaza', slug: 'spaza', planId });
+    const company = await makeCompany({ name: 'Spaza', slug: 'spaza', planId, licensedTerminalCount: 20 });
 
     const res = await makeStore({ slug: 'big-store', terminalCount: 9, companyId: company.id });
     expect(res.status).toBe(402);
@@ -206,18 +289,65 @@ describe('store caps', () => {
     expect(res.body.error).toMatch(/allows 2 terminals/i);
   });
 
-  it('refuses a push that would exceed the ceiling', async () => {
-    const planId = await planIdByCode('starter');
-    const company = await makeCompany({ name: 'Spaza', slug: 'spaza', planId });
+  it('refuses a store the client has not licensed — the purchased quantity gates capacity', async () => {
+    const company = await makeCompany({ licensedTerminalCount: 2 });
+    const first = await makeStore({ slug: 'licensed-store', terminalCount: 2, companyId: company.id });
+    expect(first.status).toBe(201);
+
+    const res = await makeStore({ slug: 'unlicensed-store', terminalCount: 1, companyId: company.id });
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe('terminal_allocation_exceeded');
+    expect(res.body.error).toMatch(/licensed for 2 terminals/i);
+  });
+
+  it('refuses adding a store to a client with no licensed terminals at all', async () => {
+    const company = await makeCompany({ name: 'Empty Co', slug: 'empty-co', licensedTerminalCount: 0 });
+    const res = await makeStore({ slug: 'hopeful', terminalCount: 1, companyId: company.id });
+    expect(res.status).toBe(402);
+    expect(res.body.code).toBe('terminal_allocation_exceeded');
+    expect(res.body.error).toMatch(/no licensed terminals yet/i);
+  });
+
+  it('refuses configuring more tills than the store is licensed for', async () => {
+    const company = await makeCompany({ licensedTerminalCount: 6 });
+    const created = await makeStore({ slug: 'shop', terminalCount: 2, companyId: company.id });
+    const storeId = created.body.store.id;
+    expect(created.body.store.licensedTerminalCount).toBe(2);
+
+    // Raise the client's purchased quantity, then the allocation, then the
+    // configured count — in that order, each step refusing what it should.
+    const tooEarly = await request(app)
+      .put(`/api/stores/${storeId}`)
+      .set(auth())
+      .send({ terminalCount: 5 })
+      .expect(402);
+    expect(tooEarly.body.code).toBe('terminal_allocation_exceeded');
+
+    await request(app)
+      .put(`/api/clients/${company.id}`)
+      .set(auth())
+      .send({ allocations: [{ storeId, licensedTerminalCount: 5 }] })
+      .expect(200);
+
+    const raised = await request(app)
+      .put(`/api/stores/${storeId}`)
+      .set(auth())
+      .send({ terminalCount: 5 })
+      .expect(200);
+    expect(raised.body.terminalCount).toBe(5);
+    expect(raised.body.licensedTerminalCount).toBe(5);
+  });
+
+  it('refuses a push above the store allowance even if the registry row was changed directly', async () => {
+    const planId = await planIdByCode('starter'); // ceiling 2
+    const company = await makeCompany({ name: 'Spaza', slug: 'spaza', planId, licensedTerminalCount: 2 });
     const created = await makeStore({ slug: 'shop', terminalCount: 2, companyId: company.id });
     const storeId = created.body.store.id;
 
-    // Raise the stored count directly, as an edit would, then try to push it.
-    await request(app)
-      .put(`/api/stores/${storeId}`)
-      .set(auth())
-      .send({ terminalCount: 9 })
-      .expect(200);
+    // Simulate a row that predates the rule: raise the configured count behind
+    // the API's back, exactly as a legacy registry would have it.
+    const { getRegistryDb } = await import('../config/registryDb.js');
+    getRegistryDb().prepare('UPDATE stores SET terminal_count = 9 WHERE id = ?').run(storeId);
 
     const res = await request(app).post(`/api/stores/${storeId}/push`).set(auth());
     expect(res.status).toBe(402);
@@ -250,8 +380,16 @@ describe('licence claims carry the company and plan', () => {
     expect(claims.companyName).toBe('Urban Threads Retail Group');
     expect(claims.planCode).toBe('multi-store');
     expect(claims.features).toContain('multi_store');
-    expect(claims.maxStores).toBe(10);
+    expect(claims.maxStores).toBe(20);
+    // The store's own licence: 3 terminals (the allocation created with it), and
+    // the plan's per-store ceiling beside it.
+    expect(claims.maxTerminals).toBe(3);
+    expect(claims.maxTerminalsPerStore).toBe(10);
     expect(claims.paidThrough).toBe('2027-01-31');
+    // The quantity is what the client purchased — the licence never derives it
+    // from configured tills alone.
+    expect(company.subscription.licensedTerminalCount).toBe(25);
+    expect(company.subscription.recurringAmountCents).toBe(25 * 50_000);
   });
 
   it('still issues an unassigned licence when no company is set', async () => {
