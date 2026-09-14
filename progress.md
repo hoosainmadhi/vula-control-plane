@@ -1172,3 +1172,40 @@ Two consequences worth the owner's attention:
 
 The old registry is preserved at `~/vula-store-data/backups/pre-reseed/`
 (`.db` + `-wal`; SQLite needs both).
+
+## 2026-09-14 — the plan catalogue, and every Head Office on a local URL
+
+Owner supplied the real catalogue and two constraints: the eight tiers are
+**Vula Start (1 store, 1 till) · Vula Grow (1, 3) · Vula Branch (3, 2) · Vula
+Network (5, 3) · Vula Market (1, 10) · Vula Market Plus (10, 15) · Vula Market
+Enterprise (50, 20) · Vula Spares Network (50, 5)**, priced at the house default
+(R500/terminal/month + R10 000 setup) until they say otherwise; and in dev
+**every** Head Office is `<slug>.localhost:<port>`, never a `vula-app.co.za`
+domain.
+
+Two things that shaped how the catalogue is applied:
+
+- **A catalogue built from scratch does not survive a restart.** `seedPlans`
+  re-inserts any of its own codes that are missing, so deleting the four
+  bootstrap plans only hides them until the next boot, which would leave twelve
+  tiers. So the four bootstrap codes are **updated in place** into Vula Start /
+  Grow / Network / Market Enterprise, and the other four are created. The cost is
+  a code/name mismatch (`business` is displayed as "Vula Grow"); the benefit is a
+  catalogue that stays at eight across restarts.
+- **Therefore the eight are a demo registry catalogue, not the product's.** If
+  they should be what a fresh control plane seeds, they belong in `SEED_PLANS`,
+  which drags in the plan migrations and ten test files — a deliberate change,
+  not a seeding one.
+
+`Everyday Retail` was reconfigured from 25 tills down to 20 (owner's call) so it
+fits a plan at all: 25 exceeded every cap, including Vula Market Enterprise's.
+The push took, and the store now reports 20 terminals.
+
+Head Offices: all five panels now point at `<slug>.localhost` on 3260/3262/
+3264/3266/3268, and the reseed tool creates each panel's instance if it is
+missing — its own env file with a distinct port, database and JWT secret (two
+panels must never share a branch registry). It **adopts** the original
+`head-office.env` for the primary panel instead of minting a second file, since
+that file's database path is where the running panel's branch registry lives.
+
+Final state: 8 plans · 10 clients · 9 stores · 5 Head Offices · 0 unassigned.

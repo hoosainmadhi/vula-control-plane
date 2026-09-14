@@ -24,6 +24,7 @@
  *
  * It refuses to run against a registry that already holds stores unless --force.
  */
+import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -38,6 +39,44 @@ const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
 const FORCE = args.includes('--force');
 
+/**
+ * The plan catalogue (owner, 2026-09-14): eight tiers, house-default pricing.
+ *
+ * Four of them reuse the control plane's bootstrap plan codes. That is
+ * deliberate: `seedPlans` re-inserts any of its own codes that are missing, so a
+ * catalogue built from scratch would gain those four back on the next restart
+ * and the demo would show twelve tiers. Updating them in place is the only shape
+ * that survives a restart without changing the product's seed.
+ *
+ * If these eight should be the product's real catalogue, they belong in
+ * `SEED_PLANS` (src/config/registryDb.ts) — a bigger change, since the plan
+ * migrations and their tests encode the current four.
+ */
+interface PlanSpec {
+  /** Existing bootstrap code, or a new one. */
+  code: string;
+  name: string;
+  maxStores: number;
+  maxTillsPerStore: number;
+  features: string[];
+}
+
+const HOUSE = { pricingMode: 'per_terminal' as const, terminalPriceCents: 50_000, setupFeeCents: 1_000_000 };
+
+const PLANS: PlanSpec[] = [
+  { code: 'starter', name: 'Vula Start', maxStores: 1, maxTillsPerStore: 1, features: [] },
+  { code: 'business', name: 'Vula Grow', maxStores: 1, maxTillsPerStore: 3, features: ['customer_credit', 'advanced_reports'] },
+  { code: 'vula-branch', name: 'Vula Branch', maxStores: 3, maxTillsPerStore: 2, features: ['customer_credit', 'advanced_reports', 'multi_store'] },
+  { code: 'multi-store', name: 'Vula Network', maxStores: 5, maxTillsPerStore: 3, features: ['customer_credit', 'advanced_reports', 'multi_store', 'stock_transfers'] },
+  { code: 'vula-market', name: 'Vula Market', maxStores: 1, maxTillsPerStore: 10, features: ['customer_credit', 'advanced_reports', 'ecommerce_bridges'] },
+  { code: 'vula-market-plus', name: 'Vula Market Plus', maxStores: 10, maxTillsPerStore: 15, features: ['customer_credit', 'advanced_reports', 'ecommerce_bridges', 'multi_store', 'stock_transfers'] },
+  { code: 'enterprise', name: 'Vula Market Enterprise', maxStores: 50, maxTillsPerStore: 20, features: ['customer_credit', 'advanced_reports', 'ecommerce_bridges', 'multi_store', 'stock_transfers', 'ai_assistant'] },
+  { code: 'vula-spares-network', name: 'Vula Spares Network', maxStores: 50, maxTillsPerStore: 5, features: ['customer_credit', 'advanced_reports', 'multi_store', 'stock_transfers'] },
+];
+
+/** The four codes the control plane seeds itself, so they must be updated, not created. */
+const BOOTSTRAP_CODES = new Set(['starter', 'business', 'multi-store', 'enterprise']);
+
 /** Which client owns each store, and the plan that client buys. */
 interface StoreSpec {
   /** Control-plane slug (must match fleet.sh's STORES). */
@@ -46,26 +85,29 @@ interface StoreSpec {
   envSlug: string;
   /** Client slug (the merchant that owns it). */
   client: string;
+  /** Cap the store's tills at this (the plan ceiling), pushing it down if it is
+   *  configured for more. Owner-approved for Everyday Retail: 25 -> 20. */
+  maxTills?: number;
 }
 
 /** One merchant = one client account = one plan. Slugs are kept from the old
  *  registry so existing links, licences and the Head Office panels still line up. */
 const CLIENTS: Array<{ slug: string; name: string; plan: string; billingEmail: string }> = [
   { slug: 'urban-threads', name: 'Urban Threads Retail Group', plan: 'multi-store', billingEmail: 'ops@urban-threads.test' },
-  { slug: 'hm-spares', name: 'HM Spares', plan: 'starter', billingEmail: 'ops@hm-spares.test' },
-  { slug: 'everyday-retail', name: 'Everyday Retail', plan: 'enterprise', billingEmail: 'ops@everyday-retail.test' },
-  { slug: 'brake-bolt-spares', name: 'Brake & Bolt Spares', plan: 'business', billingEmail: 'ops@brake-bolt.test' },
-  { slug: 'builders-hardware', name: 'Builders Hardware', plan: 'business', billingEmail: 'ops@builders-hardware.test' },
-  { slug: 'medisave-pharmacy', name: 'MediSave Pharmacy', plan: 'business', billingEmail: 'ops@medisave.test' },
-  { slug: 'mydiner', name: 'myDiner', plan: 'starter', billingEmail: 'ops@mydiner.test' },
+  { slug: 'hm-spares', name: 'HM Spares', plan: 'starter', billingEmail: 'ops@hm-spares.test' }, // Vula Start
+  { slug: 'everyday-retail', name: 'Everyday Retail', plan: 'enterprise', billingEmail: 'ops@everyday-retail.test' }, // Vula Market Enterprise
+  { slug: 'brake-bolt-spares', name: 'Brake & Bolt Spares', plan: 'vula-spares-network', billingEmail: 'ops@brake-bolt.test' },
+  { slug: 'builders-hardware', name: 'Builders Hardware', plan: 'business', billingEmail: 'ops@builders-hardware.test' }, // Vula Grow
+  { slug: 'medisave-pharmacy', name: 'MediSave Pharmacy', plan: 'vula-market', billingEmail: 'ops@medisave.test' },
+  { slug: 'mydiner', name: 'myDiner', plan: 'vula-branch', billingEmail: 'ops@mydiner.test' },
   // Kept as client names: they hold a Head Office panel but no local store.
-  { slug: 'kloof-autu-spares', name: 'Kloof Auto Spares', plan: 'starter', billingEmail: 'ops@kloof-auto.test' },
-  { slug: 'cresta-grocers', name: 'Cresta Grocers', plan: 'starter', billingEmail: 'ops@cresta-grocers.test' },
-  { slug: 'ahk-spares', name: 'AHK Spares', plan: 'starter', billingEmail: 'ops@ahk-spares.test' },
+  { slug: 'kloof-autu-spares', name: 'Kloof Auto Spares', plan: 'vula-spares-network', billingEmail: 'ops@kloof-auto.test' },
+  { slug: 'cresta-grocers', name: 'Cresta Grocers', plan: 'vula-market-plus', billingEmail: 'ops@cresta-grocers.test' },
+  { slug: 'ahk-spares', name: 'AHK Spares', plan: 'vula-spares-network', billingEmail: 'ops@ahk-spares.test' },
 ];
 
 const STORES: StoreSpec[] = [
-  { cpSlug: 'everyday-retail', envSlug: 'everyday-retail', client: 'everyday-retail' },
+  { cpSlug: 'everyday-retail', envSlug: 'everyday-retail', client: 'everyday-retail', maxTills: 20 },
   { cpSlug: 'urban-threads-jhb', envSlug: 'urban-threads', client: 'urban-threads' },
   { cpSlug: 'urban-threads-dbn', envSlug: 'urban-threads-dbn', client: 'urban-threads' },
   { cpSlug: 'urban-threads-cpt', envSlug: 'urban-threads-cpt', client: 'urban-threads' },
@@ -76,15 +118,52 @@ const STORES: StoreSpec[] = [
   { cpSlug: 'mydiner', envSlug: 'mydiner', client: 'mydiner' },
 ];
 
-/** Head Offices. The two local ones get .localhost hostnames; the rest keep the
- *  production URLs their merchants were registered with. */
-const PANELS: Array<{ slug: string; name: string; client: string; baseUrl: string }> = [
-  { slug: 'urban-threads-ho', name: 'Urban Threads Head Office', client: 'urban-threads', baseUrl: 'http://urban-threads-ho.localhost:3260' },
-  { slug: 'hm-spares-ho', name: 'HM Spares HO', client: 'hm-spares', baseUrl: 'http://hm-spares-ho.localhost:3262' },
-  { slug: 'kloof-autu-spares-ho', name: 'Kloof Autu Spares Head Office', client: 'kloof-autu-spares', baseUrl: 'https://kloof-auto-spares-ho.vula-app.co.za' },
-  { slug: 'cresta-grocers-ho', name: 'Cresta Grocers Head Office', client: 'cresta-grocers', baseUrl: 'https://cresta-grocers-ho.vula-app.co.za' },
-  { slug: 'ahk-spares-ho', name: 'AHK Spares Head Office', client: 'ahk-spares', baseUrl: 'https://ahk-spares-ho.vula-app.co.za' },
+/**
+ * Head Offices — one per merchant, and **all local** in dev: `<slug>.localhost`
+ * on an even port, never a vula-app.co.za production domain. Ports run
+ * 3260, 3262, 3264, 3266, 3268; the odd neighbours stay free for a panel's
+ * `npm run dev:ho` Vite server. Keep this list in step with HOS in fleet.sh.
+ */
+const PANELS: Array<{ slug: string; name: string; client: string; port: number }> = [
+  { slug: 'urban-threads-ho', name: 'Urban Threads Head Office', client: 'urban-threads', port: 3260 },
+  { slug: 'hm-spares-ho', name: 'HM Spares HO', client: 'hm-spares', port: 3262 },
+  { slug: 'kloof-autu-spares-ho', name: 'Kloof Autu Spares Head Office', client: 'kloof-autu-spares', port: 3264 },
+  { slug: 'cresta-grocers-ho', name: 'Cresta Grocers Head Office', client: 'cresta-grocers', port: 3266 },
+  { slug: 'ahk-spares-ho', name: 'AHK Spares Head Office', client: 'ahk-spares', port: 3268 },
 ];
+
+const panelUrl = (p: { slug: string; port: number }): string =>
+  `http://${p.slug}.localhost:${p.port}`;
+
+/** Where a store's/panel's env template for each key lives. */
+const setEnvValue = (text: string, key: string, value: string): string =>
+  new RegExp(`^${key}=.*$`, 'm').test(text)
+    ? text.replace(new RegExp(`^${key}=.*$`, 'm'), `${key}=${value}`)
+    : `${text.replace(/\s*$/, '\n')}${key}=${value}\n`;
+
+/**
+ * Create a Head Office instance if it does not exist yet: its own env file with
+ * a distinct port, database and JWT secret, so `fleet.sh ho <slug>` can run it.
+ * Two panels must never share a secret or a branch registry.
+ *
+ * Idempotent in the way that matters: an existing env file is left untouched, so
+ * re-running never rotates a live panel's secret. Everything else (the CP token
+ * and the licence public key) is inherited from the head-office.env template —
+ * same control plane, same keys, this machine.
+ */
+const ensureHoInstance = (panel: { slug: string; port: number }): 'exists' | 'created' => {
+  const file = envFile(panel.slug);
+  if (fs.existsSync(file)) return 'exists';
+  const template = envFile('head-office');
+  let text = fs.existsSync(template)
+    ? fs.readFileSync(template, 'utf-8')
+    : 'NODE_ENV=production\nLOG_LEVEL=error\nLEASE_KEY_ID=k1\n';
+  text = setEnvValue(text, 'PORT', String(panel.port));
+  text = setEnvValue(text, 'HO_DB_PATH', path.join(DATA_DIR, `vula-${panel.slug}.db`));
+  text = setEnvValue(text, 'HO_JWT_SECRET', crypto.randomBytes(32).toString('hex'));
+  fs.writeFileSync(file, text, { mode: 0o600 });
+  return 'created';
+};
 
 // --- Reading the deployments -------------------------------------------------
 
@@ -195,14 +274,48 @@ const main = async (): Promise<void> => {
     console.log(`Note: the registry currently holds ${existing.length} store(s); this run will add to them.\n`);
   }
 
+  // The plan catalogue first: clients are created against these codes.
+  const before = await api<PlanOut[]>('GET', '/plans');
+  const existingPlan = new Map(before.map((p) => [p.code, p]));
+  console.log('Plan catalogue:');
+  for (const spec of PLANS) {
+    const body = {
+      name: spec.name,
+      maxStores: spec.maxStores,
+      maxTerminalsPerStore: spec.maxTillsPerStore,
+      features: spec.features,
+      pricingMode: HOUSE.pricingMode,
+      terminalPriceCents: HOUSE.terminalPriceCents,
+      setupFeeCents: HOUSE.setupFeeCents,
+      billingPeriod: 'monthly',
+    };
+    const current = existingPlan.get(spec.code);
+    if (DRY_RUN) {
+      console.log(`  ${current ? 'update' : 'create'} ${spec.code.padEnd(22)} ${spec.name.padEnd(24)} ${spec.maxStores} store(s) · ${spec.maxTillsPerStore} tills/store`);
+      continue;
+    }
+    if (current) {
+      await api('PUT', `/plans/${current.id}`, body);
+    } else {
+      // A bootstrap code is never created here — it already exists and gets
+      // updated, so the boot seeder finds its codes present and stays quiet.
+      if (BOOTSTRAP_CODES.has(spec.code)) {
+        throw new Error(`Bootstrap plan '${spec.code}' is missing from a fresh registry — unexpected`);
+      }
+      await api('POST', '/plans', { code: spec.code, ...body });
+    }
+    console.log(`  ✓ ${current ? 'updated' : 'created'} ${spec.code.padEnd(22)} ${spec.name}`);
+  }
+
   const plans = await api<PlanOut[]>('GET', '/plans');
   const planByCode = new Map(plans.map((p) => [p.code, p]));
 
   // 1. Work out the shape from the deployments before writing anything.
   const resolved = STORES.map((spec) => {
     const { token: storeToken, port } = readEnv(spec.envSlug);
-    const store = readStoreDb(spec.envSlug);
-    return { ...spec, storeToken, port, ...store, baseUrl: `http://${spec.cpSlug}.localhost:${port}` };
+    const fromDb = readStoreDb(spec.envSlug);
+    const tills = spec.maxTills !== undefined ? Math.min(fromDb.tills, spec.maxTills) : fromDb.tills;
+    return { ...spec, storeToken, port, ...fromDb, tills, baseUrl: `http://${spec.cpSlug}.localhost:${port}` };
   });
 
   const tillsByClient = new Map<string, number>();
@@ -239,7 +352,7 @@ const main = async (): Promise<void> => {
     );
   }
   console.log(`\nHead Offices (${PANELS.length}):`);
-  for (const p of PANELS) console.log(`  ${p.slug.padEnd(22)} ${p.client.padEnd(20)} ${p.baseUrl}`);
+  for (const p of PANELS) console.log(`  ${p.slug.padEnd(22)} ${p.client.padEnd(20)} ${panelUrl(p)}`);
 
   if (DRY_RUN) {
     console.log('\n--dry-run: nothing written.');
@@ -283,12 +396,23 @@ const main = async (): Promise<void> => {
     );
   }
 
-  // 4. Head Offices.
+  // 4. Head Offices — instance first (env file), then the registry row.
+  //
+  // Adopt the original single-HO file for the primary panel rather than minting a
+  // second one: its database path is where the running panel's branch registry
+  // already lives, and a fresh secret would log every executive out for no gain.
+  const legacy = envFile('head-office');
+  const primaryFile = envFile(PANELS[0]!.slug);
+  if (fs.existsSync(legacy) && !fs.existsSync(primaryFile)) {
+    fs.renameSync(legacy, primaryFile);
+    console.log(`  ✓ adopted head-office.env as ${PANELS[0]!.slug}.env`);
+  }
   for (const p of PANELS) {
     const companyId = companyIdBySlug.get(p.client);
     if (!companyId) throw new Error(`No client '${p.client}' for panel '${p.slug}'`);
-    await api('POST', '/panels', { name: p.name, slug: p.slug, companyId, baseUrl: p.baseUrl });
-    console.log(`  ✓ panel ${p.slug}`);
+    const instance = ensureHoInstance(p);
+    await api('POST', '/panels', { name: p.name, slug: p.slug, companyId, baseUrl: panelUrl(p) });
+    console.log(`  ✓ panel ${p.slug.padEnd(22)} instance ${instance === 'created' ? 'created' : 'already present'}`);
   }
 
   const [stores, panels] = await Promise.all([
