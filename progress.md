@@ -2,6 +2,45 @@
 
 Dated log of the build.
 
+## 2026-09-14 — Devices page: client sections above the stores (owner follow-up)
+
+Owner: *"we should group by client name / company name no?"* — yes, and the
+registry shows why that needs care rather than being a straight nesting.
+
+**The fleet is majority-unowned.** Of 16 stores and 65 tills, only 11 stores /
+28 tills belong to a client:
+
+| Client | Stores | Tills |
+| --- | --- | --- |
+| *(no client)* | 5 | **37** |
+| Urban Threads Retail Group | 3 | 9 |
+| Kloof Auto Spares | 3 | 8 |
+| Cresta Grocers | 2 | 5 |
+| AHK Spares | 2 | 4 |
+| myDiner | 1 | 2 |
+
+So client becomes a **section band** (not a second collapse level — two nested
+disclosures would mean two clicks to reach any till), and the five unowned stores
+get an explicitly marked **`Unassigned — no client`** section, amber and sorted
+last. That section is the largest on the page (37 tills), which is the honest
+picture: most of this fleet is not attributed to anyone. Hiding those stores
+would misstate the fleet; filing them under a client would invent ownership.
+
+- The client name moved off the store header onto the band, so it is stated once
+  instead of on every store row.
+- **A data bug fell out of the exercise:** company *HM Spares* owns a Head Office
+  panel but **zero stores**, while the `hm-spares` store (spares, 1 till) sits
+  unassigned. That store belongs to that company — one `companyId` on the store
+  edit fixes both halves. The other four unassigned demo stores
+  (`everyday-retail`, `brake-bolt-spares`, `builders-hardware`,
+  `medisave-pharmacy`) have no company to join; they are demo fixtures created
+  without one.
+- Verified against a copy of the live registry: bands read AHK Spares 2/4,
+  Cresta Grocers 2/5, Kloof Auto Spares 3/8, myDiner 1/2, Urban Threads Retail
+  Group 3/9, Unassigned 5/37, plus the Head offices section — 16 store groups
+  across six bands, exactly matching the registry. Tests **195 green**,
+  typecheck and build clean. Doctrine: CONTEXT §5b.
+
 ## 2026-09-14 — Devices page: store-first layout (owner-directed)
 
 The owner looked at the shipped page against the real fleet and asked for

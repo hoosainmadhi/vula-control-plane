@@ -162,6 +162,36 @@ export default function DevicesPage() {
     return { stores, offices };
   }, [filtered]);
 
+  /**
+   * Client sections. The fleet is read client-first everywhere else in the
+   * panel, so devices group that way too — but with an explicit "Unassigned"
+   * section, because most of this fleet's tills (37 of 65) belong to stores no
+   * client owns. Without that section they would be invisible; with it, they are
+   * visibly unowned, which is the more useful signal.
+   */
+  const sections = useMemo(() => {
+    const byClient = new Map<string, { key: string; name: string | null; stores: StoreGroup[] }>();
+    for (const group of groups.stores) {
+      const key = group.companyName ?? '__unassigned__';
+      let section = byClient.get(key);
+      if (!section) {
+        section = { key, name: group.companyName, stores: [] };
+        byClient.set(key, section);
+      }
+      section.stores.push(group);
+    }
+    // Named clients alphabetically, then whatever is unowned.
+    return [...byClient.values()].sort(
+      (a, b) =>
+        (a.name === null ? 1 : 0) - (b.name === null ? 1 : 0) || (a.name ?? '').localeCompare(b.name ?? ''),
+    );
+  }, [groups.stores]);
+
+  const sectionSummary = (section: { stores: StoreGroup[] }): string => {
+    const tills = section.stores.reduce((n, g) => n + g.devices.length, 0);
+    return `${section.stores.length} ${section.stores.length === 1 ? 'store' : 'stores'} · ${tills} ${tills === 1 ? 'till' : 'tills'}`;
+  };
+
   const isOpen = (group: StoreGroup): boolean =>
     expanded[group.key] ?? group.devices.length <= DEFAULT_EXPAND_MAX_TILLS;
 
@@ -266,9 +296,22 @@ export default function DevicesPage() {
         </div>
       ) : (
         <>
-          {groups.stores.length > 0 && (
-            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-              {groups.stores.map((group) => {
+          {sections.map((section) => (
+            <section
+              key={section.key}
+              className="overflow-hidden rounded-xl border border-slate-200 bg-white"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50 px-4 py-2.5">
+                <span
+                  className={`text-[11px] font-bold uppercase tracking-wide ${
+                    section.name ? 'text-slate-600' : 'text-amber-700'
+                  }`}
+                >
+                  {section.name ?? 'Unassigned — no client'}
+                </span>
+                <span className="text-[11px] text-slate-400">{sectionSummary(section)}</span>
+              </div>
+              {section.stores.map((group) => {
                 const open = isOpen(group);
                 return (
                   <div key={group.key} className="border-t border-slate-100 first:border-t-0">
@@ -281,9 +324,6 @@ export default function DevicesPage() {
                       <HealthDot status={group.healthStatus} />
                       <span className="font-semibold text-slate-800">{group.name}</span>
                       {group.vertical && <VerticalChip vertical={group.vertical} />}
-                      {group.companyName && (
-                        <span className="text-xs text-slate-400">{group.companyName}</span>
-                      )}
                       {/* Development is the local default, so the chip would be
                           noise on every row; anything else is worth flagging. */}
                       {group.environment && group.environment !== 'development' && (
@@ -346,7 +386,7 @@ export default function DevicesPage() {
                 );
               })}
             </section>
-          )}
+          ))}
 
           {groups.offices.length > 0 && (
             <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
@@ -398,13 +438,15 @@ export default function DevicesPage() {
       )}
 
       <p className="text-xs text-slate-400">
-        Stores lead and their tills follow, because a fleet is read store-first — one store with 25
-        tills would otherwise fill the page. Stores with more than {DEFAULT_EXPAND_MAX_TILLS} tills
-        start collapsed. A Head Office is a fleet member in its own right, so it sits in its own
-        section rather than being nested under a store it does not have. Registers do not report a
-        per-device heartbeat yet, so a bound till reads <span className="font-semibold">Claimed</span>{' '}
-        rather than Online, and Last seen falls back to the store&rsquo;s own heartbeat. Read-only: the
-        tenant exposes no per-device command API.
+        Grouped by client, then store, because that is how the panel is read everywhere else — a
+        fleet of 16 stores and 65 tills has no useful flat form. Stores with more than{' '}
+        {DEFAULT_EXPAND_MAX_TILLS} tills start collapsed so one store cannot bury the rest, and
+        stores no client owns sit in an explicitly marked <span className="font-semibold">Unassigned</span>{' '}
+        section rather than being hidden or silently attributed to someone. A Head Office is a fleet
+        member in its own right, so it has its own section rather than being nested under a store it
+        does not have. Registers do not report a per-device heartbeat yet, so a bound till reads{' '}
+        <span className="font-semibold">Claimed</span> rather than Online, and Last seen falls back to
+        the store&rsquo;s own heartbeat. Read-only: the tenant exposes no per-device command API.
       </p>
     </div>
   );

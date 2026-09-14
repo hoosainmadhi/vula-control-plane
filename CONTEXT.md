@@ -448,19 +448,24 @@ Honest limits, deliberately surfaced rather than papered over:
   logout, run diagnostics) are not implemented because the tenant exposes no
   per-device command API — §39 forbids shipping the controls as dead buttons.
 
-### Presentation: store-first, grouped and collapsible (2026-09-14)
+### Presentation: client → store → device (2026-09-14)
 
 The spec's §25 is a flat device table; on the real fleet that was 70 rows in
 which one store (**Everyday Retail, 25 tills**) accounted for 38% of the page and
-every row repeated its store's name. The owner asked for store-first, so the page
-groups devices under a store header instead of repeating the store per device.
+every row repeated its store's name. The owner asked for store-first grouping and
+then for the client above it, so the page groups **client → store → till**.
 
+- **Client is a section band, not another collapse level.** Two nested disclosure
+  levels for 65 tills would mean two clicks to reach any device. Each band shows
+  the client name and `N stores · M tills`.
+- **Stores no client owns get an explicit `Unassigned — no client` section**,
+  marked in amber and sorted last. In this fleet that is **5 stores and 37 of 65
+  tills** — the largest section. Hiding it would misrepresent the fleet; folding
+  it into a client would invent ownership.
 - **The store header** carries a health dot, the store name, a short vertical
-  chip, the client **only when one is set**, and the environment **only when it
-  is not `development`** (the local default, which would otherwise be noise on
-  every row). Right-aligned: `N tills · M claimed · heartbeat …`. The client chip
-  is what disambiguates stores named `Jhb`, `Durban`, `Cape Town`, `durban-gw`
-  from one another.
+  chip, the environment **only when it is not `development`**, and a right-aligned
+  `N tills · M claimed · heartbeat …`. The client name sits on the band, not on
+  every store, so it is stated once.
 - **The vertical chip stays even when the name encodes it.** "Builders Hardware"
   and "Brake & Bolt Spares" do describe their own vertical, but `Cape Town` and
   `cpt-wf` are **general**-profile stores belonging to *Kloof Auto Spares* and
