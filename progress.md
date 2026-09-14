@@ -2,6 +2,30 @@
 
 Dated log of the build.
 
+## 2026-09-14 — SPOG §32: the Versions page (third deferred surface)
+
+- **`GET /api/versions`** aggregates what telemetry already wrote: each store's
+  `app_version` / `schema_version`, each panel's `app_version`. Output is the
+  distribution (version → stores, panels, per-environment counts, freshest
+  heartbeat, and its members), the schema-version spread, the most-deployed build
+  per environment, and fleet totals. Derivation in `services/fleetView.ts`.
+- **Unreported is a bucket.** A member registered but never probed has a NULL
+  version; it gets its own "Never reported" row so the distribution still
+  accounts for the whole fleet rather than quietly dropping members.
+- **No "minimum supported" version.** The spec asks for one and nothing defines
+  it. Adding it would create a support commitment nobody agreed to, so it is
+  deliberately omitted (and the page footer says why) rather than defaulted to
+  `0.0.0` or the oldest build seen — the same "never invent business rules" line
+  the tenant repo works to.
+- **There is no version history** — each member has one current build,
+  overwritten on every telemetry read. The page says so rather than implying a
+  timeline.
+- Page: summary tiles (members reporting, distinct builds, most-deployed
+  production/staging), the distribution table, schema spread, and a build filter
+  that lists the members on a build (row click sets it).
+- Tests: `src/__tests__/versions.test.ts` (7) → CP **188 green (16 suites)**,
+  typecheck + production build clean. Doctrine: CONTEXT §5c.
+
 ## 2026-09-14 — SPOG §25: the Devices page (second deferred surface)
 
 Device data was already being collected and then thrown away: per-till

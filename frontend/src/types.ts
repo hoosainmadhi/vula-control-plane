@@ -481,3 +481,38 @@ export interface Device {
   configState: ConfigState;
   healthStatus: HealthStatus;
 }
+
+// --- Versions (§32) ----------------------------------------------------------
+
+export interface VersionMember {
+  kind: 'store' | 'panel';
+  id: number;
+  name: string;
+  /** Always null for a Head Office — the panels table has no environment. */
+  environment: StoreEnvironment | null;
+  schemaVersion: number | null;
+  lastHeartbeatAt: string | null;
+}
+
+export interface VersionRow {
+  /** null is a real bucket: registered but never reported a version. */
+  version: string | null;
+  stores: number;
+  panels: number;
+  byEnvironment: Record<StoreEnvironment, number>;
+  lastHeartbeatAt: string | null;
+  members: VersionMember[];
+}
+
+export interface VersionsView {
+  versions: VersionRow[];
+  schemas: Array<{ schemaVersion: number | null; stores: number }>;
+  /** The build the most members run, per environment. */
+  mostDeployed: Record<StoreEnvironment, string | null>;
+  totals: {
+    stores: number;
+    panels: number;
+    storesReporting: number;
+    panelsReporting: number;
+  };
+}

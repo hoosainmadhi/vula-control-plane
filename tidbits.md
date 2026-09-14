@@ -11,13 +11,13 @@ Order is buildable-first; each is its own increment.
   `ErrorsPage`).
 - ~~**Devices page (§25)**~~ **shipped 2026-09-14** (`GET /api/devices`, nav +
   `DevicesPage`; read-only — no per-device command API exists).
-- **Versions page (§32)** — next; no schema change: aggregate
-  `stores.app_version` / `schema_version` + `panels.app_version` into a
-  distribution with a filter. **"Minimum supported" does not exist** anywhere (no
-  config, no constant) — decide whether it is env, a CP setting, or dropped
-  before building.
-- **Deployments page (§33, read-only)** — `deployment_jobs`/`deployment_job_steps`
-  are durable and already API-exposed, but only **per client**
+- ~~**Versions page (§32)**~~ **shipped 2026-09-14** (`GET /api/versions`, nav +
+  `VersionsPage`). **Still open: the "minimum supported version" policy** — the
+  page omits it because nothing defines it. Decide where it lives (env var, a CP
+  setting, or a plan column) and who guarantees it before adding the line.
+- **Deployments page (§33, read-only)** — next.
+  `deployment_jobs`/`deployment_job_steps` are durable and already API-exposed,
+  but only **per client**
   (`GET /api/clients/:id/jobs`). A fleet-wide view needs a new read query. There
   is no image version/tag or operator recorded on a job; the spec's Version /
   Operator columns can only be filled from `audit_logs.actor` at best. No rollout
@@ -33,9 +33,9 @@ Order is buildable-first; each is its own increment.
     `/api/backups` to its own admins only. Cross-repo (za-pos + CP).
   - **Logs, Feature Flags (§34), Migrations (§35), Integrations, Services,
     API Explorer, Webhooks** — no data model at all.
-- **The full grouped nav (§39) is deliberately not implemented** — with only
-  Errors shipped, grouping the bar would create exactly the empty placeholder
-  items §39 forbids. Revisit when three or four surfaces exist.
+- **The full grouped nav (§39) is deliberately not implemented** — with three
+  surfaces shipped it is close, but the remaining items in the spec's groups have
+  no data. Revisit when Deployments lands.
 
 ## Deferred from the subscription redesign (2026-09-13)
 

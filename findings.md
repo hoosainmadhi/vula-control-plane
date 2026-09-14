@@ -1,5 +1,28 @@
 # Findings
 
+## 2026-09-14 — Versions: what telemetry can and cannot answer
+
+- **There is no version history, only a current value.** `app_version` and
+  `schema_version` are overwritten by `recordTelemetry` on every health check or
+  sweep. So §32 can answer "what is out there now" and cannot answer "what did
+  this store run last week" — worth knowing before anyone promises a fleet
+  upgrade timeline from this data.
+- **"Minimum supported" is a policy, not a fact.** Nothing in the control plane
+  defines a minimum build: no env var, no constant, no plan column. The spec asks
+  the page to show one. Defaulting it to `0.0.0`, or inferring it as "the oldest
+  build deployed", would both silently manufacture a support commitment, so the
+  line is omitted and the omission is documented (CONTEXT §5c, tidbits.md). If
+  the owner wants it, it needs a real decision about who guarantees what.
+- **A NULL version is a bucket, not a missing value.** A store registered but
+  never probed has no `app_version`; dropping it from the distribution would make
+  the fleet totals disagree with the Stores list. It gets its own row.
+- **"Most deployed" needed a tie rule.** Two builds with equal counts are common
+  early on; breaking the tie alphabetically keeps the figure stable across
+  refreshes instead of flickering with map iteration order.
+- **A Head Office has no environment**, so its members cannot contribute to the
+  per-environment counts. The row shows "No environment recorded" rather than
+  bucketing every panel into `development`, which would have been wrong.
+
 ## 2026-09-14 — the Devices surface: collected then discarded
 
 - **The data was already there.** Per-till `claimed`, `deviceId`, `sessionOpen`

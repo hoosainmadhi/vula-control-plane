@@ -148,7 +148,15 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       like /stores and /companies). Tabs: Overview · Head Office · Stores ·
       Deployments.
       **Deferred (spec "Next"/"Later"):** sync dashboard/inspector, backups,
-      versions/deployments (errors and devices shipped 2026-09-14 — below).
+      deployments (errors, devices and versions shipped 2026-09-14 — below).
+- [x] **SPOG — Versions page** (2026-09-14, §32): `GET /api/versions` aggregates
+      the build each registered member runs (stores' `app_version`/
+      `schema_version`, panels' `app_version`) into a distribution with its
+      member list, a schema-version spread and the most-deployed build per
+      environment. "Never reported" is its own row, so the distribution accounts
+      for the whole fleet. **No "minimum supported" version** — nothing defines
+      one, and inventing it would invent a support commitment (tidbits.md).
+      Page + nav + build filter. Doctrine: CONTEXT §5c. Tests: CP **188 green**.
 - [x] **SPOG — Devices page** (2026-09-14, §25): every configured till of every
       store (claimed or not) plus one entry per Head Office, from `GET
       /api/devices`. Derived, not stored: per-till `claimed`/`deviceId`/

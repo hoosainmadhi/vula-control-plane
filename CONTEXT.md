@@ -448,6 +448,29 @@ Honest limits, deliberately surfaced rather than papered over:
   logout, run diagnostics) are not implemented because the tenant exposes no
   per-device command API — §39 forbids shipping the controls as dead buttons.
 
+## 5c. Versions (SPOG §32)
+
+`GET /api/versions` aggregates the build each registered member currently runs,
+from `stores.app_version` / `schema_version` and `panels.app_version` — the
+figures telemetry already wrote. There is **no version history**: each member
+has one current build, overwritten on every telemetry read, so the page answers
+"what is out there now", never "what did this store run last week".
+
+- **Unreported is a bucket, not a gap.** A registered member that has never
+  answered telemetry has `app_version` NULL; it appears as its own row
+  ("Never reported") so the distribution still accounts for the whole fleet.
+- **Most deployed per environment** is the build the most members run in that
+  environment, ties broken alphabetically so the figure is stable rather than
+  arbitrary. It is a derived fact, not a policy.
+- **No "minimum supported" version.** The spec asks for one; nothing in the
+  control plane defines a minimum build, and adding one would create a support
+  commitment nobody agreed to. Omitted deliberately (tidbits.md) rather than
+  defaulted to `0.0.0` or the oldest seen.
+- **A Head Office records no environment** (`panels` has no such column), so its
+  members show "—" in the environment column rather than a guessed value.
+- Environment counts on a row sum to its store count; panel counts sit outside
+  them and are shown separately.
+
 ## 6. Auth & session conventions
 
 - Single office admin from env; password bcrypt-hashed once at boot, compared

@@ -242,3 +242,152 @@ export const listFleetDevices = (companyNames: Map<number, string>): DeviceView[
       a.name.localeCompare(b.name),
   );
 };
+
+// --- Versions (SPOG §32) -----------------------------------------------------
+
+export interface VersionMember {
+  kind: 'store' | 'panel';
+  id: number;
+  name: string;
+  environment: StoreEnvironment | null;
+  schemaVersion: number | null;
+  lastHeartbeatAt: string | null;
+}
+
+export interface VersionRow {
+  /** null is a real bucket: registered but never reported a version. */
+  version: string | null;
+  stores: number;
+  panels: number;
+  byEnvironment: Record<StoreEnvironment, number>;
+  /** The freshest heartbeat seen among members on this version. */
+  lastHeartbeatAt: string | null;
+  members: VersionMember[];
+}
+
+export interface VersionsView {
+  versions: VersionRow[];
+  schemas: Array<{ schemaVersion: number | null; stores: number }>;
+  /**
+   * The version the most members run, per environment. Ties break
+   * alphabetically so the figure is stable rather than arbitrary.
+   */
+  mostDeployed: Record<StoreEnvironment, string | null>;
+  totals: {
+    stores: number;
+    panels: number;
+    /** Registered fleet members that have actually reported a version. */
+    storesReporting: number;
+    panelsReporting: number;
+  };
+}
+
+const emptyEnvCounts = (): Record<StoreEnvironment, number> => ({
+  production: 0,
+  staging: 0,
+  demo: 0,
+  development: 0,
+});
+
+/**
+ * Version distribution across the fleet. Pure aggregation of what telemetry
+ * already stored — no version history exists, only each member's current build.
+ */
+export const buildVersionsView = (): VersionsView => {
+  const stores = listStores();
+  const panels = listPanels();
+  const rows = new Map<string, VersionRow>();
+  const schemaCounts = new Map<string, number>();
+  const envVersions = new Map<StoreEnvironment, Map<string, number>>();
+
+  const rowFor = (version: string | null): VersionRow => {
+    const key = version ?? '';
+    let row = rows.get(key);
+    if (!row) {
+      row = {
+        version,
+        stores: 0,
+        panels: 0,
+        byEnvironment: emptyEnvCounts(),
+        lastHeartbeatAt: null,
+        members: [],
+      };
+      rows.set(key, row);
+    }
+    return row;
+  };
+
+  for (const store of stores) {
+    const row = rowFor(store.app_version);
+    row.stores += 1;
+    row.byEnvironment[store.environment] += 1;
+    if (store.last_heartbeat_at && (!row.lastHeartbeatAt || store.last_heartbeat_at > row.lastHeartbeatAt)) {
+      row.lastHeartbeatAt = store.last_heartbeat_at;
+    }
+    row.members.push({
+      kind: 'store',
+      id: store.id,
+      name: store.name,
+      environment: store.environment,
+      schemaVersion: store.schema_version,
+      lastHeartbeatAt: store.last_heartbeat_at,
+    });
+    if (store.app_version) {
+      const counts = envVersions.get(store.environment) ?? new Map<string, number>();
+      counts.set(store.app_version, (counts.get(store.app_version) ?? 0) + 1);
+      envVersions.set(store.environment, counts);
+    }
+    if (store.schema_version !== null && store.schema_version !== undefined) {
+      const key = String(store.schema_version);
+      schemaCounts.set(key, (schemaCounts.get(key) ?? 0) + 1);
+    }
+  }
+
+  for (const panel of panels) {
+    const row = rowFor(panel.app_version);
+    row.panels += 1;
+    if (panel.last_health_at && (!row.lastHeartbeatAt || panel.last_health_at > row.lastHeartbeatAt)) {
+      row.lastHeartbeatAt = panel.last_health_at;
+    }
+    row.members.push({
+      kind: 'panel',
+      id: panel.id,
+      name: panel.name,
+      // The panels table has no environment column.
+      environment: null,
+      schemaVersion: null,
+      lastHeartbeatAt: panel.last_health_at,
+    });
+  }
+
+  const mostDeployed = (env: StoreEnvironment): string | null => {
+    const counts = envVersions.get(env);
+    if (!counts || counts.size === 0) return null;
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]![0];
+  };
+
+  return {
+    versions: [...rows.values()].sort(
+      (a, b) =>
+        b.stores + b.panels - (a.stores + a.panels) ||
+        // Unreported sorts last among equals; otherwise newest-looking first.
+        (a.version === null ? 1 : 0) - (b.version === null ? 1 : 0) ||
+        (b.version ?? '').localeCompare(a.version ?? ''),
+    ),
+    schemas: [...schemaCounts.entries()]
+      .map(([schemaVersion, count]) => ({ schemaVersion: Number(schemaVersion), stores: count }))
+      .sort((a, b) => b.schemaVersion - a.schemaVersion),
+    mostDeployed: {
+      production: mostDeployed('production'),
+      staging: mostDeployed('staging'),
+      demo: mostDeployed('demo'),
+      development: mostDeployed('development'),
+    },
+    totals: {
+      stores: stores.length,
+      panels: panels.length,
+      storesReporting: stores.filter((s) => Boolean(s.app_version)).length,
+      panelsReporting: panels.filter((p) => Boolean(p.app_version)).length,
+    },
+  };
+};
