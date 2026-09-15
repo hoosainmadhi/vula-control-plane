@@ -192,6 +192,10 @@ export async function createStoreDeployment(input: {
       { key: 'PORT', value: '3000' },
       { key: 'NODE_ENV', value: 'production' },
       { key: 'DB_PATH', value: '/data/za-pos.db' },
+      // Snapshots go where BACKUP_DIR points: without it they resolve inside the
+      // container and the next rebuild destroys them, which is worse than having
+      // no backups at all because the store believes it has them.
+      { key: 'BACKUP_DIR', value: '/data/backups' },
       { key: 'JWT_SECRET', value: jwtSecret },
       { key: 'CONTROL_PLANE_TOKEN', value: controlPlaneToken },
     ],

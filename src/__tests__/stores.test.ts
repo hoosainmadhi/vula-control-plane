@@ -562,3 +562,76 @@ describe('store teardown', () => {
 });
 
 });
+
+describe('Head Office wiring on create', () => {
+  it('pairs a branch with its merchant Head Office — both directions', async () => {
+    const company = await request(app)
+      .post('/api/companies')
+      .set(auth())
+      .send({ name: 'Urban Threads Retail Group', slug: 'urban-threads' });
+    expect(company.status).toBe(201);
+    const companyId = (company.body as { id: number }).id;
+
+    // A client buys terminals before it can take a store.
+    await request(app)
+      .put(`/api/clients/${companyId}`)
+      .set(auth())
+      .send({ licensedTerminalCount: 3 })
+      .expect(200);
+
+    const panel = await request(app)
+      .post('/api/panels')
+      .set(auth())
+      .send({
+        name: 'Urban Threads Head Office',
+        slug: 'urban-threads-ho',
+        companyId,
+        baseUrl: 'http://localhost:3260/',
+      });
+    expect(panel.status).toBe(201);
+
+    fetchMock.mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.endsWith('/api/internal/branches')) return jsonResponse(201, { ok: true });
+      if (u.endsWith('/api/internal/licence')) return jsonResponse(200, { ok: true });
+      return jsonResponse(200, { ok: true, applied: { terminalCount: 3 } });
+    });
+
+    const res = await request(app)
+      .post('/api/stores')
+      .set(auth())
+      .send(createPayload({ companyId }));
+
+    expect(res.status).toBe(201);
+    expect((res.body as { headOfficeWiring: string }).headOfficeWiring).toBe('wired');
+
+    // Direction 1: the branch is told which Head Office it belongs to, with the
+    // token. Creation pushes configuration twice — the plain first push, then the
+    // wiring push that carries `headOffice` — so find the one with the pairing.
+    const wiringCall = fetchMock.mock.calls.find((c) => {
+      if (!String(c[0]).endsWith('/api/internal/configure')) return false;
+      const body = (c[1] as { body?: string } | undefined)?.body;
+      return typeof body === 'string' && body.includes('headOffice');
+    });
+    expect(wiringCall).toBeDefined();
+    expect(String(wiringCall![0])).toContain('localhost:3299');
+    const configureBody = JSON.parse(
+      (wiringCall![1] as { body: string }).body,
+    ) as { headOffice?: { enabled: boolean; url: string; token: string } };
+    expect(configureBody.headOffice).toMatchObject({
+      enabled: true,
+      url: 'http://localhost:3260',
+    });
+    expect(configureBody.headOffice!.token).toEqual(expect.any(String));
+
+    // Direction 2: the panel registers the same branch with the SAME token —
+    // a mismatch here is the "healthy branch shows Offline" failure.
+    const [, branchesInit] = fetchTo('/api/internal/branches');
+    const branch = JSON.parse((branchesInit as { body: string }).body) as {
+      slug: string;
+      headOfficeToken: string;
+    };
+    expect(branch.slug).toBe('gardens-mall');
+    expect(branch.headOfficeToken).toBe(configureBody.headOffice!.token);
+  });
+});

@@ -39,6 +39,7 @@ import {
 import { runStoreProvisioning } from '../services/storeProvisioning.js';
 import { setStoreDeployStatus, listAuditLogs, recordAuditLog } from '../config/registryDb.js';
 import { runHealthSweep } from '../services/healthSweep.js';
+import { wireStoreToHeadOffice } from '../services/topology.js';
 import {
   issueLicence,
   isEphemeralKey,
@@ -513,11 +514,26 @@ storesRouter.post(
     // Attempt the first push right away; a failed attempt never fails creation.
     const firstPush = await attemptPush(store);
     const firstLicence = await attemptLicencePush(getStoreById(store.id)!);
+
+    // Pair the branch with its merchant's Head Office when it has one. Without
+    // this, a branch added outside the client wizard never reaches the panel's
+    // roster, and the panel reports a perfectly healthy branch as Offline. Like
+    // the first push, a failure here is reported rather than fatal — the store
+    // exists either way.
+    let headOfficeWiring: string;
+    try {
+      headOfficeWiring = await wireStoreToHeadOffice(getStoreById(store.id)!);
+    } catch (err) {
+      headOfficeWiring = `failed: ${err instanceof Error ? err.message : String(err)}`;
+      logger.warn(`Head Office wiring for ${store.slug} failed: ${headOfficeWiring}`);
+    }
+
     const updated = getStoreById(store.id)!;
     res.status(201).json({
       store: storeToOut(updated),
       firstPush,
       firstLicence,
+      headOfficeWiring,
       provisioning: provision,
       // Present only when we generated one. Never returned by list or detail.
       ...(generatedToken ? { generatedControlPlaneToken: generatedToken } : {}),

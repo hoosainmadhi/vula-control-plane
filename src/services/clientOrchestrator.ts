@@ -44,6 +44,7 @@ import { entitlementsFor } from './subscriptions.js';
 import { allocateTerminals, checkAllocation, terminalAllowance } from './terminalLicences.js';
 import { bootstrapStoreAdmin, generateAdminPassword } from './storeProvisioning.js';
 import { logger } from '../config/env.js';
+import { wireStoreToHeadOffice } from './topology.js';
 
 export interface StoreDeploymentInput {
   name: string;
@@ -327,31 +328,9 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
         const failures: string[] = [];
         for (const s of stores) {
           try {
-            // Per-branch Head Office credential — distinct from the vendor CP
-            // token by design (§8 of the production-readiness review).
-            const headOfficeToken = s.head_office_token ?? crypto.randomBytes(32).toString('hex');
-            if (headOfficeToken !== s.head_office_token) {
-              setStoreHeadOfficeToken(s.id, headOfficeToken);
-            }
-
-            // Direction 1: tell the branch where its Head Office is (the push
-            // carries the store's own per-till roster, not regenerated names).
-            await pushTerminals(s, {}, {
-              headOffice: {
-                enabled: true,
-                url: ho.base_url,
-                token: headOfficeToken,
-              },
-            });
-
-            // Direction 2: register the branch in the Head Office roster.
-            await registerBranchWithPanel(ho, {
-              slug: s.slug,
-              name: s.name,
-              baseUrl: s.base_url,
-              headOfficeToken,
-              vertical: s.vertical,
-            });
+            // Both directions of the branch↔panel credential, in one place —
+            // shared with a branch added on its own via POST /api/stores.
+            await wireStoreToHeadOffice(s);
           } catch (wErr) {
             failures.push(`Topology wiring failed for store ${s.slug}: ${String(wErr)}`);
           }
