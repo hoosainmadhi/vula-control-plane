@@ -26,6 +26,28 @@ store env block omitted `BACKUP_DIR` and the licence public key.
 
 Dated log of the build.
 
+## 2026-09-14 — production blockers closed (this repo's four)
+
+Paired with the same day's work in `za-pos`; both repos reached "no blockers
+left" together.
+
+- **The image builds.** Its frontend asked for node types without declaring
+  `@types/node`; the root install hoisted them locally so only Coolify's clean
+  build failed. Verified by building the image.
+- **The licence key is checked at boot**, not on first use — a CP that starts
+  healthy and dies when it issues its first licence is the worse failure.
+- **The port story is coherent**: default, `EXPOSE` and healthcheck all 3000,
+  matching the `PORT` Coolify injects for its proxy.
+- **Provisioning writes the agreed tree** and injects the two things it was
+  leaving out: `BACKUP_DIR`, and the branch↔panel credential (both directions in
+  `services/topology.ts`, shared by the wizard and `POST /api/stores`).
+- **This image gets the entrypoint too**, so it can write a root-owned `/data`
+  — and no longer runs as root while doing it.
+
+The provisioning path has still only been exercised against its stub: verifying
+it against a real Coolify target is on the go-live checklist, not here.
+
+
 ## 2026-09-14 — Devices page: client sections above the stores (owner follow-up)
 
 Owner: *"we should group by client name / company name no?"* — yes, and the

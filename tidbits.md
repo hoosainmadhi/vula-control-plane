@@ -6,29 +6,29 @@
 
 From the review behind `za-pos/prompts/deploy-production-vula-app.md` §10.
 
-- **This image does not build in a clean context.** `frontend/tsconfig.node.json`
+- ~~**This image does not build in a clean context.**~~ **Fixed 2026-09-14** (was: `frontend/tsconfig.node.json`
   asks for `types: ["node"]`, but `@types/node` is not declared in
   `frontend/package.json` — locally the root install hoists it, so `npm run
   build` passes and the failure only appears in Coolify's build:
   `error TS2688: Cannot find type definition file for 'node'`. One-line fix
   (declare the dependency in the frontend, refresh its lockfile), verified to
   make the image build. **Blocks deploying this app at all.**
-- **This image pins `EXPOSE 3240` and probes `localhost:3240/health`, while
+- ~~**This image pins `EXPOSE 3240`**~~ **Fixed 2026-09-14**: default, `EXPOSE` and healthcheck all 3000, matching the injected `PORT` (was: and probes `localhost:3240/health`, while
   Coolify injects `PORT=3000` for the proxy.** The container can serve traffic
   and still be marked unhealthy, which reads as a failed deploy. Align the image
   (default `PORT=3000`) or pin the resource's proxy port — decide once.
-- **The licence private key refuses lazily.** `licenceSigner.loadKeys()` exits
+- ~~**The licence private key refuses lazily.**~~ **Fixed 2026-09-14**: checked at boot (was: `licenceSigner.loadKeys()` exits
   with a FATAL log on first use in production, so a keyless CP boots looking
   healthy and dies when the first client is onboarded. Make it a boot gate.
-- **`BACKUP_DIR` is not injected into store deployments.** Every provisioned
+- ~~**`BACKUP_DIR` is not injected into store deployments.**~~ **Fixed 2026-09-14** (was: Every provisioned
   store therefore writes snapshots into the container's writable layer, where a
   rebuild destroys them. Add it to the store env payload (`/data/backups`).
-- **`HEAD_OFFICE_TOKEN` is not injected either.** The branch is provisioned with
+- ~~**`HEAD_OFFICE_TOKEN` is not injected either.**~~ **Fixed 2026-09-14**: both directions live in `services/topology.ts`, shared by the wizard and `POST /api/stores` (was: The branch is provisioned with
   a merchant token but the merchant's panel is never told it, so the panel
   reports a healthy branch as Offline — the failure that has now been repaired by
   hand twice. Inject it, and register the branch with the panel
   (`POST /api/internal/branches`) as part of provisioning.
-- **The data tree is not automatic.** The production layout
+- ~~**The data tree is not automatic.**~~ **Fixed 2026-09-14**: provisioning writes it, and the images fix ownership from inside (was: The production layout
   (`/data/apps/vula-app/{cp,store,ho}/…`) needs each host directory created and
   `chown 1000:1000` before first start: these are bind mounts, so the host
   ownership overrides the image's `chown /data`, and the container runs as
