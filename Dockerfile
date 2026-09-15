@@ -28,8 +28,11 @@ COPY --from=frontend /app/frontend/dist ./frontend/dist
 COPY schema.sql ./
 RUN mkdir -p /data
 VOLUME /data
-ENV PORT=3240
-EXPOSE 3240
+# Coolify injects PORT=3000 for its proxy, so the default, the exposed port and
+# the healthcheck all agree on 3000. A healthcheck probing a port the proxy does
+# not reach marks a working container unhealthy, which reads as a failed deploy.
+ENV PORT=3000
+EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD wget -qO- http://localhost:3240/health >/dev/null 2>&1 || exit 1
+  CMD wget -qO- http://localhost:3000/health >/dev/null 2>&1 || exit 1
 CMD ["node", "dist/server.js"]

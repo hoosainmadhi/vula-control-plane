@@ -28,6 +28,24 @@ if (isProduction && process.env.OFFICE_ADMIN_PASSWORD === OFFICE_PASSWORD_PLACEH
   process.exit(1);
 }
 
+/**
+ * The licence signing key is checked at boot, not only on first use. `loadKeys()`
+ * refuses too, but it refuses lazily: a control plane could start, pass its
+ * healthcheck and look healthy, then die the moment it issues its first licence —
+ * which is when a client is being onboarded. Refusing to start is the kinder
+ * failure. (`loadKeys()` keeps its own check as defence in depth.)
+ */
+if (
+  isProduction &&
+  !process.env.LEASE_PRIVATE_KEY?.trim() &&
+  !process.env.LEASE_KEY_FILE?.trim()
+) {
+  logger.error(
+    'FATAL: LEASE_PRIVATE_KEY (or LEASE_KEY_FILE) must be set in production — the control plane signs store licences with it',
+  );
+  process.exit(1);
+}
+
 export interface Env {
   port: number;
   isProduction: boolean;
