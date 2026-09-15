@@ -197,6 +197,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
             const result = await createHeadOfficeDeployment({
               slug: panel.slug,
               domain: panel.base_url,
+              clientSlug: company.slug,
               controlPlaneToken: panel.control_plane_token,
             });
             const updatedPanel = setPanelDeployStatus(panel.id, 'provisioning', {
@@ -273,6 +274,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
             const result = await createStoreDeployment({
               slug: store.slug,
               domain: store.base_url,
+              clientSlug: company.slug,
               controlPlaneToken: store.control_plane_token,
             });
             store = setStoreDeployStatus(store.id, 'provisioning', {

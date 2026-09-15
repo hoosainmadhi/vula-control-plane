@@ -15,6 +15,10 @@ import { issueLicence } from './licenceSigner.js';
 import { entitlementsFor } from './subscriptions.js';
 import { terminalAllowance } from './terminalLicences.js';
 import { getCompanyById, nextLicenceSequence, recordLicencePush, recordConfigResult } from '../config/registryDb.js';
+
+/** The host directory a deployment belongs under: its client's slug, or its own. */
+const clientSlugFor = (companyId: number | null, fallback: string): string =>
+  (companyId ? (getCompanyById(companyId)?.slug ?? fallback) : fallback);
 import { logger } from '../utils/logger.js';
 
 const HEALTH_POLL_INTERVAL_MS = 10000; // 10s
@@ -113,6 +117,10 @@ export async function runStoreProvisioning(
       const deployResult = await createStoreDeployment({
         slug: store.slug,
         domain: store.base_url,
+        // Deployments live under the client that owns them, so a single-store
+        // client that later becomes multi-store grows a subtree rather than
+        // moving its existing data. A store with no client is its own directory.
+        clientSlug: clientSlugFor(store.company_id, store.slug),
         controlPlaneToken: store.control_plane_token,
       });
       coolifyUuid = deployResult.coolifyUuid;

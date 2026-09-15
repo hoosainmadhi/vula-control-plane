@@ -88,6 +88,18 @@ export interface CreateServiceResult {
 interface DeploymentSpec {
   slug: string;
   domain: string;
+  /**
+   * Which subtree of the host tree this deployment belongs to.
+   * See `za-pos/prompts/deploy-production-vula-app.md` §2.
+   */
+  kind: 'store' | 'ho';
+  /**
+   * The owning client's slug. Deployments are grouped per client so a
+   * single-store client that later becomes multi-store simply grows a subtree —
+   * its existing branch directory never moves. A store with no client passes its
+   * own slug rather than inventing a client name.
+   */
+  clientSlug: string;
   controlPlaneToken?: string;
   jwtSecret?: string;
   /** App name prefix and volume prefix (`za-pos-<slug>` vs `vula-ho-<slug>`). */
@@ -147,12 +159,16 @@ const deployFromSpec = async (spec: DeploymentSpec): Promise<CreateServiceResult
   }
 
   // Persistent volume mount
-  const volumeName = `${spec.appName}-${slug}-data`;
+  // One directory per deployment, under the client that owns it, named for the
+  // convention already on the host (`optimed-<slug>-sqlite-db`). The volume name
+  // is what Coolify keys storage by, so it must be unique and stable.
+  const volumeName = `vula-${spec.kind}-${slug}-sqlite-db`;
+  const hostPath = `/data/apps/vula-app/${spec.kind}/${spec.clientSlug}/${slug}-sqlite-db`;
   await request(config, 'POST', `${API_VERSION_PATH}/applications/${coolifyUuid}/storages`, {
     type: 'persistent',
     name: volumeName,
     mount_path: '/data',
-    host_path: `/data/apps/${volumeName}`,
+    host_path: hostPath,
   });
 
   // Trigger deployment
@@ -174,6 +190,8 @@ const deployFromSpec = async (spec: DeploymentSpec): Promise<CreateServiceResult
 export async function createStoreDeployment(input: {
   slug: string;
   domain: string;
+  /** The owning client's slug (the store's own slug when it has no client). */
+  clientSlug: string;
   controlPlaneToken?: string;
   jwtSecret?: string;
 }): Promise<CreateServiceResult> {
@@ -184,6 +202,8 @@ export async function createStoreDeployment(input: {
   return deployFromSpec({
     slug,
     domain,
+    kind: 'store',
+    clientSlug: input.clientSlug,
     appName: 'za-pos',
     dockerfileLocation: 'Dockerfile',
     controlPlaneToken,
@@ -210,6 +230,8 @@ export async function createStoreDeployment(input: {
 export async function createHeadOfficeDeployment(input: {
   slug: string;
   domain: string;
+  /** The merchant this panel belongs to. */
+  clientSlug: string;
   controlPlaneToken?: string;
   jwtSecret?: string;
 }): Promise<CreateServiceResult> {
@@ -220,6 +242,8 @@ export async function createHeadOfficeDeployment(input: {
   return deployFromSpec({
     slug,
     domain,
+    kind: 'ho',
+    clientSlug: input.clientSlug,
     appName: 'vula-ho',
     dockerfileLocation: 'head-office/Dockerfile',
     controlPlaneToken,

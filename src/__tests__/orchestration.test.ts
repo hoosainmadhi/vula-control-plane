@@ -22,6 +22,8 @@ const COOLIFY_URL = 'http://coolify.test';
 let fetchMock: jest.SpyInstance;
 let token = '';
 let coolifyCreateCalls = 0;
+/** Every storage request the CP made, so the host tree it asks for can be asserted. */
+let storageCalls: Array<{ url: string; body: string }> = [];
 
 const configureCoolify = (): void => {
   process.env.COOLIFY_API_URL = COOLIFY_URL;
@@ -51,12 +53,17 @@ beforeEach(() => {
   resetRegistryDb();
   configureCoolify();
   coolifyCreateCalls = 0;
+  storageCalls = [];
   fetchMock = jest.spyOn(globalThis, 'fetch');
   fetchMock.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
     const s = String(url);
 
     // Coolify API
     if (s.startsWith(COOLIFY_URL)) {
+      if (s.endsWith('/storages')) {
+        storageCalls.push({ url: s, body: String(init?.body ?? '') });
+        return jsonResponse(201, { ok: true });
+      }
       if (s.endsWith('/applications/private-github-app')) {
         coolifyCreateCalls++;
         if (process.env.COOLIFY_FAIL_CREATE === 'true') {
@@ -164,11 +171,32 @@ describe('deployment job truthfulness', () => {
   });
 
   it('persists the Coolify UUID and never creates a duplicate application on retry', async () => {
+    storageCalls.length = 0;
     const { clientId } = await createMultiStoreClient();
 
     const store = getStoreBySlug('urban-threads-sandton');
     expect(store?.coolify_uuid).toMatch(/^uuid-store-/);
-    expect(store?.volume_name).toContain('za-pos-urban-threads-sandton');
+    // The recorded volume name follows the host convention: one directory per
+    // deployment, named `<slug>-sqlite-db`.
+    expect(store?.volume_name).toBe('vula-store-urban-threads-sandton-sqlite-db');
+
+    // ...and the storage it actually asked Coolify for sits under the client,
+    // which is what lets a single-store client grow into a multi-store one
+    // without moving its existing data.
+    const storeStorage = storageCalls.find((call) =>
+      call.body.includes('urban-threads-sandton-sqlite-db'),
+    );
+    expect(storeStorage).toBeDefined();
+    const storageBody = JSON.parse(storeStorage!.body) as {
+      name: string;
+      mount_path: string;
+      host_path: string;
+    };
+    expect(storageBody).toMatchObject({
+      name: 'vula-store-urban-threads-sandton-sqlite-db',
+      mount_path: '/data',
+      host_path: '/data/apps/vula-app/store/urban-threads/urban-threads-sandton-sqlite-db',
+    });
 
     // One create per resource: the Head Office and the store.
     expect(coolifyCreateCalls).toBe(2);

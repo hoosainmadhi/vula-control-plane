@@ -18,6 +18,7 @@ COPY frontend/ ./
 RUN npm run build
 
 FROM node:22-alpine
+RUN apk add --no-cache tzdata su-exec
 WORKDIR /app
 ENV NODE_ENV=production
 ENV CP_DB_PATH=/data/control-plane.db
@@ -26,6 +27,7 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 COPY --from=frontend /app/frontend/dist ./frontend/dist
 COPY schema.sql ./
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN mkdir -p /data
 VOLUME /data
 # Coolify injects PORT=3000 for its proxy, so the default, the exposed port and
@@ -35,4 +37,7 @@ ENV PORT=3000
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD wget -qO- http://localhost:3000/health >/dev/null 2>&1 || exit 1
+# Starts as root only to make the bind-mounted /data writable by `node`, then
+# drops to `node` before the server starts — see the script's header.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/server.js"]
