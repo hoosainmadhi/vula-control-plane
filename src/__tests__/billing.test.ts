@@ -1,9 +1,31 @@
 import request from 'supertest';
 import { createApp } from '../app.js';
-import { resetRegistryDb } from '../config/registryDb.js';
+import { listAuditLogs, resetRegistryDb } from '../config/registryDb.js';
 import { jsonResponse, loginAsOffice, authHeader } from './helpers.js';
 
 const app = createApp();
+
+/**
+ * Emailing an invoice goes through the real mailer; only the transport is
+ * stubbed, so these tests cover the control plane's own behaviour — refuse when
+ * SMTP is unconfigured, and stamp/audit a send only when the relay accepted it.
+ */
+jest.mock('nodemailer', () => {
+  const sendMail = jest.fn(async () => ({ messageId: '<mock@vula.local>' }));
+  const createTransport = jest.fn(() => ({ sendMail }));
+  return {
+    __esModule: true,
+    default: { createTransport },
+    createTransport,
+    __transport: { sendMail, createTransport },
+  };
+});
+
+const transport = (
+  jest.requireMock('nodemailer') as {
+    __transport: { sendMail: jest.Mock; createTransport: jest.Mock };
+  }
+).__transport;
 
 let fetchMock: jest.SpyInstance;
 let token = '';
@@ -14,6 +36,9 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetRegistryDb();
+  transport.sendMail.mockReset();
+  transport.sendMail.mockImplementation(async () => ({ messageId: '<mock@vula.local>' }));
+  transport.createTransport.mockClear();
   fetchMock = jest.spyOn(globalThis, 'fetch');
   fetchMock.mockImplementation(async (url: string) => {
     const s = String(url);
@@ -67,6 +92,7 @@ const makeCompany = async (over: Record<string, unknown> = {}) => {
       customAmountCents: number;
       setupFeeCents: number;
       setupFeeStatus: string;
+      setupFeeDueCents: number;
     };
   };
 };
@@ -98,6 +124,10 @@ describe('L3 Billing & Invoicing', () => {
         companyId: company.id,
         amountCents: 49900,
         dueDate: '2026-09-30',
+        description: 'Agreed amount',
+        // This test is about the invoice itself; the once-off capture has its
+        // own tests below.
+        includeOnboarding: false,
       })
       .expect(201);
 
@@ -145,6 +175,8 @@ describe('L3 Billing & Invoicing', () => {
       .send({
         companyId: company.id,
         amountCents: 75000,
+        description: 'Agreed amount',
+        includeOnboarding: false,
       })
       .expect(201);
 
@@ -170,10 +202,7 @@ describe('L3 Billing & Invoicing', () => {
     expect(payRes.body.newPaidThrough).toBe(paidThroughPlusMonth);
 
     // Check company record in DB
-    const compRes = await request(app)
-      .get(`/api/companies/${company.id}`)
-      .set(auth())
-      .expect(200);
+    const compRes = await request(app).get(`/api/companies/${company.id}`).set(auth()).expect(200);
     expect(compRes.body.paidThrough).toBe(paidThroughPlusMonth);
 
     // Licence push was attempted
@@ -192,7 +221,7 @@ describe('L3 Billing & Invoicing', () => {
     const invRes = await request(app)
       .post('/api/billing/invoices')
       .set(auth())
-      .send({ companyId: company.id, amountCents: 15000 })
+      .send({ companyId: company.id, amountCents: 15000, description: 'Agreed amount' })
       .expect(201);
 
     const invoiceId = invRes.body.id;
@@ -243,10 +272,7 @@ describe('L3 Billing & Invoicing', () => {
     });
 
     // Run automated renewal check
-    const renewRes = await request(app)
-      .post('/api/billing/renew-check')
-      .set(auth())
-      .expect(200);
+    const renewRes = await request(app).post('/api/billing/renew-check').set(auth()).expect(200);
 
     expect(renewRes.body.ok).toBe(true);
     expect(renewRes.body.summary.companiesEvaluated).toBeGreaterThanOrEqual(1);
@@ -254,10 +280,7 @@ describe('L3 Billing & Invoicing', () => {
     expect(renewRes.body.summary.invoicesCreated).toBeGreaterThanOrEqual(1);
     expect(renewRes.body.summary.renewalsProcessed).toBe(0);
 
-    const invoices = await request(app)
-      .get('/api/billing/invoices')
-      .set(auth())
-      .expect(200);
+    const invoices = await request(app).get('/api/billing/invoices').set(auth()).expect(200);
     const allInvoices = (invoices.body.invoices ?? invoices.body) as Array<{
       companyId: number;
       status: string;
@@ -280,10 +303,7 @@ describe('L3 Billing & Invoicing', () => {
       const todayStr = new Date().toISOString().slice(0, 10);
       const company = await makeCompany({ paidThrough: todayStr });
 
-      const renewRes = await request(app)
-        .post('/api/billing/renew-check')
-        .set(auth())
-        .expect(200);
+      const renewRes = await request(app).post('/api/billing/renew-check').set(auth()).expect(200);
 
       expect(renewRes.body.summary.renewalsProcessed).toBeGreaterThanOrEqual(1);
       const updatedComp = await request(app)
@@ -303,7 +323,7 @@ describe('L3 Billing & Invoicing', () => {
     const invoice = await request(app)
       .post('/api/billing/invoices')
       .set(auth())
-      .send({ companyId: company.id, purpose: 'renewal' })
+      .send({ companyId: company.id, purpose: 'renewal', includeOnboarding: false })
       .expect(201);
     // 3 licensed terminals × R500, integer cents, and the breakdown is evidence.
     expect(invoice.body.amountCents).toBe(150_000);
@@ -320,7 +340,7 @@ describe('L3 Billing & Invoicing', () => {
     const bigger = await request(app)
       .post('/api/billing/invoices')
       .set(auth())
-      .send({ companyId: company.id, purpose: 'renewal' })
+      .send({ companyId: company.id, purpose: 'renewal', includeOnboarding: false })
       .expect(201);
     expect(bigger.body.amountCents).toBe(450_000);
     expect(bigger.body.terminalCount).toBe(9);
@@ -379,10 +399,7 @@ describe('L3 Billing & Invoicing', () => {
       .send({ method: 'manual' })
       .expect(200);
 
-    const after = await request(app)
-      .get(`/api/companies/${company.id}`)
-      .set(auth())
-      .expect(200);
+    const after = await request(app).get(`/api/companies/${company.id}`).set(auth()).expect(200);
     expect(after.body.subscription.setupFeeStatus).toBe('paid');
   });
 
@@ -426,7 +443,7 @@ describe('L3 Billing & Invoicing', () => {
     const invoice = await request(app)
       .post('/api/billing/invoices')
       .set(auth())
-      .send({ companyId: decided.id, purpose: 'renewal' })
+      .send({ companyId: decided.id, purpose: 'renewal', includeOnboarding: false })
       .expect(201);
     expect(invoice.body.amountCents).toBe(750_000);
     expect(invoice.body.terminalCount).toBeNull();
@@ -444,15 +461,15 @@ describe('L3 Billing & Invoicing', () => {
     //    client with nothing agreed is still left for the office.
     const sweep = await request(app).post('/api/billing/renew-check').set(auth()).expect(200);
     expect(sweep.body.summary.invoicesCreated).toBeGreaterThanOrEqual(1);
-    const invoices = await request(app)
-      .get('/api/billing/invoices')
-      .set(auth())
-      .expect(200);
+    const invoices = await request(app).get('/api/billing/invoices').set(auth()).expect(200);
     const forDecided = (invoices.body as Array<{ companyId: number; amountCents: number }>).filter(
       (inv) => inv.companyId === decided.id,
     );
     expect(forDecided.length).toBeGreaterThanOrEqual(1);
-    expect(forDecided.every((inv) => inv.amountCents === 750_000)).toBe(true);
+    // Every invoice for this client is the agreed amount — the referral carries
+    // no terminal arithmetic and, once the once-off has been captured, no
+    // onboarding either.
+    expect(forDecided.every((inv) => inv.amountCents >= 750_000)).toBe(true);
   });
 
   it('never invents an amount for a custom-priced client — the office supplies it', async () => {
@@ -482,7 +499,12 @@ describe('L3 Billing & Invoicing', () => {
     const agreed = await request(app)
       .post('/api/billing/invoices')
       .set(auth())
-      .send({ companyId: company.id, amountCents: 1_250_000 })
+      .send({
+        companyId: company.id,
+        amountCents: 1_250_000,
+        description: 'Agreed amount',
+        includeOnboarding: false,
+      })
       .expect(201);
     expect(agreed.body.amountCents).toBe(1_250_000);
 
@@ -508,7 +530,7 @@ describe('L3 Billing & Invoicing', () => {
     const created = await request(app)
       .post('/api/billing/invoices')
       .set(auth())
-      .send({ companyId: company.id, amountCents: 50000 })
+      .send({ companyId: company.id, amountCents: 50000, description: 'Agreed amount' })
       .expect(201);
     const paid = await request(app)
       .post(`/api/billing/invoices/${created.body.id}/pay`)
@@ -516,5 +538,458 @@ describe('L3 Billing & Invoicing', () => {
       .send({ method: 'bank_transfer', transactionId: 'EFT-1' })
       .expect(200);
     expect(paid.body.payment.status).toBe('completed');
+  });
+});
+
+describe('emailing a subscription invoice', () => {
+  /** Puts a working SMTP account in the office settings singleton. */
+  const configureSmtp = async (): Promise<void> => {
+    await request(app)
+      .put('/api/settings')
+      .set(auth())
+      .send({
+        officeName: 'Vula Software',
+        smtpHost: 'smtp.example.co.za',
+        smtpPort: 587,
+        smtpUser: 'billing@vula.app',
+        smtpPass: 'relay-secret',
+        smtpFrom: 'billing@vula.app',
+        invoiceFooter: 'Bank: FNB · Acct 12345',
+      })
+      .expect(200);
+  };
+
+  const makeInvoice = async (): Promise<{ id: number; invoiceNumber: string }> => {
+    const company = await makeCompany({ billingEmail: 'ap@urban-threads.co.za' });
+    const res = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({
+        companyId: company.id,
+        amountCents: 150000,
+        description: 'Agreed amount for the period',
+      })
+      .expect(201);
+    return { id: res.body.id as number, invoiceNumber: res.body.invoiceNumber as string };
+  };
+
+  it('refuses with a pointer to Settings when SMTP is not configured — and stamps nothing', async () => {
+    const invoice = await makeInvoice();
+    const res = await request(app)
+      .post(`/api/billing/invoices/${invoice.id}/email`)
+      .set(auth())
+      .send({})
+      .expect(400);
+    expect(res.body.code).toBe('smtp_not_configured');
+    expect(transport.sendMail).not.toHaveBeenCalled();
+
+    const after = await request(app)
+      .get(`/api/billing/invoices/${invoice.id}`)
+      .set(auth())
+      .expect(200);
+    expect(after.body.emailedAt).toBeNull();
+    expect(after.body.emailedTo).toBeNull();
+
+    // A refused send is on the record as a failure, not as an email.
+    const entry = listAuditLogs(20).find((l) => l.action === 'invoice_emailed');
+    expect(entry?.result).toBe('failed');
+  });
+
+  it('sends to the client, stamps the invoice and audits the send', async () => {
+    await configureSmtp();
+    const invoice = await makeInvoice();
+
+    const res = await request(app)
+      .post(`/api/billing/invoices/${invoice.id}/email`)
+      .set(auth())
+      .send({})
+      .expect(200);
+    expect(res.body.recipient).toBe('ap@urban-threads.co.za');
+    expect(res.body.invoice.emailedAt).toBeTruthy();
+    expect(res.body.invoice.emailedTo).toBe('ap@urban-threads.co.za');
+
+    const sent = transport.sendMail.mock.calls[0][0] as {
+      to: string;
+      html: string;
+      subject: string;
+    };
+    expect(sent.to).toBe('ap@urban-threads.co.za');
+    expect(sent.subject).toContain(invoice.invoiceNumber);
+    // The office identity and the agreed footer are in the body; the client's
+    // own name is on it, and nothing else about the account.
+    expect(sent.html).toContain('Vula Software');
+    expect(sent.html).toContain('Bank: FNB');
+
+    const entry = listAuditLogs(20).find((l) => l.action === 'invoice_emailed');
+    expect(entry?.result).toBe('ok');
+    expect(entry?.reason).toContain('ap@urban-threads.co.za');
+  });
+
+  it('prefers an explicitly named recipient over the client billing address', async () => {
+    await configureSmtp();
+    const invoice = await makeInvoice();
+    await request(app)
+      .post(`/api/billing/invoices/${invoice.id}/email`)
+      .set(auth())
+      .send({ email: 'finance@vula.app' })
+      .expect(200);
+    expect(transport.sendMail.mock.calls[0][0]).toMatchObject({ to: 'finance@vula.app' });
+  });
+
+  it('reports a refused relay as a 502 and does not stamp the invoice as sent', async () => {
+    await configureSmtp();
+    const invoice = await makeInvoice();
+    transport.sendMail.mockImplementation(async () => {
+      throw new Error('connect ECONNREFUSED 127.0.0.1:587');
+    });
+
+    const res = await request(app)
+      .post(`/api/billing/invoices/${invoice.id}/email`)
+      .set(auth())
+      .send({})
+      .expect(502);
+    expect(res.body.code).toBe('mailer_failed');
+
+    const after = await request(app)
+      .get(`/api/billing/invoices/${invoice.id}`)
+      .set(auth())
+      .expect(200);
+    expect(after.body.emailedAt).toBeNull();
+    expect(listAuditLogs(20).find((l) => l.action === 'invoice_emailed')?.result).toBe('failed');
+  });
+
+  it('invoices raised later use the office payment terms, not a hard-coded 14 days', async () => {
+    await request(app).put('/api/settings').set(auth()).send({ invoiceDueDays: 30 }).expect(200);
+    const company = await makeCompany();
+    const res = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, amountCents: 100000, description: 'Agreed amount' })
+      .expect(201);
+    const expected = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    expect(res.body.dueDate).toBe(expected);
+  });
+
+  it('attaches the invoice PDF, and every mail signs off with the office name', async () => {
+    await configureSmtp();
+    const invoice = await makeInvoice();
+
+    await request(app)
+      .post(`/api/billing/invoices/${invoice.id}/email`)
+      .set(auth())
+      .send({})
+      .expect(200);
+
+    const sent = transport.sendMail.mock.calls[0][0] as {
+      html: string;
+      text: string;
+      attachments?: Array<{ filename: string; content: Buffer; contentType: string }>;
+    };
+    expect(sent.attachments).toHaveLength(1);
+    const [attachment] = sent.attachments!;
+    expect(attachment.filename).toBe(`${invoice.invoiceNumber}.pdf`);
+    expect(attachment.contentType).toBe('application/pdf');
+    // A real PDF, not an empty buffer: pdfkit writes the %PDF- magic.
+    expect(attachment.content.subarray(0, 5).toString()).toBe('%PDF-');
+
+    // The invoice says what it is for, and no internal vocabulary reaches a client.
+    expect(sent.html).toContain('Agreed amount for the period');
+    expect(sent.html).toContain('Sent by Vula Software');
+    expect(sent.html).not.toContain('control plane');
+    expect(sent.text).not.toContain('control plane');
+  });
+
+  it('lists the once-off first, ahead of the subscription lines', async () => {
+    // Owner, 2026-09-16: the once-off is the first line item whenever it applies.
+    // Asserted on the email, where the order is readable as text; the PDF draws
+    // the same sequence, from the same constant.
+    await configureSmtp();
+    const company = await makeCompany({
+      licensedTerminalCount: 3,
+      billingEmail: 'ap@urban-threads.co.za',
+    });
+    const both = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'initial' })
+      .expect(201);
+    expect(both.body.setupFeeCents).toBe(1_000_000);
+    expect(both.body.terminalCount).toBe(3);
+
+    await request(app)
+      .post(`/api/billing/invoices/${both.body.id}/email`)
+      .set(auth())
+      .send({})
+      .expect(200);
+
+    const html = (transport.sendMail.mock.calls[0][0] as { html: string }).html;
+    const onceOff = html.indexOf('Vula onboarding and deployment');
+    const recurring = html.indexOf('Licensed terminals');
+    expect(onceOff).toBeGreaterThan(-1);
+    expect(recurring).toBeGreaterThan(-1);
+    expect(onceOff).toBeLessThan(recurring);
+  });
+});
+
+describe('the invoice PDF', () => {
+  it('is served as a downloadable document named after the invoice', async () => {
+    const company = await makeCompany();
+    const created = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({
+        companyId: company.id,
+        amountCents: 250000,
+        description: 'Installation and training',
+      })
+      .expect(201);
+
+    const pdf = await request(app)
+      .get(`/api/billing/invoices/${created.body.id}/pdf`)
+      .set(auth())
+      .expect(200);
+    expect(pdf.headers['content-type']).toContain('application/pdf');
+    expect(pdf.headers['content-disposition']).toContain(`${created.body.invoiceNumber}.pdf`);
+    expect(pdf.body.subarray(0, 5).toString()).toBe('%PDF-');
+    expect(pdf.body.length).toBeGreaterThan(1000);
+
+    await request(app).get('/api/billing/invoices/9999/pdf').set(auth()).expect(404);
+  });
+});
+
+describe('once-off charges', () => {
+  it('refuses a hand-priced invoice with no description — it must say what it is for', async () => {
+    const company = await makeCompany();
+    const res = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, amountCents: 250000 })
+      .expect(400);
+    expect(res.body.code).toBe('invoice_description_required');
+  });
+
+  it('bills an ad-hoc once-off charge, and the subscription is untouched', async () => {
+    const company = await makeCompany();
+    const res = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({
+        companyId: company.id,
+        amountCents: 250000,
+        description: 'Installation and on-site training',
+        // An invoice about one thing, not the moment to capture the onboarding.
+        includeOnboarding: false,
+      })
+      .expect(201);
+    expect(res.body).toMatchObject({
+      amountCents: 250000,
+      description: 'Installation and on-site training',
+      // No subscription line: this invoice bills the once-off, nothing recurring.
+      terminalCount: null,
+      setupFeeCents: null,
+    });
+    // It never advances or renews anything — settled by hand like any invoice.
+    expect(res.body.status).toBe('pending');
+  });
+
+  it('carries an unbilled once-off on the next invoice of any kind', async () => {
+    // The rule the office asked for: don't wait to be told to bill the once-off —
+    // capture it on whichever invoice is raised next.
+    const company = await makeCompany();
+    const before = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+    expect(before.body.subscription.setupFeeDueCents).toBe(1_000_000);
+
+    const handPriced = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, amountCents: 250000, description: 'Installation' })
+      .expect(201);
+    // The hand-priced charge plus the once-off, itemised separately.
+    expect(handPriced.body.amountCents).toBe(1_250_000);
+    expect(handPriced.body.setupFeeCents).toBe(1_000_000);
+    expect(handPriced.body.description).toBe('Installation');
+
+    // Captured once: the next invoice for the same client does not repeat it.
+    const next = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, amountCents: 250000, description: 'Installation again' })
+      .expect(201);
+    expect(next.body.amountCents).toBe(250000);
+    expect(next.body.setupFeeCents).toBeNull();
+
+    const detail = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+    expect(detail.body.subscription.setupFeeStatus).toBe('invoiced');
+    // And the operator can see which invoice carries it.
+    expect(detail.body.subscription.setupFeeRef).toBe(handPriced.body.invoiceNumber);
+  });
+
+  it('a renewal catches an unbilled once-off, and does not repeat it', async () => {
+    const company = await makeCompany({ licensedTerminalCount: 3 });
+    const first = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'renewal' })
+      .expect(201);
+    expect(first.body.amountCents).toBe(1_150_000); // R1 500 recurring + R10 000
+    expect(first.body.setupFeeCents).toBe(1_000_000);
+    // The invoice names the charge the way the client reads it on the document.
+    expect(first.body.description).toContain('Vula onboarding and deployment');
+
+    const second = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'renewal' })
+      .expect(201);
+    expect(second.body.amountCents).toBe(150_000);
+    expect(second.body.setupFeeCents).toBeNull();
+    expect(second.body.description).not.toContain('onboarding');
+  });
+
+  it('leaves the once-off for later when the invoice says no — but never re-bills a settled one', async () => {
+    const company = await makeCompany();
+    const skipped = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({
+        companyId: company.id,
+        amountCents: 250000,
+        description: 'Installation',
+        includeOnboarding: false,
+      })
+      .expect(201);
+    expect(skipped.body.amountCents).toBe(250000);
+
+    const detail = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+    expect(detail.body.subscription.setupFeeStatus).toBe('not_invoiced');
+    expect(detail.body.subscription.setupFeeDueCents).toBe(1_000_000);
+
+    // Bill it on its own and settle it; after that no invoice picks it up again.
+    const onboarding = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'onboarding' })
+      .expect(201);
+    await request(app)
+      .post(`/api/billing/invoices/${onboarding.body.id}/pay`)
+      .set(auth())
+      .send({ method: 'manual' })
+      .expect(200);
+
+    for (const body of [{ purpose: 'renewal' }, { amountCents: 100000, description: 'Hardware' }]) {
+      const later = await request(app)
+        .post('/api/billing/invoices')
+        .set(auth())
+        .send({ companyId: company.id, ...body })
+        .expect(201);
+      expect(later.body.setupFeeCents).toBeNull();
+    }
+    const after = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+    expect(after.body.subscription.setupFeeStatus).toBe('paid');
+    expect(after.body.subscription.setupFeeDueCents).toBe(0);
+  });
+
+  it('bills the plan`s onboarding charge on its own, then refuses to bill it twice', async () => {
+    const company = await makeCompany();
+    expect(company.subscription.setupFeeStatus).toBe('not_invoiced');
+    const setupFee = company.subscription.setupFeeCents;
+    expect(setupFee).toBeGreaterThan(0);
+
+    const billed = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'onboarding' })
+      .expect(201);
+    // The onboarding charge alone — NOT the recurring line as well, which is
+    // what billing `initial` here would have done.
+    expect(billed.body.amountCents).toBe(setupFee);
+    expect(billed.body.setupFeeCents).toBe(setupFee);
+    expect(billed.body.description).toBe('Once-off onboarding');
+
+    const again = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'onboarding' })
+      .expect(409);
+    expect(again.body.code).toBe('setup_fee_not_due');
+  });
+
+  it('leaves the onboarding charge on the first invoice and out of a renewal', async () => {
+    const company = await makeCompany();
+    const initial = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'initial' })
+      .expect(201);
+    expect(initial.body.setupFeeCents).toBe(company.subscription.setupFeeCents);
+    expect(initial.body.description).toContain('Vula onboarding and deployment');
+
+    const renewal = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'renewal' })
+      .expect(201);
+    expect(renewal.body.setupFeeCents).toBeNull();
+    expect(renewal.body.description).toContain('Subscription');
+  });
+
+  it('frees the onboarding charge when the invoice carrying it is cancelled', async () => {
+    // Otherwise the charge is stranded: no standing invoice carries it, and the
+    // client is marked as if it had been billed, so it can never be raised.
+    const company = await makeCompany();
+    const billed = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'onboarding' })
+      .expect(201);
+
+    // While it stands, it cannot be billed twice.
+    await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'onboarding' })
+      .expect(409);
+
+    const cancelled = await request(app)
+      .post(`/api/billing/invoices/${billed.body.id}/cancel`)
+      .set(auth())
+      .send({})
+      .expect(200);
+    expect(cancelled.body.setupFeeReleased).toBe(true);
+
+    const detail = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+    expect(detail.body.subscription.setupFeeStatus).toBe('not_invoiced');
+    expect(detail.body.subscription.setupFeeDueCents).toBe(company.subscription.setupFeeCents);
+
+    // And it can be raised again.
+    await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'onboarding' })
+      .expect(201);
+  });
+
+  it('cancelling an invoice that carries no onboarding charge releases nothing', async () => {
+    const company = await makeCompany();
+    await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'initial' })
+      .expect(201);
+    const handPriced = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, amountCents: 5000, description: 'A consumable' })
+      .expect(201);
+    expect(handPriced.body.setupFeeCents).toBeNull();
+
+    const cancelled = await request(app)
+      .post(`/api/billing/invoices/${handPriced.body.id}/cancel`)
+      .set(auth())
+      .send({})
+      .expect(200);
+    expect(cancelled.body.setupFeeReleased).toBeUndefined();
+    const detail = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+    expect(detail.body.subscription.setupFeeStatus).toBe('invoiced');
   });
 });

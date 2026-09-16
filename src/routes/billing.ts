@@ -3,11 +3,14 @@ import {
   listInvoices,
   getInvoiceById,
   updateInvoice,
+  recordInvoiceEmail,
   listPayments,
   getPaymentById,
   getBillingSettings,
   upsertBillingSettings,
   getCompanyById,
+  getSubscription,
+  setSetupFeeStatus,
   recordAuditLog,
   type InvoiceRecord,
   type PaymentRecord,
@@ -18,6 +21,7 @@ import { HttpError } from '../utils/errors.js';
 import {
   requireInt,
   optionalInt,
+  optionalBool,
   optionalString,
   parseIdParam,
 } from '../utils/validate.js';
@@ -26,6 +30,9 @@ import {
   processPaymentAndRenew,
   runAutomatedRenewals,
 } from '../services/billing.js';
+import { sendInvoiceEmail } from '../services/mailer.js';
+import { buildInvoicePdf, invoicePdfFilename } from '../services/invoicePdf.js';
+import { getRawOfficeSettings } from '../services/officeSettings.js';
 
 export const billingRouter = Router();
 billingRouter.use(requireOffice);
@@ -44,9 +51,14 @@ export interface InvoiceOut {
   terminalPriceCents: number | null;
   /** Once-off onboarding charge when this invoice carried it. */
   setupFeeCents: number | null;
+  /** What the charge is for — required on a hand-priced invoice. */
+  description: string | null;
   status: 'pending' | 'paid' | 'overdue' | 'cancelled';
   dueDate: string | null;
   paidDate: string | null;
+  /** When the invoice was last emailed to the client (null = never). */
+  emailedAt: string | null;
+  emailedTo: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -73,9 +85,12 @@ const invoiceToOut = (inv: InvoiceRecord): InvoiceOut => {
     terminalCount: inv.terminal_count ?? null,
     terminalPriceCents: inv.terminal_price_cents ?? null,
     setupFeeCents: inv.setup_fee_cents ?? null,
+    description: inv.description,
     status: inv.status,
     dueDate: inv.due_date,
     paidDate: inv.paid_date,
+    emailedAt: inv.emailed_at,
+    emailedTo: inv.emailed_to,
     createdAt: inv.created_at,
     updatedAt: inv.updated_at,
   };
@@ -119,12 +134,26 @@ billingRouter.post(
     const companyId = requireInt(req.body, 'companyId');
     const amountCents = optionalInt(req.body, 'amountCents');
     const dueDate = optionalString(req.body, 'dueDate');
-    // Without an amount the invoice is computed from the subscription: the
-    // recurring line, plus the once-off onboarding charge on an `initial`
-    // invoice. `renewal` never carries the onboarding charge again.
+    const description = optionalString(req.body, 'description', 200);
+    // An unbilled once-off onboarding charge rides on the next invoice raised —
+    // of any kind — unless the office says no for this one.
+    const includeOnboarding = optionalBool(req.body, 'includeOnboarding');
     const purposeRaw = req.body?.purpose;
-    if (purposeRaw !== undefined && !['initial', 'renewal', 'manual'].includes(String(purposeRaw))) {
-      throw new HttpError(400, 'purpose must be one of: initial, renewal, manual');
+    if (
+      purposeRaw !== undefined &&
+      !['initial', 'renewal', 'manual', 'onboarding'].includes(String(purposeRaw))
+    ) {
+      throw new HttpError(400, 'purpose must be one of: initial, renewal, manual, onboarding');
+    }
+    // A hand-priced invoice must say what it is for. It is how a once-off charge
+    // gets a home (installation, training, a data migration), and it is what
+    // stops a client receiving a bare "Amount due: R2 500,00" with no subject.
+    if (amountCents !== undefined && !description) {
+      throw new HttpError(
+        400,
+        'An invoice with an agreed amount must carry a description of what it is for.',
+        'invoice_description_required',
+      );
     }
 
     const company = getCompanyById(companyId);
@@ -133,10 +162,32 @@ billingRouter.post(
     const invoice = createInvoiceForCompany(companyId, {
       amountCents: amountCents ?? undefined,
       dueDate: dueDate ?? undefined,
-      purpose: purposeRaw as 'initial' | 'renewal' | 'manual' | undefined,
+      description: description ?? undefined,
+      includeOnboarding,
+      purpose: purposeRaw as 'initial' | 'renewal' | 'manual' | 'onboarding' | undefined,
     });
 
     res.status(201).json(invoiceToOut(invoice));
+  }),
+);
+
+/**
+ * The invoice as a downloadable PDF — the same builder the mailer attaches, so
+ * what the operator saves and what the client receives cannot diverge.
+ */
+billingRouter.get(
+  '/invoices/:id/pdf',
+  asyncHandler(async (req, res) => {
+    const id = parseIdParam(req.params.id);
+    const invoice = getInvoiceById(id);
+    if (!invoice) throw new HttpError(404, 'Invoice not found');
+    const company = getCompanyById(invoice.company_id);
+    if (!company) throw new HttpError(404, 'Company not found');
+
+    const pdf = await buildInvoicePdf({ invoice, company, settings: getRawOfficeSettings() });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${invoicePdfFilename(invoice)}"`);
+    res.send(pdf);
   }),
 );
 
@@ -152,7 +203,10 @@ billingRouter.post(
     const method = req.body?.method || 'manual';
     const validMethods = ['stripe', 'manual', 'bank_transfer', 'credit_card', 'paypal'];
     if (!validMethods.includes(method)) {
-      throw new HttpError(400, `Invalid payment method. Must be one of: ${validMethods.join(', ')}`);
+      throw new HttpError(
+        400,
+        `Invalid payment method. Must be one of: ${validMethods.join(', ')}`,
+      );
     }
 
     const amountCents = optionalInt(req.body, 'amountCents') ?? invoice.amount_cents;
@@ -184,6 +238,27 @@ billingRouter.post(
     if (invoice.status === 'paid') throw new HttpError(409, 'Cannot cancel a paid invoice');
 
     const updated = updateInvoice(id, { status: 'cancelled' });
+
+    // A cancelled invoice must not keep the once-off onboarding charge marked as
+    // billed: the charge would then be uncollectable — no invoice carries it, and
+    // the client cannot be billed for it again. Only the last standing invoice
+    // carrying it releases it.
+    if ((invoice.setup_fee_cents ?? 0) > 0) {
+      const standing = listInvoices(invoice.company_id).filter(
+        (i) => i.id !== invoice.id && i.status !== 'cancelled' && (i.setup_fee_cents ?? 0) > 0,
+      );
+      const subscription = getSubscription(invoice.company_id);
+      if (standing.length === 0 && subscription?.setup_fee_status === 'invoiced') {
+        setSetupFeeStatus(invoice.company_id, 'not_invoiced');
+        res.json({
+          ok: true,
+          invoice: invoiceToOut(updated!),
+          setupFeeReleased: true,
+        });
+        return;
+      }
+    }
+
     res.json({ ok: true, invoice: invoiceToOut(updated!) });
   }),
 );
@@ -198,11 +273,31 @@ billingRouter.post(
     const company = getCompanyById(invoice.company_id);
     if (!company) throw new HttpError(404, 'Company not found');
 
-    const recipient = optionalString(req.body, 'email') || company.billing_email;
+    // Who it goes to: an address named for this send, else the client's billing
+    // configuration, else the company's billing email.
+    const billing = getBillingSettings(company.id);
+    const recipient =
+      optionalString(req.body, 'email', 254) || billing?.invoice_email || company.billing_email;
     if (!recipient) {
       throw new HttpError(400, 'Recipient billing email is required');
     }
 
+    try {
+      await sendInvoiceEmail({ invoice, company, recipient });
+    } catch (err) {
+      // A refused or unconfigured send is a failure, and the trail says so: an
+      // `ok` audit row for an email nobody received is the fabricated success
+      // this route used to hand back unconditionally.
+      recordAuditLog('office', 'invoice_emailed', 'invoice', invoice.id, {
+        after: { invoiceNumber: invoice.invoice_number, recipient },
+        reason: err instanceof Error ? err.message : String(err),
+        result: 'failed',
+      });
+      throw err;
+    }
+
+    // Stamped only after the mail server accepted the message.
+    const updated = recordInvoiceEmail(invoice.id, recipient)!;
     recordAuditLog('office', 'invoice_emailed', 'invoice', invoice.id, {
       after: { invoiceNumber: invoice.invoice_number, recipient },
       reason: `Emailed subscription invoice to ${recipient}`,
@@ -210,6 +305,7 @@ billingRouter.post(
 
     res.json({
       ok: true,
+      invoice: invoiceToOut(updated),
       invoiceNumber: invoice.invoice_number,
       recipient,
       sentAt: new Date().toISOString(),
@@ -252,7 +348,8 @@ billingRouter.put(
     if (!company) throw new HttpError(404, 'Company not found');
 
     const autoRenew = req.body?.autoRenew !== undefined ? Boolean(req.body.autoRenew) : undefined;
-    const emailInvoice = req.body?.emailInvoice !== undefined ? Boolean(req.body.emailInvoice) : undefined;
+    const emailInvoice =
+      req.body?.emailInvoice !== undefined ? Boolean(req.body.emailInvoice) : undefined;
     const invoiceEmail = optionalString(req.body, 'invoiceEmail');
 
     const updated = upsertBillingSettings(companyId, {

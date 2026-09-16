@@ -1,5 +1,279 @@
 # Findings
 
+## 2026-09-16 (seventh pass) — three docs described a product that no longer exists
+
+Pre-commit sweep of the markdown, prompted by the owner's "update all relevant md
+files". Three claims were false, all of them in files a newcomer reads first:
+
+- **`README.md` said billing was not built** — "Billing *recording*
+  (invoices/payments) is not built — `paid_through` is set by hand today". False
+  since 2026-09-11, and doubly false after this session (invoices, payments,
+  renewals, the mailer and the PDF all exist). The scope list also stopped at
+  licences: no billing, no settings, no observability.
+- **`prompts/deploy-coolify-control-plane.md` warned about two image traps that
+  were fixed on 2026-09-14** — a healthcheck pinned to 3240 while Coolify injects
+  `PORT=3000`, and a licence key checked lazily. Both were corrected in the code;
+  the runbook kept telling every deployer to work around them. Verified against
+  `Dockerfile` (`ENV PORT=3000`, `EXPOSE 3000`, healthcheck on 3000) and
+  `src/config/env.ts` (the production boot gate) before rewriting.
+- **The same runbook's advice for a token mismatch was the worst possible fix** —
+  "if it was lost, delete and recreate the store row; v1 has no token-rotation
+  UI". That is precisely the path this session replaced, and following it throws
+  away a store's history, licence allocation and deployment jobs. It now points at
+  Configure → *Control-plane token*.
+- Added while there, because the deploy story changed: mail is configured on
+  **Settings**, not in env; no env var and no headless browser is needed for
+  invoice PDFs (pdfkit is pure JS — a fact that matters for a small Coolify
+  image); and the troubleshooting list gained the two honest mail refusals.
+- **The pattern worth naming:** every one of these was a *true* statement at the
+  time it was written. Docs do not fail when the code changes — nothing tests
+  them — so the only defence is reading them against the code before shipping a
+  change, which is what this pass did.
+
+## 2026-09-16 (sixth pass) — one charge, three names, and a subject posing as a line
+
+- **The same money was called three things.** "Once-off onboarding" (the plan
+  field and the server), "Vula onboarding and deployment" (the Billing detail
+  view, which is where the owner read it) and "Onboarding" (the client page's
+  button). The owner asked for the line under the name they had seen, which is the
+  honest way to settle it: the label now lives in one constant on each side of the
+  build and the *documents* use it. Worth noting how the ambiguity arose — each
+  surface was written at a different time and none of them owned the vocabulary.
+- **A description drawn as a table row is a line item without an amount.** The PDF
+  printed `invoice.description` as the first row of the amounts table, so the
+  invoice subject appeared to be an uncharged item and the once-off — the actual
+  first thing being charged — sat second. Moving the subject up beside the title
+  fixed both the reading and the ordering requirement in one change.
+- **Ordering is a real requirement, not a preference, and it needs a test.** The
+  owner wants the once-off first "when applicable", which means it must stay first
+  as rows come and go (recurring-only invoices, hand-priced ones). The email is
+  where that is assertable as text (`indexOf` of the label vs the recurring row);
+  the PDF sorts from the same code path, so one assertion covers the intent without
+  scraping a compressed stream.
+- **A UI claim outlived the rule it described.** "The onboarding charge rides the
+  client's first invoice only — never a renewal" was true on 2026-09-16 morning
+  and false by the afternoon, when the charge began riding whichever invoice came
+  next. Nothing failed — it was help text — which is exactly why it would have
+  survived indefinitely. When a rule changes, the copy that states it is part of
+  the change.
+
+## 2026-09-16 (fifth pass) — "I don't see it" was three explanations fighting in one modal
+
+- **The feature was working; the modal was describing it instead of showing it.**
+  Asked to double-check, the create-invoice modal rendered nothing at all until a
+  client was picked, then a small grey line about the once-off, then a separate
+  "Amount" field and a "What is this for? (optional)" field whose helper explained
+  an internal rule — three partial explanations of the same invoice spread across
+  four places, and the actual figures nowhere. Replacing all of it with a single
+  panel of the lines and the total (subscription, once-off, total) answers the
+  question the operator is actually asking, and made "I don't see the once-off"
+  impossible.
+- **A label that changes from optional to required is a contradiction, not a
+  nuance.** "What is this for? (optional)" became mandatory as soon as an amount
+  was typed, and the reason — the server refuses a hand-priced invoice with no
+  description — is a *server* rule the operator should never have to infer from
+  helper text. The field is now simply absent until it is needed, and asked for by
+  name when it is.
+- **Explaining a rule in the field's help text is a smell.** "Left blank, the
+  invoice describes the subscription it bills" described the server's fallback
+  rather than the operator's decision. The fix states the outcome instead ("The
+  invoice will read Subscription — Vula Spares Network"), and the server's rule is
+  documented in CONTEXT §5e where it belongs.
+- **Vocabulary drifted in the modal all along.** It said "Company" (the advanced
+  page's term) and "Generate Invoice" while its own heading said "Raise an
+  Invoice", in a UI whose merchant term is "Client" everywhere else. Small, but it
+  is the surface an operator uses most.
+- **A case-sensitive check missed a rendered uppercase heading.** My own live
+  verification pattern `/What this invoice will carry/` failed against a panel
+  whose heading is uppercased by CSS, so `innerText` returns it in caps — briefly
+  making it look like the panel was not rendering. Worth remembering when
+  asserting on rendered text: match the *rendered* case, not the source's.
+
+## 2026-09-16 (fourth pass) — the once-off needed capturing, not a support charge
+
+- **"Bill the once-off" was a rule the panel could not enforce by itself.** The
+  charge was only ever attached to an `initial` invoice, so it was captured at
+  onboarding and never again: a client invoiced once before the charge was set (or
+  whose invoice was cancelled) carried an unbilled R10 000 indefinitely — nine of
+  eleven live clients were in exactly that state. The fix is not a new button but a
+  change of trigger: the charge now rides on **whichever invoice is raised next**,
+  and `setupFeeDueCents` makes double-billing structurally impossible rather than
+  something the code has to check for.
+- **Automatic capture has to be visible.** A charge that appears on a customer's
+  invoice without anyone clicking for it is fine only while the office can see it
+  happened: it is itemised as its own line, shown in the create modal (with the
+  opt-out), and counted in the renewal sweep's summary. The alternative — silent
+  automatic billing — is how a vendor earns a support call.
+- **Asked about support, the owner answered with a pricing rule, not a feature.**
+  *"ignore support charges. we charging per terminal which includes support."*
+  Worth recording as a commercial decision rather than a backlog item, since
+  "bill for support" looks like an obvious gap and is in fact a settled question.
+  It is now in CONTEXT §5e, the glossary, AGENTS.md's locked-rules section and
+  tidbits, so a future session meets the decision before the idea.
+- **§40 caught a field name again.** `setupFeeInvoiceNumber` failed the
+  privacy-boundary test's name walk on the client/company endpoints — the test
+  cannot distinguish a vendor's document number from a merchant's billing data,
+  and deliberately does not try. `setupFeeRef` clears it. Second instance of the
+  same lesson (2026-09-11's `salesBlocked` → `tradingBlocked`): on this surface,
+  reach for a neutral name first.
+- **Six existing tests broke, and every break was the feature working.** Each
+  expected a hand-priced amount and got amount + R10 000. They now pass
+  `includeOnboarding: false` with a comment explaining that the invoice in
+  question is about something else — which is more honest than loosening the
+  assertions, since it states the intent the test always had.
+
+## 2026-09-16 (third pass) — a script that "pointed at a scratch file" wrote to the live registry
+
+**What happened.** To check the invoice PDF's layout with realistic content
+(onboarding line, footer, long client name) I wrote a throwaway script whose
+first line was `process.env.CP_DB_PATH = '/tmp/pdf-check.db'`. It did not open
+the scratch file. It opened `data/control-plane.db`, created a company
+("Urban Threads Retail Group", slug `urban-threads-check`), raised a R14 500
+invoice for it, and **overwrote the office identity settings** — name, email,
+phone, address and the invoice footer — with the test values.
+
+**Why.** ESM hoists imports above the module body. `env.dbPath` is read when
+`src/config/registryDb.ts` is first evaluated, which happens *while the import
+statements run*, i.e. before the assignment on line 1 of my script ever executes.
+Assigning `process.env` in the file is therefore not a configuration step at all
+when the consumer reads env at import time — it is a no-op with a misleading look.
+
+**How it was caught and repaired.** The second run failed with
+`SQLITE_CONSTRAINT_UNIQUE` on the company slug, which is what gave it away: a
+fresh scratch DB cannot have a duplicate. Repair, in order:
+
+1. The owner's settings were recovered from a PDF rendered two minutes earlier
+   (the header and footer are drawn from exactly those fields), restored via
+   `PUT /api/settings`, and re-verified. SMTP — host, user, password — was never
+   touched by the bad write and is intact.
+2. The fabricated company was deleted through `DELETE /api/companies/:id`, which
+   cascades to its invoice and its subscription row (audited, and it is the
+   sanitised path rather than hand-written SQL).
+3. Verified back to the pre-damage shape: 11 companies, 10 invoices, 64 stores,
+   6 panels, no rows left for the deleted id.
+
+**The guard that goes with it.** Scratch scripts now (a) take `CP_DB_PATH` from
+the shell — `CP_DB_PATH=/tmp/x.db npx tsx script.ts` — and (b) refuse to run at
+all unless it starts with `/tmp/`. Both matter: the shell assignment happens
+before the process starts, and the guard makes the mistake impossible rather than
+merely unlikely. This is the same lesson as the 2026-09-10 `tsx watch`
+corruption, one layer out: a tool that *looks* pointed at a scratch file is not
+evidence that it is.
+
+## 2026-09-16 (third pass) — the invoice PDF: three bugs a text dump reveals
+
+- **A money column narrower than the money.** The first cut used the tenant's
+  column geometry — `x = 495, width = 57` — which is 57pt for a string that
+  measures 59.9pt at 11pt bold, so pdfkit wrapped `R 14 500,00` into
+  `R 14 500,0` / `0`. It surfaced only because the rendered text was read back
+  with `pdftotext -layout`; nothing about the code looked wrong. Fixed at 110pt
+  with `lineBreak: false`, and `moneyColumnFits()` now asserts the fit.
+- **Two offsets that were guesses.** `y += 16` after a description, and
+  `top + 14` for the field under a client name: both are only right for
+  single-line content, so a long description had the total rule drawn through its
+  second line and a long merchant name ran into the email row. Both come from
+  `heightOfString()` now. The general lesson for this builder: every vertical
+  step that follows variable text must be measured.
+- **A footer pinned to the foot of the page** (`Math.max(y, 720)`) left half an
+  A4 blank on a one-line invoice — the judge's geometry scan (ink bands) caught
+  it as a 48%-of-page void with an isolated band near the bottom. Documents flow;
+  they do not need to fill the sheet.
+- **The tenant's PDF-text test trick does not generalise.** Their
+  `labels.test.ts` inflates the content streams and decodes `<hex>` tokens to
+  assert on drawn text. That works for their font setup; with the standard fonts
+  pdfkit writes **literal** strings with kerning numbers interleaved
+  (`[V 60 ula Software 0] TJ`), where a kerning value is indistinguishable from a
+  digit in the content — `[12 Rustenb 20 urg ...]` is the string "12 Rustenburg".
+  A text-scrape assertion built on that would be fiction, so the CP's test asserts
+  the geometry with pdfkit's own metrics (`moneyWidth`, `moneyColumnFits`) and
+  the endpoint contract instead, and the visual check was done by reading the
+  rendered text. Worth knowing before copying their helper into another repo.
+- **A right margin inherited quietly.** The tenant draws to 552pt while setting a
+  48pt margin (both sides), because their content width is `504 = 552 - 48`. The
+  asymmetry is invisible in their code and was in mine, where the money column
+  ended 5pt outside the text box. The CP's document is measured from a single
+  `PAGE_RIGHT = 547`, so nothing can drift off the margin unnoticed.
+- **Nine clients owe onboarding nobody could bill.** Across the live registry,
+  every client except the two mockup ones is `not_invoiced` with a R10 000
+  once-off charge. The panel *showed* it ("Not invoiced yet") and had no action to
+  raise it — an accounting entry that existed as a label. That is the concrete
+  face of "need somewhere to bill it".
+- **Cancelling an invoice left the charge it carried marked as billed.** Watching
+  the owner use the new billing form exposed it: they raised an `initial` invoice
+  for myDiner (recurring + the R10 000 onboarding), cancelled it, and the
+  subscription stayed `invoiced` with nothing due — so the charge could never be
+  raised again, while the invoice that would have collected it no longer existed.
+  A cancelled invoice must release the one-off charge it was the last to carry.
+  Two lessons: a *state* derived from a cancelled document has to be unwound when
+  that document is voided, and the fastest way to find these is to watch a real
+  person drive the feature rather than to re-read your own tests (all 228 were
+  green while the charge was stranded).
+
+## 2026-09-16 (later) — a stub that reports success, and a credential nobody could repair
+
+- **"Invalid control plane token" is always a two-sided credential mismatch, and
+  the CP had no way to fix its side.** The store at `http://ahk-spares-ct.localhost:3278`
+  holds its own `CONTROL_PLANE_TOKEN`; creating the registry row without pasting
+  that value makes the CP generate a different one, so the first push 401s. The
+  API's own advice (in the reveal-once modal) was *"delete this store record and
+  add it again pasting that token instead"* — which throws away the row's history,
+  its licence allocation and its deployment-job references to fix a typo. Repaired
+  in place now (see progress); verified by creating a probe, watching it fail, and
+  watching the same row push successfully after the credential was replaced.
+- **Reproduced before diagnosing, on a throwaway store.** Creating the probe
+  against the real deployment produced the exact string the owner saw
+  (`lastConfigError: "Store POST /api/internal/configure failed: Invalid control
+  plane token"`), which is what turned "probably the token" into a known path.
+  An unassigned store allocates nothing, so this is safe to do against the live
+  fleet (findings, 2026-09-16 earlier entry).
+- **The owner's `:3278` store cannot be added under AHK Spares as the fleet
+  stands.** That client is licensed for 123 terminals with 123 allocated, so
+  `POST /api/stores {companyId: 10}` is refused **402
+  `terminal_allocation_exceeded`** ("AHK Spares is licensed for 123 terminals,
+  with 123 already allocated. This store needs 2."). That refusal is correct — it
+  is a commercial decision, not a bug — but it means the demo client's mockup
+  fleet (41 branches × 3 tills) now exactly fills its licence, and any further
+  branch needs the quantity raised first.
+- **`POST /billing/invoices/:id/email` was a stub that lied, and the UI believed
+  it.** It wrote an `invoice_emailed` audit row, answered `{ ok: true, sentAt }`,
+  and sent nothing; the Billing page toasted "emailed successfully". Nothing in
+  the schema recorded whether an email ever went out, so the lie was
+  unfalsifiable — no `emailed_at`, no failure state. Two of this codebase's
+  recurring defects in one route: fabricated success (§27's warning) and a claim
+  with no evidence behind it.
+- **Three things in this codebase are called "settings".** The tenant's `settings`
+  (per store), `billing_settings` (per client, `company_id`) and the new
+  `office_settings` (the vendor, one row). The singleton is named for the office
+  because `settings` and `billing_settings` were both taken; CONTEXT §5 spells out
+  which is which, since a future reader picking the wrong one would put a
+  merchant's data on the vendor plane.
+- **A form round-trip must not be able to blank a credential.** The tenant masks
+  secrets and treats the mask as "unchanged"; the CP does the same for `smtpPass`.
+  The alternative (echo the real password to the browser so the form can resubmit
+  it) would put a live credential in every page load and in the CSP-permitted
+  script scope for nothing.
+- **Clearing the SMTP host clears the credential with it.** A password kept for a
+  server that is no longer configured is a credential with no owner; the route
+  blanks user/password/from together, and the test asserts the stored row.
+- **Ordering is part of the message.** The first cut of `/settings/test-email`
+  validated the recipient before noticing SMTP was unconfigured, so the operator
+  was told to set an office email when the actual problem was that no mail server
+  existed. Found by clicking the button in the browser — no test asserted the
+  message, only the code.
+- **The mailer is stubbed at the transport, not at our service.** Both suites mock
+  `nodemailer.createTransport` and assert on what the control plane does with a
+  transport (stamp, audit, refuse, report), so the tests cover our behaviour
+  without an SMTP server anywhere in CI.
+- **Two money formatters now exist, deliberately.** `frontend/src/lib/money.ts`
+  renders amounts in the browser; `src/utils/money.ts` renders them in mail the
+  server builds. They cannot share a module across the Vite/tsc build, so the
+  duplication is documented in both files rather than hidden.
+- **Still open, and recorded rather than silently decided:** the per-client
+  `billing_settings.email_invoice` / `auto_renew` flags remain API-only and gate
+  nothing — there is still no automatic send, so `email_invoice` has no behaviour
+  to describe yet. The SMTP password is stored in plaintext like the tenant's
+  (tidbits.md already carries "secrets at rest" encryption as the fix).
+
 ## 2026-09-16 — an action that reports its refusal where nobody is looking
 
 - **"The button does nothing" was a working guard with an invisible message.** The

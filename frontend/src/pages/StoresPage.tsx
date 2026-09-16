@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { api, ApiError } from '../api';
 import ErrorBox from '../components/ErrorBox';
-import Modal from '../components/Modal';
 import Spinner from '../components/Spinner';
 import { NoticeBanner, SummaryTile } from '../components/storeUi';
 import {
@@ -10,6 +9,7 @@ import {
   DiagnosticsModal,
   StoreFormModal,
   SupportModal,
+  TokenRevealModal,
 } from '../components/storeModals';
 import { StoreCard } from '../components/StoreCard';
 import { useStoreActions } from '../hooks/useStoreActions';
@@ -117,8 +117,15 @@ export default function StoresPage() {
       };
       if (modal?.mode === 'edit') {
         if (values.tillNames) body.terminalNames = values.tillNames;
+        // Blank leaves the stored credential alone; the API refuses to clear it.
+        if (values.controlPlaneToken) body.controlPlaneToken = values.controlPlaneToken;
         await api<Store>(`/stores/${modal.store.id}`, { method: 'PUT', body });
-        notify('ok', `${values.name.trim()} updated — changes apply on the next push`);
+        notify(
+          'ok',
+          values.controlPlaneToken
+            ? `${values.name.trim()} updated — push credential replaced, so the next push should authenticate`
+            : `${values.name.trim()} updated — changes apply on the next push`,
+        );
       } else {
         const res = await api<CreateStoreResponse>('/stores', {
           method: 'POST',
@@ -352,45 +359,11 @@ export default function StoresPage() {
       )}
 
       {newToken && (
-        <Modal
-          title={`Control-plane token — ${newToken.storeName}`}
+        <TokenRevealModal
+          storeName={newToken.storeName}
+          token={newToken.token}
           onClose={() => setNewToken(null)}
-        >
-          <div className="space-y-4">
-            <p className="text-sm text-slate-600">
-              The control plane generated this token. It is shown <strong>once</strong> and is never
-              returned again — copy it into the deployment's env as{' '}
-              <code className="rounded bg-slate-100 px-1 font-mono text-xs">
-                CONTROL_PLANE_TOKEN
-              </code>
-              , then restart the store. Until that matches, every push and health check will fail
-              with &ldquo;Invalid control plane token&rdquo;.
-            </p>
-            <div className="rounded-lg bg-slate-900 px-4 py-3 text-center font-mono text-sm tracking-wider text-emerald-300 break-all">
-              {newToken.token}
-            </div>
-            <p className="text-xs text-slate-400">
-              If the deployment already exists with its own token, delete this store record and add
-              it again pasting that token instead.
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() =>
-                  void navigator.clipboard.writeText(newToken.token).catch(() => undefined)
-                }
-                className="rounded-lg px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-100"
-              >
-                Copy
-              </button>
-              <button
-                onClick={() => setNewToken(null)}
-                className="rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-brand-700"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </Modal>
+        />
       )}
 
       {adminPassword && (

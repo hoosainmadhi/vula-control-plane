@@ -2,11 +2,11 @@ import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
 import { StoreCard } from '../components/StoreCard';
-import { AdminPasswordModal, DiagnosticsModal, StoreFormModal, SupportModal } from '../components/storeModals';
+import { AdminPasswordModal, DiagnosticsModal, StoreFormModal, SupportModal, TokenRevealModal } from '../components/storeModals';
 import { NoticeBanner } from '../components/storeUi';
 import { useStoreActions } from '../hooks/useStoreActions';
-import type { ClientDetailResponse, Company, Plan, SetupFeeStatus, Store, StoreFormValues } from '../types';
-import type { Notice } from '../lib/storeVocab';
+import type { ClientDetailResponse, Company, CreateStoreResponse, Plan, SetupFeeStatus, Store, StoreFormValues } from '../types';
+import { SETUP_FEE_LABEL, type Notice } from '../lib/storeVocab';
 import { rand, PERIOD_LABEL, perTerminalLabel } from '../lib/money';
 
 const SETUP_FEE_LABELS: Record<SetupFeeStatus, string> = {
@@ -38,7 +38,7 @@ function SubscriptionQuotePreview({ plan, licensed }: { plan: Plan | undefined; 
         </div>
       )}
       <div className="mt-1 flex justify-between">
-        <span className="text-slate-500">Once-off onboarding</span>
+        <span className="text-slate-500">{SETUP_FEE_LABEL}</span>
         <span className="font-mono font-semibold text-slate-800">
           {plan.setupFeeCents > 0 ? rand(plan.setupFeeCents) : 'None'}
         </span>
@@ -110,7 +110,11 @@ export default function ClientDetailPage() {
   const [addStoreSlug, setAddStoreSlug] = useState('');
   const [addStoreUrl, setAddStoreUrl] = useState('');
   const [addStoreTills, setAddStoreTills] = useState('2');
+  const [addStoreToken, setAddStoreToken] = useState('');
   const [addingStore, setAddingStore] = useState(false);
+  const [billingOnboarding, setBillingOnboarding] = useState(false);
+  /** A token the control plane generated — shown once, right after creation. */
+  const [newToken, setNewToken] = useState<{ storeName: string; token: string } | null>(null);
 
   // Retrying job state
   const [retrying, setRetrying] = useState(false);
@@ -427,8 +431,16 @@ export default function ClientDetailPage() {
         companyId: values.companyId === '' ? null : Number(values.companyId),
       };
       if (values.tillNames) body.terminalNames = values.tillNames;
+      // Blank keeps the stored credential; a value reconciles it with the
+      // deployment (the repair for "Invalid control plane token").
+      if (values.controlPlaneToken) body.controlPlaneToken = values.controlPlaneToken;
       await api(`/stores/${configureStore.id}`, { method: 'PUT', body });
-      notify('ok', `${values.name.trim()} updated — changes apply on the next push`);
+      notify(
+        'ok',
+        values.controlPlaneToken
+          ? `${values.name.trim()} updated — push credential replaced, so the next push should authenticate`
+          : `${values.name.trim()} updated — changes apply on the next push`,
+      );
       setConfigureStore(null);
       await loadData();
     } catch (err) {
@@ -438,13 +450,38 @@ export default function ClientDetailPage() {
     }
   };
 
+  /**
+   * Raises the invoice for a plan's once-off onboarding charge — the one
+   * accounting entry the subscription showed but could not bill. Billing the
+   * `initial` invoice instead would charge the client's current period twice.
+   */
+  const billOnboarding = async (): Promise<void> => {
+    if (!id) return;
+    setBillingOnboarding(true);
+    try {
+      const invoice = await api<{ invoiceNumber: string; amountCents: number }>(
+        '/billing/invoices',
+        { method: 'POST', body: { companyId: Number(id), purpose: 'onboarding' } },
+      );
+      notify(
+        'ok',
+        `Onboarding billed — invoice ${invoice.invoiceNumber} for ${rand(invoice.amountCents)}. It is on the Billing page, ready to email or settle.`,
+      );
+      await loadData();
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Could not bill the onboarding charge');
+    } finally {
+      setBillingOnboarding(false);
+    }
+  };
+
   const handleAddStore = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!id || !addStoreName || !addStoreSlug) return;
     setAddingStore(true);
     setError(null);
     try {
-      await api('/stores', {
+      const res = await api<CreateStoreResponse>('/stores', {
         method: 'POST',
         body: {
           name: addStoreName.trim(),
@@ -456,13 +493,29 @@ export default function ClientDetailPage() {
           licensedTerminalCount: Number(addStoreTills) || 1,
           companyId: Number(id),
           vertical: 'general',
+          ...(addStoreToken ? { controlPlaneToken: addStoreToken } : {}),
         },
       });
       setAddStoreOpen(false);
       setAddStoreName('');
       setAddStoreSlug('');
       setAddStoreUrl('');
-      loadData();
+      setAddStoreToken('');
+      // Report the first push and hand over a generated token. Discarding both
+      // (as this form used to) leaves a store whose generated token nobody ever
+      // saw: every push then fails with "Invalid control plane token" and
+      // nothing on screen explains why.
+      if (res.generatedControlPlaneToken) {
+        setNewToken({ storeName: res.store.name, token: res.generatedControlPlaneToken });
+      } else if (res.firstPush && !res.firstPush.ok) {
+        notify(
+          'error',
+          `${res.store.slug} created, but the first push failed: ${res.firstPush.error ?? 'unknown error'}`,
+        );
+      } else {
+        notify('ok', `${res.store.slug} created — Till 1..${res.store.terminalCount} pushed`);
+      }
+      await loadData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add store');
     } finally {
@@ -608,12 +661,28 @@ export default function ClientDetailPage() {
                         : '—'}
                   </span>
                 </div>
-                <div className="flex justify-between py-2">
-                  <span className="text-slate-500 font-medium">Once-off onboarding:</span>
-                  <span className="font-semibold text-slate-800">
+                <div className="flex items-start justify-between gap-3 py-2">
+                  <span className="text-slate-500 font-medium">{SETUP_FEE_LABEL}:</span>
+                  <span className="text-right font-semibold text-slate-800">
                     {subscription && subscription.setupFeeCents > 0
                       ? `${rand(subscription.setupFeeCents)} · ${SETUP_FEE_LABELS[subscription.setupFeeStatus]}`
                       : 'None'}
+                    {/* The charge is only billable while it is still unbilled; a
+                        client invoiced for a period must not be charged that
+                        period again just to raise its onboarding. */}
+                    {subscription?.setupFeeStatus === 'not_invoiced' &&
+                      subscription.setupFeeCents > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => void billOnboarding()}
+                          disabled={billingOnboarding}
+                          className="mt-1.5 block w-full rounded-lg border border-brand-200 bg-brand-50 px-2.5 py-1 text-[11px] font-bold text-brand-700 hover:bg-brand-100 disabled:opacity-50"
+                        >
+                          {billingOnboarding
+                            ? 'Raising…'
+                            : `Bill ${rand(subscription.setupFeeCents)} onboarding`}
+                        </button>
+                      )}
                   </span>
                 </div>
                 <div className="flex justify-between py-2">
@@ -1173,7 +1242,7 @@ export default function ClientDetailPage() {
               />
 
               <div>
-                <label className="block text-xs font-bold text-slate-700">Once-off onboarding</label>
+                <label className="block text-xs font-bold text-slate-700">{SETUP_FEE_LABEL}</label>
                 <select
                   value={subSetupFeeStatus}
                   onChange={(e) => setSubSetupFeeStatus(e.target.value as SetupFeeStatus)}
@@ -1186,7 +1255,8 @@ export default function ClientDetailPage() {
                   ))}
                 </select>
                 <p className="mt-1 text-[11px] text-slate-400">
-                  The onboarding charge rides the client's first invoice only — never a renewal.
+                  Charged once. Whichever invoice is raised next carries it while it is unbilled —
+                  a renewal included; after that it is never repeated.
                 </p>
               </div>
 
@@ -1361,6 +1431,23 @@ export default function ClientDetailPage() {
                   className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm text-center font-bold"
                 />
               </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700">
+                  Control-plane token <span className="font-normal text-slate-400">(optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={addStoreToken}
+                  onChange={(e) => setAddStoreToken(e.target.value.trim().toLowerCase())}
+                  placeholder="64 hex chars — blank generates one"
+                  className="mt-1 w-full rounded-lg border border-slate-300 p-2 font-mono text-xs"
+                />
+                <p className="mt-1 text-[11px] text-slate-400">
+                  For a deployment that already exists, paste its{' '}
+                  <code className="font-mono">CONTROL_PLANE_TOKEN</code>. Leave blank for a new one
+                  and the control plane shows the generated token once.
+                </p>
+              </div>
               <div className="flex justify-end gap-2 pt-3">
                 <button
                   type="button"
@@ -1431,6 +1518,14 @@ export default function ClientDetailPage() {
       )}
 
       <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />
+
+      {newToken && (
+        <TokenRevealModal
+          storeName={newToken.storeName}
+          token={newToken.token}
+          onClose={() => setNewToken(null)}
+        />
+      )}
 
       {configureStore && (
         <StoreFormModal

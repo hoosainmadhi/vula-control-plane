@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { createApp } from '../app.js';
-import { resetRegistryDb } from '../config/registryDb.js';
+import { getRegistryDb, listAuditLogs, resetRegistryDb } from '../config/registryDb.js';
 import { jsonResponse, loginAsOffice, authHeader, STATUS_OK, RESET_OK } from './helpers.js';
 
 const app = createApp();
@@ -318,6 +318,114 @@ describe('PUT /api/stores/:id — edit', () => {
   it('404s for an unknown store', async () => {
     const res = await request(app).put('/api/stores/9999').set(auth()).send({ name: 'x' });
     expect(res.status).toBe(404);
+  });
+});
+
+/**
+ * The deployment holds its own CONTROL_PLANE_TOKEN, so a store added without
+ * pasting that value can never authenticate — every push answers "Invalid
+ * control plane token". Reconciling used to mean deleting the registry row and
+ * creating it again, which threw away the row's history, licence allocation and
+ * job records; the token is now a field on the edit form.
+ */
+describe('PUT /api/stores/:id — reconciling the push credential', () => {
+  const PARKED = 'be93ce6b32'.padEnd(64, 'a');
+
+  it('replaces the stored token, never returns it, and the next push uses it', async () => {
+    mockConfigureOk();
+    const created = await request(app).post('/api/stores').set(auth()).send(createPayload());
+    const id = (created.body as { store: { id: number } }).store.id;
+    const generated = (created.body as { generatedControlPlaneToken: string })
+      .generatedControlPlaneToken;
+
+    const res = await request(app)
+      .put(`/api/stores/${id}`)
+      .set(auth())
+      .send({ name: 'Gardens Mall', controlPlaneToken: PARKED });
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain(PARKED);
+
+    // The registry holds it; the wire never does.
+    const row = getRegistryDb()
+      .prepare('SELECT control_plane_token FROM stores WHERE id = ?')
+      .get(id) as { control_plane_token: string };
+    expect(row.control_plane_token).toBe(PARKED);
+    expect(row.control_plane_token).not.toBe(generated);
+
+    // And the push now carries the reconciled value. (Creation pushed too, so
+    // take the LAST configure call — the one this push made.)
+    await request(app).post(`/api/stores/${id}/push`).set(auth()).expect(200);
+    const lastConfigure = fetchMock.mock.calls
+      .filter((c) => String(c[0]).endsWith('/api/internal/configure'))
+      .pop();
+    expect(lastConfigure).toBeDefined();
+    expect(
+      (lastConfigure![1] as { headers: Record<string, string> }).headers[
+        'X-Control-Plane-Token'
+      ],
+    ).toBe(PARKED);
+  });
+
+  it('audits the replacement without recording the credential', async () => {
+    mockConfigureOk();
+    const created = await request(app).post('/api/stores').set(auth()).send(createPayload());
+    const id = (created.body as { store: { id: number } }).store.id;
+    await request(app)
+      .put(`/api/stores/${id}`)
+      .set(auth())
+      .send({ controlPlaneToken: PARKED })
+      .expect(200);
+
+    const entry = listAuditLogs(20).find((l) => l.action === 'store_credential_set');
+    expect(entry).toBeDefined();
+    expect(entry!.target_id).toBe(id);
+    expect(`${entry!.before_json}${entry!.after_json}${entry!.reason}`).not.toContain(PARKED);
+  });
+
+  it('refuses to clear the credential, and refuses a malformed one', async () => {
+    mockConfigureOk();
+    const created = await request(app).post('/api/stores').set(auth()).send(createPayload());
+    const id = (created.body as { store: { id: number } }).store.id;
+    const before = getRegistryDb()
+      .prepare('SELECT control_plane_token FROM stores WHERE id = ?')
+      .get(id) as { control_plane_token: string };
+
+    const cleared = await request(app)
+      .put(`/api/stores/${id}`)
+      .set(auth())
+      .send({ controlPlaneToken: '' });
+    expect(cleared.status).toBe(400);
+    expect(cleared.body.error).toMatch(/cannot be cleared/);
+
+    const malformed = await request(app)
+      .put(`/api/stores/${id}`)
+      .set(auth())
+      .send({ controlPlaneToken: 'abc123' });
+    expect(malformed.status).toBe(400);
+
+    const after = getRegistryDb()
+      .prepare('SELECT control_plane_token FROM stores WHERE id = ?')
+      .get(id) as { control_plane_token: string };
+    expect(after.control_plane_token).toBe(before.control_plane_token);
+  });
+
+  it('leaves the credential untouched when the edit does not mention it', async () => {
+    mockConfigureOk();
+    const created = await request(app).post('/api/stores').set(auth()).send(createPayload());
+    const id = (created.body as { store: { id: number } }).store.id;
+    const before = getRegistryDb()
+      .prepare('SELECT control_plane_token FROM stores WHERE id = ?')
+      .get(id) as { control_plane_token: string };
+
+    await request(app)
+      .put(`/api/stores/${id}`)
+      .set(auth())
+      .send({ name: 'Gardens Mall West' })
+      .expect(200);
+    const after = getRegistryDb()
+      .prepare('SELECT control_plane_token FROM stores WHERE id = ?')
+      .get(id) as { control_plane_token: string };
+    expect(after.control_plane_token).toBe(before.control_plane_token);
   });
 });
 

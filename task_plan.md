@@ -16,7 +16,104 @@ CONTEXT.md "Internal API contract").
 
 ## Current Phase
 
-**Subscription model redesign — licensed terminals × rate + once-off onboarding
+**Phase 2d — the invoice's line order and one name for the once-off
+(2026-09-16, complete).** Owner: *"alway have the Vula onboarding and deployment
+first line item when applicable in invoice."* The charge now leads the lines on
+the PDF, the emailed invoice, the Billing detail view and the Raise-an-Invoice
+preview; the label is one constant per side of the build
+(`SETUP_FEE_LINE_LABEL` / `SETUP_FEE_LABEL`), so the client reads the same words
+the office does; and the invoice subject moved out of the amounts table, where it
+looked like an uncharged line and displaced the first real item. Test: the email
+rows are asserted to put the once-off before the recurring line. Tests CP **234
+green (19 suites)**, typecheck, frontend build clean. Doctrine: CONTEXT §5e.
+
+Previous — **Phase 2c — capturing the once-off, and what is *not* chargeable
+(2026-09-16, complete).** Owner: *"when creating an invoice: check if once-off has
+been payed. if not it invoice it"* + *"Allow to bill for support as well"*.
+
+- **The once-off is captured automatically.** It used to ride only on an `initial`
+  invoice — so a client invoiced once before the charge existed kept an unbilled
+  R10 000 forever, which is how nine of eleven live clients got there. Now
+  `initial`, `renewal` (sweep included) and hand-priced invoices all carry it while
+  it is unbilled, itemised as its own line; `includeOnboarding: false` is the
+  one-invoice opt-out; the sweep counts what it captured (`onboardingCharged`); and
+  the create modal shows the line, with the opt-out, before the invoice goes out.
+- **Support is not chargeable — it is in the rate.** The owner's answer to the
+  second half was a pricing decision, not a feature request: support is included
+  per licensed terminal. Recorded as a locked commercial rule in CONTEXT §5e, the
+  glossary, AGENTS.md and tidbits, so "bill for support" does not get invented
+  later.
+
+Status: **complete** — tests CP **233 green (19 suites)**, typecheck, frontend
+`tsc -b` and the production build clean. Phase 3's remainder (invoice numbering,
+the stored VAT split) is unchanged; see tidbits.md.
+
+Previous — **Phase 2b — the invoice as a document, and a home for once-off charges
+(2026-09-16, complete).** Owner follow-ups on the Phase 2 mailer, all about the
+invoice itself:
+
+1. **The email footer said "Sent by the Vula control plane."** "Control plane" is
+   internal vendor vocabulary that a merchant should never read on an invoice.
+   Every mail now signs off with the office's own name.
+2. **A PDF invoice attached to the email.** `services/invoicePdf.ts` (pdfkit, A4,
+   the tenant's document conventions) renders it; the mailer attaches it and
+   `GET /api/billing/invoices/:id/pdf` serves the same document, so the download
+   and the attachment cannot diverge. Three layout defects found by reading the
+   rendered text — a money column narrower than the amount (which split
+   `R 14 500,00` mid-figure), two guessed vertical offsets, and a footer pinned to
+   the foot of the page — are fixed and the money-column fit is asserted in tests.
+3. **Somewhere to bill a once-off charge.** Invoices carry a **`description`**; a
+   hand-priced invoice must state one (400 `invoice_description_required`); the
+   Billing modal asks for it; and the client page can bill the plan's onboarding
+   charge on its own (`purpose: 'onboarding'`, 409 `setup_fee_not_due` when there
+   is none due) rather than re-billing the client's current period via `initial`.
+   Nine live clients owe R10 000 onboarding that had no path to being raised.
+
+Status: **complete** — tests CP **228 green (19 suites)**, backend typecheck,
+frontend `tsc -b` and the production build clean. Doctrine: CONTEXT §5e. What is
+left of Phase 3: invoice numbering and the stored VAT split (see tidbits.md).
+
+Previous — **Control-plane settings & the real mailer — Phase 2 of the SPOG/demo plan
+(2026-09-16, complete).** Owner: *"continue with phase 2"* (the phased plan set
+with the Head Office branch-picker work; Phase 1 = CP → panel store roster and the
+picker, closed 2026-09-16; Phase 3 = invoice numbering, stored VAT split, PDF,
+print CSS). A **settings singleton for the control plane's own identity**, a
+**Settings page**, and a **real SMTP mailer** — because the existing
+`POST /api/billing/invoices/:id/email` is a stub that audits an email, returns
+`ok: true` and `sentAt`, and **sends nothing**: a fabricated success on the
+billing surface, the same shape of defect as the auto-renewal that used to record
+a payment nobody made.
+
+Also carried in this phase, from the same day's owner reports:
+
+- **The store credential has no repair path** — **fixed.** A store added without
+  pasting its deployment's `CONTROL_PLANE_TOKEN` gets a generated one, every push
+  answers `Invalid control plane token`, and nothing could reconcile the two:
+  `PUT /api/stores/:id` did not accept a token, the edit modal had no field for
+  it, and the client page's "Add Store to Fleet" neither accepted nor revealed
+  one (the reveal-once modal existed only on the unlinked `/stores` fleet page).
+  Now: `PUT` accepts `controlPlaneToken` (blank refused, audited without the
+  value, never returned), the edit modal carries the field, and the client page's
+  add form has both the input and the token modal. **Verified against the live
+  store at `:3278`**: create → `Invalid control plane token`, replace the
+  credential → push ok, health up.
+- **"Unable to edit a store" was a vocabulary problem, not a missing feature.**
+  Driving the real UI proved editing works on all three surfaces — the button is
+  called **Configure** (pencil), not "Edit", and `PUT /api/stores/:id` returns
+  200 with the modal's values. The one thing the modal could not change was the
+  push credential, which is the gap the first bullet closes.
+
+Status: **complete** — `office_settings` singleton + `services/officeSettings.ts`
++ `services/mailer.ts` (nodemailer, transport per send) + `routes/settings.ts`
+(`GET/PUT /api/settings`, `POST /api/settings/test-email`) + the Settings page and
+nav entry; the invoice email route now really sends (400 `smtp_not_configured` /
+502 `mailer_failed` / 200 with `emailed_at`+`emailed_to` and an audit row that
+matches the outcome); `invoice_due_days` replaces the hard-coded 14-day term.
+Tests **218 green (18 suites)**; backend typecheck, frontend `tsc -b` and the
+production build clean. Doctrine: CONTEXT §5e. Phase 3 (invoice numbering, VAT
+split, PDF/print CSS) is the next slice; see tidbits.md.
+
+Previous — **Subscription model redesign — licensed terminals × rate + once-off onboarding
 (2026-09-13, complete).** The owner brief
 (`~/Downloads/vula-pos-subscription-redesign-agent-prompt*.md`) sets the commercial
 model: recurring = **licensed terminals × price per terminal**, plus a **once-off
@@ -208,6 +305,12 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       merchant account is **"Client"** everywhere in the UI (PanelsPage's
       46 "Merchant" strings included), Company accounts demoted to an
       advanced page linked from Clients, "Stores" kept as the domain term.
+- [x] **Phase 2 — office settings + the real mailer** (2026-09-16): the
+      `office_settings` singleton, `GET/PUT /api/settings` +
+      `POST /api/settings/test-email`, a Settings page and nav entry, and
+      `services/mailer.ts` replacing the invoice-email stub that reported a
+      success it never performed. Shipped with the store-credential repair path
+      (§5e, and the Current Phase entry above). Tests **218 green (18 suites)**.
 - [x] **Plans: deactivate in the UI** (2026-09-12 — Deactivate/Re-activate
       action + Active/Archived pills; code field read-only in edit mode) and
       the **audit trail** (shipped 2026-09-11, §38).

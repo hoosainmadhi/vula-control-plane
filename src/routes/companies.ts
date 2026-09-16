@@ -46,6 +46,7 @@ import {
 } from '../services/subscriptions.js';
 import { PLAN_FEATURES, validateFeatureKeys } from '../services/features.js';
 import { quoteForSubscription } from '../services/pricing.js';
+import { setupFeeInvoiceFor } from '../services/billing.js';
 import { summariseSubscription } from '../services/terminalLicences.js';
 import { pushLicencesForCompany } from '../services/billing.js';
 
@@ -89,6 +90,10 @@ export interface SubscriptionOut {
   rateCents: number;
   setupFeeCents: number;
   setupFeeStatus: SetupFeeStatus;
+  /** The charge still to be raised (0 once invoiced, paid or waived). */
+  setupFeeDueCents: number;
+  /** The document carrying the charge, when it has been billed (see §40: "ref"). */
+  setupFeeRef: string | null;
   allocations: Array<{ storeId: number; licensedTerminalCount: number }>;
 }
 
@@ -167,6 +172,11 @@ const companyToOut = (company: CompanyRecord): CompanyOut => {
       rateCents: quote.rateCents,
       setupFeeCents: quote.setupFeeCents,
       setupFeeStatus: quote.setupFeeStatus,
+      setupFeeDueCents: quote.setupFeeDueCents,
+      setupFeeRef:
+        quote.setupFeeStatus === 'invoiced'
+          ? (setupFeeInvoiceFor(company.id)?.invoice_number ?? null)
+          : null,
       allocations: summary.allocations,
     },
     createdAt: company.created_at,
@@ -232,15 +242,15 @@ const resolvePlanPricing = (
   const terminalPriceCents =
     body['terminalPriceCents'] !== undefined
       ? moneyCents(body['terminalPriceCents'], 'terminalPriceCents')
-      : existing?.terminal_price_cents ?? 0;
+      : (existing?.terminal_price_cents ?? 0);
   const customAmountCents =
     body['customAmountCents'] !== undefined
       ? moneyCents(body['customAmountCents'], 'customAmountCents')
-      : existing?.custom_amount_cents ?? 0;
+      : (existing?.custom_amount_cents ?? 0);
   const setupFeeCents =
     body['setupFeeCents'] !== undefined
       ? moneyCents(body['setupFeeCents'], 'setupFeeCents')
-      : existing?.setup_fee_cents ?? 0;
+      : (existing?.setup_fee_cents ?? 0);
 
   if (pricingMode === 'per_terminal' && terminalPriceCents <= 0) {
     throw new ValidationError(
@@ -343,7 +353,14 @@ plansRouter.put(
         ? { maxStores: boundedInt(body.maxStores, 'maxStores', 1, 500) }
         : {}),
       ...(body.maxTerminalsPerStore !== undefined
-        ? { maxTerminalsPerStore: boundedInt(body.maxTerminalsPerStore, 'maxTerminalsPerStore', 1, 99) }
+        ? {
+            maxTerminalsPerStore: boundedInt(
+              body.maxTerminalsPerStore,
+              'maxTerminalsPerStore',
+              1,
+              99,
+            ),
+          }
         : {}),
       ...(rawFeatures !== undefined ? { features: validateFeatureKeys(rawFeatures) } : {}),
       ...pricing,
@@ -532,7 +549,9 @@ companiesRouter.put(
     const setupFeeStatusRaw = body.setupFeeStatus;
     if (setupFeeStatusRaw !== undefined) {
       if (!SETUP_FEE_STATUSES.includes(setupFeeStatusRaw as SetupFeeStatus)) {
-        throw new ValidationError(`setupFeeStatus must be one of: ${SETUP_FEE_STATUSES.join(', ')}`);
+        throw new ValidationError(
+          `setupFeeStatus must be one of: ${SETUP_FEE_STATUSES.join(', ')}`,
+        );
       }
       setSetupFeeStatus(company.id, setupFeeStatusRaw as SetupFeeStatus);
     }

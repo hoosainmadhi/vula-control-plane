@@ -15,6 +15,7 @@ import ErrorsPage from './pages/ErrorsPage';
 import DevicesPage from './pages/DevicesPage';
 import VersionsPage from './pages/VersionsPage';
 import DeploymentsPage from './pages/DeploymentsPage';
+import SettingsPage from './pages/SettingsPage';
 
 function RequireOffice({ children }: { children: ReactNode }) {
   if (!getToken()) return <Navigate to="/login" replace />;
@@ -141,6 +142,16 @@ export default function App() {
           <RequireOffice>
             <Layout title="Deployments">
               <DeploymentsPage />
+            </Layout>
+          </RequireOffice>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <RequireOffice>
+            <Layout title="Settings">
+              <SettingsPage />
             </Layout>
           </RequireOffice>
         }

@@ -150,10 +150,17 @@ CREATE TABLE IF NOT EXISTS invoices (
   terminal_count       INTEGER,
   terminal_price_cents INTEGER,
   setup_fee_cents      INTEGER,
+  -- What the charge is for. Required on a hand-priced invoice, and derived from
+  -- the subscription when the control plane computes the amount.
+  description          TEXT,
   status               TEXT    NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'paid', 'overdue', 'cancelled')),
   due_date             TEXT,
   paid_date            TEXT,
+  -- Written only after the mail server accepted the message, so the stamp means
+  -- "sent" rather than "attempted".
+  emailed_at           TEXT,
+  emailed_to           TEXT,
   created_at           TEXT    NOT NULL DEFAULT (datetime('now')),
   updated_at           TEXT    NOT NULL DEFAULT (datetime('now'))
 );
@@ -180,6 +187,27 @@ CREATE TABLE IF NOT EXISTS billing_settings (
   email_invoice     INTEGER NOT NULL DEFAULT 1,
   invoice_email     TEXT,
   created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- The control plane's OWN settings: the vendor's identity and the SMTP account
+-- it mails clients from. A true singleton (CHECK id = 1), seeded on first boot.
+-- Distinct from billing_settings above (per client) and from the tenant's
+-- per-store settings: no merchant's data belongs here.
+CREATE TABLE IF NOT EXISTS office_settings (
+  id                INTEGER PRIMARY KEY CHECK (id = 1),
+  office_name       TEXT    NOT NULL DEFAULT 'Vula',
+  office_email      TEXT    NOT NULL DEFAULT '',
+  office_phone      TEXT    NOT NULL DEFAULT '',
+  office_address    TEXT    NOT NULL DEFAULT '',
+  invoice_due_days  INTEGER NOT NULL DEFAULT 14
+    CHECK (invoice_due_days BETWEEN 1 AND 180),
+  invoice_footer    TEXT    NOT NULL DEFAULT '',
+  smtp_host         TEXT    NOT NULL DEFAULT '',
+  smtp_port         INTEGER NOT NULL DEFAULT 587,
+  smtp_user         TEXT    NOT NULL DEFAULT '',
+  smtp_pass         TEXT    NOT NULL DEFAULT '',
+  smtp_from         TEXT    NOT NULL DEFAULT '',
   updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 

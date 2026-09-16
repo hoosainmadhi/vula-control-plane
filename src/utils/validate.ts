@@ -129,3 +129,10 @@ export const parseIdParam = (raw: string): number => {
   if (!Number.isInteger(id) || id <= 0) throw new ValidationError('Invalid store id');
   return id;
 };
+
+/** Reads an optional boolean: absent → undefined. Accepts true/false only. */
+export const optionalBool = (body: unknown, key: string): boolean | undefined => {
+  if (!isRecord(body) || body[key] === undefined || body[key] === null) return undefined;
+  if (typeof body[key] !== 'boolean') throw new ValidationError(`${key} must be true or false`);
+  return body[key] as boolean;
+};

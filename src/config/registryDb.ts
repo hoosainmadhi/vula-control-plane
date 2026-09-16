@@ -143,10 +143,13 @@ const INVOICES_DDL = `
     terminal_count       INTEGER,
     terminal_price_cents INTEGER,
     setup_fee_cents      INTEGER,
+    description          TEXT,
     status               TEXT    NOT NULL DEFAULT 'pending'
       CHECK (status IN ('pending', 'paid', 'overdue', 'cancelled')),
     due_date             TEXT,
     paid_date            TEXT,
+    emailed_at           TEXT,
+    emailed_to           TEXT,
     created_at           TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at           TEXT NOT NULL DEFAULT (datetime('now'))
   )`;
@@ -179,6 +182,32 @@ const BILLING_SETTINGS_DDL = `
 /** Columns carried across the billing_settings singleton→per-company rebuild. */
 const BILLING_SETTINGS_COLUMNS =
   'company_id, auto_renew, email_invoice, invoice_email, created_at, updated_at';
+
+/**
+ * The control plane's OWN settings — the vendor's identity and the mailer it
+ * sends from. Distinct from `billing_settings` (per client) and from the
+ * tenant's per-store `settings`: nothing a merchant owns lives here.
+ *
+ * A real singleton (`CHECK (id = 1)`), so "the settings row" is a fact of the
+ * schema rather than a convention the code has to keep.
+ */
+const OFFICE_SETTINGS_DDL = `
+  CREATE TABLE IF NOT EXISTS office_settings (
+    id                INTEGER PRIMARY KEY CHECK (id = 1),
+    office_name       TEXT    NOT NULL DEFAULT 'Vula',
+    office_email      TEXT    NOT NULL DEFAULT '',
+    office_phone      TEXT    NOT NULL DEFAULT '',
+    office_address    TEXT    NOT NULL DEFAULT '',
+    invoice_due_days  INTEGER NOT NULL DEFAULT 14
+      CHECK (invoice_due_days BETWEEN 1 AND 180),
+    invoice_footer    TEXT    NOT NULL DEFAULT '',
+    smtp_host         TEXT    NOT NULL DEFAULT '',
+    smtp_port         INTEGER NOT NULL DEFAULT 587,
+    smtp_user         TEXT    NOT NULL DEFAULT '',
+    smtp_pass         TEXT    NOT NULL DEFAULT '',
+    smtp_from         TEXT    NOT NULL DEFAULT '',
+    updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+  )`;
 
 const DEPLOYMENT_JOBS_DDL = `
   CREATE TABLE IF NOT EXISTS deployment_jobs (
@@ -533,6 +562,10 @@ export const getRegistryDb = (): Database.Database => {
   db.exec(INVOICES_DDL);
   db.exec(PAYMENTS_DDL);
   db.exec(BILLING_SETTINGS_DDL);
+  db.exec(OFFICE_SETTINGS_DDL);
+  // The singleton exists from the first boot, so every reader gets a row with
+  // the defaults rather than having to invent one.
+  db.exec('INSERT OR IGNORE INTO office_settings (id) VALUES (1)');
   db.exec(DEPLOYMENT_JOBS_DDL);
   db.exec(DEPLOYMENT_JOB_STEPS_DDL);
   db.exec(AUDIT_LOGS_DDL);
@@ -603,6 +636,18 @@ export const getRegistryDb = (): Database.Database => {
   if (!stepCols.some((c) => c.name === 'warnings_json')) {
     db.exec('ALTER TABLE deployment_job_steps ADD COLUMN warnings_json TEXT');
   }
+
+  // Recording that an invoice was emailed, so the Billing page can show it and a
+  // resend is a deliberate act rather than an accident.
+  const invoiceCols = db.prepare('PRAGMA table_info(invoices)').all() as Array<{ name: string }>;
+  const addInvoiceColumn = (name: string, ddl: string) => {
+    if (!invoiceCols.some((c) => c.name === name)) db.exec(`ALTER TABLE invoices ADD COLUMN ${ddl}`);
+  };
+  addInvoiceColumn('emailed_at', 'emailed_at TEXT');
+  addInvoiceColumn('emailed_to', 'emailed_to TEXT');
+  // What the charge is for — required on a manually-priced invoice, so a client
+  // is never sent a bare "amount due".
+  addInvoiceColumn('description', 'description TEXT');
 
   migratePlanCustomAmount(db);
   restructurePlans(db);
@@ -1080,6 +1125,11 @@ export interface UpdateStoreInput {
   environment?: StoreEnvironment;
   /** Custom per-till names; null reverts to "Till N" defaults. */
   terminalNames?: string[] | null;
+  /**
+   * Replaces the store's push credential. Only for reconciling a store whose
+   * deployment holds a different value — it is never read back out.
+   */
+  controlPlaneToken?: string;
 }
 
 /** Absent = keep. */
@@ -1094,6 +1144,7 @@ export const updateStore = (id: number, input: UpdateStoreInput): StoreRecord | 
        terminal_count = COALESCE(?, terminal_count),
        base_url = COALESCE(?, base_url),
        environment = COALESCE(?, environment),
+       control_plane_token = COALESCE(?, control_plane_token),
        terminal_names_json = ?,
        updated_at = datetime('now')
      WHERE id = ?`,
@@ -1103,6 +1154,7 @@ export const updateStore = (id: number, input: UpdateStoreInput): StoreRecord | 
     input.terminalCount ?? null,
     input.baseUrl ?? null,
     input.environment ?? null,
+    input.controlPlaneToken ?? null,
     input.terminalNames === undefined
       ? current.terminal_names_json
       : input.terminalNames === null
@@ -1501,9 +1553,14 @@ export interface InvoiceRecord {
   terminal_price_cents: number | null;
   /** Once-off onboarding charge, when this invoice carried it. Never on renewals. */
   setup_fee_cents: number | null;
+  /** What the charge is for. Required on a manually-priced invoice. */
+  description: string | null;
   status: 'pending' | 'paid' | 'overdue' | 'cancelled';
   due_date: string | null;
   paid_date: string | null;
+  /** When the invoice was last emailed, and to whom. Null until it is sent. */
+  emailed_at: string | null;
+  emailed_to: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1948,6 +2005,8 @@ export interface InvoiceLines {
   terminalCount?: number | null;
   terminalPriceCents?: number | null;
   setupFeeCents?: number | null;
+  /** Human-readable label for the charge; see `createInvoiceForCompany`. */
+  description?: string | null;
 }
 
 export const createInvoice = (
@@ -1961,8 +2020,8 @@ export const createInvoice = (
   const info = db
     .prepare(
       `INSERT INTO invoices (company_id, invoice_number, amount_cents, due_date, status,
-                             terminal_count, terminal_price_cents, setup_fee_cents)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)`,
+                             terminal_count, terminal_price_cents, setup_fee_cents, description)
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
     )
     .run(
       companyId,
@@ -1972,6 +2031,7 @@ export const createInvoice = (
       lines?.terminalCount ?? null,
       lines?.terminalPriceCents ?? null,
       lines?.setupFeeCents ?? null,
+      lines?.description ?? null,
     );
   return getInvoiceById(Number(info.lastInsertRowid))!;
 };
@@ -2004,6 +2064,22 @@ export const updateInvoice = (
     .prepare(`UPDATE invoices SET ${updatesList.join(', ')}, updated_at = datetime('now') WHERE id = ?`)
     .run(...values);
 
+  return getInvoiceById(id);
+};
+
+/**
+ * Records that the invoice was emailed. Written only after the mail server
+ * accepted the message, so the stamp means "sent", never "attempted".
+ */
+export const recordInvoiceEmail = (id: number, recipient: string): InvoiceRecord | null => {
+  if (!getInvoiceById(id)) return null;
+  getRegistryDb()
+    .prepare(
+      `UPDATE invoices
+          SET emailed_at = datetime('now'), emailed_to = ?, updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+    .run(recipient, id);
   return getInvoiceById(id);
 };
 
@@ -2101,6 +2177,58 @@ export const upsertBillingSettings = (
   ).run(companyId, autoRenew, emailInvoice, invoiceEmail);
 
   return getBillingSettings(companyId)!;
+};
+
+// --- Office settings (the control plane's own identity & mailer) ---------------
+
+export interface OfficeSettingsRecord {
+  id: number;
+  office_name: string;
+  office_email: string;
+  office_phone: string;
+  office_address: string;
+  invoice_due_days: number;
+  invoice_footer: string;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_user: string;
+  smtp_pass: string;
+  smtp_from: string;
+  updated_at: string;
+}
+
+/** The singleton. Created on first boot, so this always returns a row. */
+export const getOfficeSettings = (): OfficeSettingsRecord =>
+  getRegistryDb().prepare('SELECT * FROM office_settings WHERE id = 1').get() as OfficeSettingsRecord;
+
+export const updateOfficeSettings = (
+  patch: Partial<Omit<OfficeSettingsRecord, 'id' | 'updated_at'>>,
+): OfficeSettingsRecord => {
+  const current = getOfficeSettings();
+  const next = { ...current, ...patch };
+  getRegistryDb()
+    .prepare(
+      `UPDATE office_settings
+          SET office_name = ?, office_email = ?, office_phone = ?, office_address = ?,
+              invoice_due_days = ?, invoice_footer = ?,
+              smtp_host = ?, smtp_port = ?, smtp_user = ?, smtp_pass = ?, smtp_from = ?,
+              updated_at = datetime('now')
+        WHERE id = 1`,
+    )
+    .run(
+      next.office_name,
+      next.office_email,
+      next.office_phone,
+      next.office_address,
+      next.invoice_due_days,
+      next.invoice_footer,
+      next.smtp_host,
+      next.smtp_port,
+      next.smtp_user,
+      next.smtp_pass,
+      next.smtp_from,
+    );
+  return getOfficeSettings();
 };
 
 // --- Deployment Jobs & Steps (§11, §27) ---------------------------------------

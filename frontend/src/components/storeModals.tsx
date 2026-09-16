@@ -239,7 +239,28 @@ export function StoreFormModal({ modal, saving, error, companies, onClose, onSub
             />
             <p className="mt-1 text-xs text-slate-400">
               Must match the CONTROL_PLANE_TOKEN env on the store's container. Blank = the control
-              plane generates one.
+              plane generates one and shows it once.
+            </p>
+          </div>
+        )}
+        {editing && (
+          <div className="space-y-1 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+            <label className={labelCls}>
+              Control-plane token <span className="font-normal text-slate-400">(optional)</span>
+            </label>
+            <input
+              value={form.controlPlaneToken}
+              onChange={(e) =>
+                setForm({ ...form, controlPlaneToken: e.target.value.trim().toLowerCase() })
+              }
+              className={`${inputCls} font-mono text-xs`}
+              placeholder="Blank — keep the token already on record"
+            />
+            <p className="text-[11px] text-slate-500">
+              Only needed to reconcile a store that answers{' '}
+              <span className="font-semibold">&ldquo;Invalid control plane token&rdquo;</span>: paste
+              the <code className="font-mono">CONTROL_PLANE_TOKEN</code> from the deployment's env
+              and save. It is stored for pushes and never displayed again.
             </p>
           </div>
         )}
@@ -295,6 +316,65 @@ export function AdminPasswordModal({ storeName, tempPassword, note, onClose }: A
         <div className="flex justify-end gap-2">
           <button
             onClick={copy}
+            className="rounded-lg px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-100"
+          >
+            Copy
+          </button>
+          <button
+            onClick={onClose}
+            className="rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-brand-700"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// --- One-time control-plane token --------------------------------------------
+
+export interface TokenRevealModalProps {
+  storeName: string;
+  token: string;
+  onClose: () => void;
+}
+
+/**
+ * Shown once, right after the control plane mints a push credential. Both create
+ * surfaces use it — the fleet page and the client's Stores tab — because a token
+ * that is generated and never displayed leaves a store that can never
+ * authenticate, which is exactly what "Invalid control plane token" means.
+ */
+export function TokenRevealModal({ storeName, token, onClose }: TokenRevealModalProps) {
+  const copy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(token);
+    } catch {
+      // Clipboard unavailable; the token is selectable in the box.
+    }
+  };
+  return (
+    <Modal title={`Control-plane token — ${storeName}`} onClose={onClose}>
+      <div className="space-y-4">
+        <p className="text-sm text-slate-600">
+          The control plane generated this token. It is shown <strong>once</strong> and is never
+          returned again — copy it into the deployment's env as{' '}
+          <code className="rounded bg-slate-100 px-1 font-mono text-xs">CONTROL_PLANE_TOKEN</code>,
+          then restart the store. Until that matches, every push and health check will fail with
+          &ldquo;Invalid control plane token&rdquo;.
+        </p>
+        <div className="rounded-lg bg-slate-900 px-4 py-3 text-center font-mono text-sm tracking-wider text-emerald-300 break-all">
+          {token}
+        </div>
+        <p className="text-xs text-slate-400">
+          If the deployment already holds a token of its own, open <strong>Configure</strong> on the
+          store and paste that value into the control-plane token field instead — the store keeps
+          its record, its history and its allocated terminals.
+        </p>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={() => void copy()}
             className="rounded-lg px-4 py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-100"
           >
             Copy

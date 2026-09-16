@@ -590,6 +590,7 @@ storesRouter.put(
       baseUrl?: string;
       environment?: StoreEnvironment;
       terminalNames?: string[] | null;
+      controlPlaneToken?: string;
     } = {};
     const body = req.body as Record<string, unknown>;
     if (body['name'] !== undefined) input.name = requireString(body, 'name');
@@ -597,6 +598,23 @@ storesRouter.put(
     if (body['terminalCount'] !== undefined) input.terminalCount = requireTerminalCount(body);
     if (body['baseUrl'] !== undefined) input.baseUrl = requireBaseUrl(body);
     if (body['environment'] !== undefined) input.environment = optionalEnvironment(body);
+    // Reconciling a store whose deployment already holds a token of its own —
+    // the repair for "Invalid control plane token". Never returned anywhere, and
+    // never read back: the operator pastes what the container's env holds.
+    let credentialReplaced = false;
+    if (body['controlPlaneToken'] !== undefined) {
+      const supplied = optionalString(body, 'controlPlaneToken', 64);
+      if (!supplied) {
+        throw new ValidationError(
+          'controlPlaneToken must be the 64 lowercase hex characters the deployment carries — it cannot be cleared',
+        );
+      }
+      if (!/^[0-9a-f]{64}$/.test(supplied)) {
+        throw new ValidationError('controlPlaneToken must be 64 lowercase hex characters');
+      }
+      input.controlPlaneToken = supplied;
+      credentialReplaced = true;
+    }
     if (body['terminalNames'] !== undefined) {
       if (body['terminalNames'] === null) {
         input.terminalNames = null;
@@ -691,6 +709,14 @@ storesRouter.put(
       allocateTerminals(reassign.company, store.id, reassign.count);
     }
     const updated = updateStore(store.id, input) ?? store;
+    if (credentialReplaced) {
+      // Audited, but never with the value: the audit trail must not become a
+      // second copy of a push credential.
+      recordAuditLog('office', 'store_credential_set', 'store', store.id, {
+        after: { controlPlaneToken: 'replaced' },
+        reason: "Push credential replaced with the value from the store's own deployment",
+      });
+    }
     res.json(storeToOut(updated));
   }),
 );

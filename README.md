@@ -7,11 +7,13 @@ and can reset a store's admin password. House control-plane pattern (see
 `~/apps/common-files/CONTROL-PLANE-SPEC.md`; reference implementation
 `~/apps/optimed-control-plane`).
 
-**Scope:** the fleet registry, terminal provisioning, and **subscription
-licensing**. Concretely:
+**Scope:** the fleet registry, terminal provisioning, **subscription licensing**
+and **billing**. Concretely:
 
 - **Stores** — register a deployment, push `Till 1..N`, health-check it, reset its
-  admin password, and tear it down (pause-first).
+  admin password, and tear it down (pause-first). A store's push credential can be
+  reconciled in place — the "Invalid control plane token" repair — without deleting
+  its row and losing its history.
 - **Companies** — the merchant account, and the unit of billing. It owns its branch
   stores *and* its Head Office, and holds the plan and the paid-up-to date.
 - **Plans** — a store-count cap, a per-store terminal ceiling, a feature set, and a
@@ -21,9 +23,18 @@ licensing**. Concretely:
   licences it and never reads inside it. See the privacy boundary in `CONTEXT.md` §2a.
 - **Licences** — the control plane signs them (ES256/P-256) and stores or panels
   verify with the public key. Entitlement is real, and works offline.
+- **Billing** — invoices raised from the subscription (`licensed terminals × rate`),
+  the once-off **Vula onboarding and deployment** charge captured on whichever
+  invoice is raised next while it is unbilled, hand-priced once-off charges,
+  settlement, and a renewal sweep that never settles anything by itself. Every
+  invoice is an A4 PDF, attached when it is emailed to the client.
+- **Office settings** — the vendor's own identity, the payment terms its invoices
+  carry, and the SMTP account (with a send-a-test action). Configured **in the app**,
+  not in env; the SMTP password is stored and never returned.
+- **Fleet observability** — the grouped error feed, devices, build versions and
+  deployment history. Technical metadata only: no trading data crosses this surface.
 
-Billing *recording* (invoices/payments) is not built — `paid_through` is set by hand
-today. The store side of the internal API (`/api/internal/*`, guarded by a per-store
+The store side of the internal API (`/api/internal/*`, guarded by a per-store
 `CONTROL_PLANE_TOKEN`) follows the contract in `CONTEXT.md` §4 and ships in za-pos;
 `scripts/dev-store-stub.ts` remains a dev stand-in.
 
@@ -37,8 +48,9 @@ two names ending in CP is what makes them confusable.
 
 Node 22 + Express 4 + better-sqlite3 (registry DB `data/control-plane.db`,
 WAL) · TypeScript strict ESM · React 19 + Vite 8 + Tailwind v4 (CSS-first) ·
-jest + ts-jest + supertest. Local ports **3240 (API) / 3241 (frontend dev)**
-— block 3240–3249 in the house port registry.
+**nodemailer** (invoice + test mail) · **pdfkit** (the invoice PDF — pure JS, no
+headless browser in the image) · jest + ts-jest + supertest. Local ports **3240
+(API) / 3241 (frontend dev)** — block 3240–3249 in the house port registry.
 
 ## Quick start
 
@@ -82,16 +94,27 @@ bash scripts/smoke-test.sh   # login → create store vs stub → push → healt
 | `STORE_REQUEST_TIMEOUT_MS` | 5000                      | Per-call timeout against stores                      |
 | `LOG_LEVEL`                | info                      | debug/info/warn/error                                |
 
+Mail, invoice terms and the office's identity are **not** env — they are the
+`office_settings` singleton, edited on the Settings page (SMTP password included,
+masked on read). The only mail-related decision left to env is none at all: a
+deployment with no SMTP configured refuses to email an invoice rather than
+pretending it sent one.
+
 ## API (see `AGENTS.md` for the full table)
 
 `POST /api/auth/login` (office, rate-limited) · `GET|POST /api/stores`
 (create with an optional `controlPlaneToken` matching the store's env — blank
 generates one — then attempts a first push) · `GET|PUT /api/stores/:id`
-(detail incl. terminal preview; PUT never auto-pushes) · `PATCH
+(detail incl. terminal preview; PUT never auto-pushes, and accepts a new
+`controlPlaneToken` to reconcile a deployment that holds its own) · `PATCH
 /api/stores/:id/pause|resume` · `POST /api/stores/:id/push|health|reset-admin`
 (reset-admin returns a one-time temp password the store generated; it is
-never stored). Errors are always `{ error }`. The per-store
-`control_plane_token` never leaves the server.
+never stored) · `GET|POST /api/billing/invoices`, `POST
+/api/billing/invoices/:id/pay|cancel|email`, `GET /api/billing/invoices/:id/pdf` ·
+`GET|PUT /api/settings` + `POST /api/settings/test-email` · `GET
+/api/errors|devices|versions|deployments`. Errors are always `{ error }` with a
+machine-readable `code` where the caller can act on it. Neither the per-store
+`control_plane_token` nor the SMTP password ever leaves the server.
 
 ## Testing
 
@@ -103,7 +126,9 @@ calls mocked via `jest.spyOn(globalThis, 'fetch')`. Tests live in
 
 Deploy the control plane itself on Coolify: build pack **Dockerfile**, set
 `CP_DB_PATH=/data/control-plane.db` with a persistent volume at `/data`, and
-the office/JWT env vars. Deploying a **store** (with its
+the office/JWT env vars. After the first boot, sign in and set the office
+identity and SMTP account on **Settings** (and send the test email) — invoices
+cannot be emailed until that is done. Deploying a **store** (with its
 `CONTROL_PLANE_TOKEN`) and onboarding it here is a manual runbook — see
 [`prompts/deploy-coolify-control-plane.md`](prompts/deploy-coolify-control-plane.md).
 

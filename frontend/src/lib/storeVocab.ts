@@ -71,6 +71,14 @@ export const CONFIG_STATE_LABELS: Record<ConfigState, string> = {
   unknown: 'Unknown',
 };
 
+/**
+ * The once-off charge's invoice line, mirroring `SETUP_FEE_LINE_LABEL` in the
+ * server's `services/billing.ts`. The two cannot share a module across the
+ * build, so the wording is kept identical by hand — the client must read the
+ * same words in the preview as on the document it receives.
+ */
+export const SETUP_FEE_LABEL = 'Vula onboarding and deployment';
+
 export const CONFIG_STATE_COLORS: Record<ConfigState, string> = {
   current: 'bg-green-50 text-green-700 border-green-200',
   pending: 'bg-amber-50 text-amber-700 border-amber-200',

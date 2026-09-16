@@ -2,6 +2,68 @@
 
 > Prioritised for the next workspace. ~~Struck~~ items are done.
 
+## Settled — do not build (2026-09-16)
+
+- **Support is not billed separately.** The per-terminal rate includes support
+  (owner, 2026-09-16). No support line, tier, charge type or toggle — if it comes
+  up again, the answer is in CONTEXT §5e and AGENTS.md's locked-rules section.
+  Related ideas that are consequently *not* backlog: support retainers, per-branch
+  support fees, support call-out charges.
+
+## Deferred from the invoice-document pass (2026-09-16)
+
+- **Phase 3 is now down to two items:** invoice numbering (a monotonic
+  `VULA-2026-000001` sequence rather than date + random 4 digits, where a UNIQUE
+  collision surfaces as a raw DB error) and the **stored VAT split** (subtotal /
+  VAT / total plus the seller's VAT number — decide incl./excl. first, and it must
+  stay the *vendor's* VAT, never a merchant's). ~~PDF~~ shipped 2026-09-16.
+- **Print CSS.** The Billing page's "Print" uses the browser's default print of
+  the SPA modal; a proper `@media print` sheet (or just pointing Print at the PDF)
+  would drop the buttons, nav and grey overlay from a printed invoice. The PDF is
+  now the better answer for anything a client sees, so this is cosmetic.
+- **Nine clients have a R10 000 onboarding charge nobody has billed.** Every
+  client except AHK Spares and Street Gym is `not_invoiced`. As of the fourth pass
+  this no longer needs a decision per client: whichever invoice is raised next for
+  each of them carries it (the renewal sweep included), and the modal shows the
+  line before it goes out.
+- **The invoice PDF has no logo and no VAT number line.** Both wait on a real
+  decision (a vendor logo file, and the VAT treatment above), so the document
+  shows identity and arithmetic only.
+- **Attachments are generated per send.** A 2–3KB PDF built on each email is
+  fine; if invoices ever carry many line items or a logo, caching by invoice id
+  would be worth it.
+- **`invoicePdf.ts` measures with the standard Helvetica metrics.** If a branded
+  TTF is ever embedded, `moneyColumnFits()` must measure that font instead — it
+  takes the font name and size as arguments for exactly that reason.
+
+## Deferred from the settings/mailer phase (2026-09-16)
+
+- **Phase 3 of the plan is queued:** invoice numbering (a monotonic
+  `VULA-2026-000001` sequence instead of date + random 4 digits), the stored
+  VAT split (subtotal / VAT / total on the invoice), and a PDF + print CSS.
+  **The PDF shipped 2026-09-16** (`services/invoicePdf.ts`, attached to the mail
+  and downloadable from Billing); what remains is numbering, VAT and print CSS.
+- **`billing_settings.email_invoice` / `auto_renew` gate nothing.** They are
+  settable over the API and read by nothing — there is no automatic send and
+  the sweep only *creates* renewal invoices. Either give them a behaviour
+  (auto-email a raised invoice; auto-renew on the sweep) or drop them before an
+  operator believes they are configured.
+- **The SMTP password is stored in plaintext.** Same posture as the tenant's
+  mailer and recorded under "Deployment secrets at rest" below; the mailer is
+  the second credential this app stores, alongside the per-store tokens that
+  belong to the same AES-256-GCM task.
+- **Nothing emails the office when something breaks.** The Errors feed (§30)
+  records failures but no one is told; with SMTP configured, a daily digest or
+  an alert on a new fingerprint is the obvious next use of the mailer — and it
+  needs a decision about who receives it first.
+- **A failed test email is not audited.** Success is (`settings_test_email`);
+  a failure is only on screen. Deliberate for now — a setup mistake is not a
+  privileged action worth a row — but it means "we tried and it failed" is not
+  answerable from the trail, unlike the client-facing invoice send.
+- **The Settings page has no "send a copy to myself" or address verification.**
+  The test email is the only proof a credential works, and it needs a save
+  first (the UI says so).
+
 ## Production deployment — close before cutover (2026-09-14)
 
 From the review behind `za-pos/prompts/deploy-production-vula-app.md` §10.

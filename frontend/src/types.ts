@@ -4,13 +4,7 @@ export type StoreStatus = 'active' | 'paused';
 export type ConfigStatus = 'pending' | 'ok' | 'failed';
 export type HealthStatus = 'up' | 'down' | 'unknown';
 export type StoreVertical =
-  | 'general'
-  | 'clothing'
-  | 'spares'
-  | 'hardware'
-  | 'pharmacy'
-  | 'restaurant'
-  | 'custom';
+  'general' | 'clothing' | 'spares' | 'hardware' | 'pharmacy' | 'restaurant' | 'custom';
 
 export type PlanPeriod = 'monthly' | 'annual' | 'once-off';
 
@@ -54,6 +48,10 @@ export interface Subscription {
   rateCents: number;
   setupFeeCents: number;
   setupFeeStatus: SetupFeeStatus;
+  /** The once-off charge still to be raised (0 once invoiced, paid or waived). */
+  setupFeeDueCents: number;
+  /** The document carrying it, when it has been billed (e.g. INV-20260916-1553). */
+  setupFeeRef: string | null;
   allocations: Array<{ storeId: number; licensedTerminalCount: number }>;
 }
 
@@ -269,10 +267,34 @@ export interface Invoice {
   terminalPriceCents: number | null;
   /** Once-off onboarding charge when this invoice carried it. */
   setupFeeCents: number | null;
+  /** What the charge is for — required on a hand-priced invoice. */
+  description: string | null;
   status: 'pending' | 'paid' | 'overdue' | 'cancelled';
   dueDate: string | null;
   paidDate: string | null;
+  /** When the invoice was last emailed to the client (null = never sent). */
+  emailedAt: string | null;
+  emailedTo: string | null;
   createdAt: string;
+  updatedAt: string;
+}
+
+/** The control plane's own settings — office identity and the mailer. */
+export interface OfficeSettings {
+  officeName: string;
+  officeEmail: string;
+  officePhone: string;
+  officeAddress: string;
+  /** Payment terms applied to newly raised invoices. */
+  invoiceDueDays: number;
+  invoiceFooter: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpUser: string;
+  /** Always the mask on read; sending it back leaves the stored password alone. */
+  smtpPass: string;
+  smtpFrom: string;
+  smtpConfigured: boolean;
   updatedAt: string;
 }
 
@@ -380,6 +402,8 @@ export interface ClientSubscriptionDetail {
   setupFeeCents: number;
   setupFeeStatus: SetupFeeStatus;
   setupFeeDueCents: number;
+  /** The document carrying the charge, when it has been billed. */
+  setupFeeRef: string | null;
   note: string;
   allocations: Array<{
     storeId: number;

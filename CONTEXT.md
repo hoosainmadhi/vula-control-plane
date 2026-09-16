@@ -18,7 +18,6 @@ implementation `~/apps/optimed-control-plane`. Vocabulary here is _store_
 (not practice/tenant), auth is the single **office admin** (not platform).
 
 ## 2. Domain glossary
-
 | Term                | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | store               | One fleet member: a deployed Vula instance with its own DB, reachable at its `base_url`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -60,7 +59,9 @@ control plane is what makes the two confusable in conversation. Do not write
   `store_terminal_licences` row per store saying where those licences sit.
   **Billing** is the arithmetic: `licensed terminals × rate`, plus the once-off
   onboarding charge on the first invoice. Only the first is editable as a
-  catalogue; the others are per-customer facts.
+  catalogue; the others are per-customer facts. **The rate covers support** — the
+  owner decided (2026-09-16) that support is included per terminal, so there is no
+  support line, tier or charge type. See §5e before adding one.
 - **A plan grants** a store-count cap, a per-store terminal ceiling, a feature set,
   and its pricing. Four tiers are seeded and every value is editable: `starter`
   (1 store / 2 terminals), `business` (1/10), `multi-store` (20/10), `enterprise`
@@ -339,7 +340,7 @@ and push _outcomes_ are recorded on the registry row regardless.
 | `vertical`                  | TEXT NOT NULL DEFAULT 'general'                | Store type; enum enforced at the API layer (no CHECK — SQLite can't add one via the auto-migration). Pushed on every configure |
 | `terminal_count`            | INTEGER NOT NULL DEFAULT 1 CHECK 1–99          | **Configured** terminal slots, pushed as Till 1..N. Bounded by the store's licence allowance; never a billing input |
 | `base_url`                  | TEXT NOT NULL CHECK http(s)%                   | Trailing slash stripped at write                                                                                               |
-| `control_plane_token`       | TEXT NOT NULL                                  | Never serialized by the API                                                                                                    |
+| `control_plane_token`       | TEXT NOT NULL                                  | Never serialized by the API. Supplied at create, or **replaced** by `PUT /api/stores/:id` (2026-09-16) to reconcile a deployment that holds its own value — the repair for "Invalid control plane token". Refused if blank (it cannot be cleared), audited without the value |
 | `status`                    | TEXT DEFAULT 'active' CHECK active/paused      | Paused blocks push + reset-admin                                                                                               |
 | `last_config_status`        | TEXT DEFAULT 'pending' CHECK pending/ok/failed | Last push outcome                                                                                                              |
 | `last_config_at`            | TEXT NULL                                      | UTC `datetime('now')`                                                                                                          |
@@ -366,8 +367,20 @@ subscription's licensed count, and no allocation exceeds the plan's per-store
 ceiling.
 
 `invoices` — `amount_cents` plus its evidence: `terminal_count`,
-`terminal_price_cents` (rate snapshot), `setup_fee_cents`; `payments` records a
-settlement (status `completed`) with a method and reference.
+`terminal_price_cents` (rate snapshot), `setup_fee_cents`, and a `description`
+(what the charge is for). `payments` records a settlement (status `completed`)
+with a method and reference. `emailed_at` / `emailed_to` are written **only after
+the mail server accepts the message**, so the stamp means "sent", never
+"attempted".
+
+`office_settings` — **the control plane's own** singleton (`CHECK (id = 1)`,
+seeded on first boot): office name/email/phone/address, `invoice_due_days`,
+`invoice_footer`, and the SMTP block (`smtp_host`, `smtp_port`, `smtp_user`,
+`smtp_pass`, `smtp_from`). Three different things in this codebase are called
+settings and they must not be confused: `office_settings` is the vendor's own
+(one row, global), `billing_settings` is per client (`company_id`), and the
+tenant's `settings` table is per store and not on this plane at all. Nothing a
+merchant owns belongs in `office_settings` (§40).
 
 Conventions: snake_case columns, CHECK-constrained enums, ISO-ish UTC
 timestamps, JSON text for snapshots. The audit table, the users table and the
@@ -530,6 +543,128 @@ grouped query (`deploymentStepCounts`) rather than per job.
   and auditing — which the control plane does not have (it is a single office
   JWT; see the RBAC item in tidbits.md).
 
+## 5e. The office's own settings and the mailer (2026-09-16)
+
+`GET /api/settings` and `PUT /api/settings` (office-gated). Patch semantics:
+absent = unchanged, empty string = cleared, and `smtpPass` is returned as the
+mask `••••••••` and treated as "unchanged" when submitted back — so a form
+round-trip cannot blank a working credential. Clearing `smtp_host` clears the
+user, password and from-address with it: a credential must not outlive the
+server it belongs to. Every change is audited (`settings_updated`) with the
+**masked** view, so the audit trail never becomes a second copy of the password.
+
+`POST /api/settings/test-email` sends a proof message. When the form and the
+mailer disagree, the mailer wins: the test uses the **stored** settings, not what
+is typed (save first). With no host configured it answers `smtp_not_configured`
+rather than complaining about the recipient — the missing mail server is the
+more useful thing to say.
+
+**The mailer is real, and that is the point.**
+`POST /api/billing/invoices/:id/email` used to audit an email, answer `ok: true`
+with a `sentAt`, and send nothing — a fabricated success on the billing surface.
+It now goes through `services/mailer.ts` and its outcomes are the honest ones:
+
+| Situation                   | Outcome                                                                     |
+| --------------------------- | --------------------------------------------------------------------------- |
+| No SMTP host configured     | **400** `smtp_not_configured`, nothing stamped, audit result `failed`        |
+| Relay refuses / unreachable | **502** `mailer_failed` with the relay's reason, nothing stamped, `failed`   |
+| Relay accepts               | **200**, `emailed_at`/`emailed_to` stamped, audit `ok`                       |
+
+Recipient precedence: an address named on the request → the client's
+`billing_settings.invoice_email` → `companies.billing_email`. The per-client
+`email_invoice` / `auto_renew` flags stay API-only and gate nothing yet: there is
+no automatic send, so the operator's action is the only path and it always asks.
+
+`invoice_due_days` is the payment term for **newly raised** invoices
+(`createInvoiceForCompany`); invoices already issued keep the due date they were
+created with.
+
+### The invoice as a document (2026-09-16)
+
+`services/invoicePdf.ts` renders the invoice with pdfkit (A4, 48pt margins — the
+same engine and conventions as the tenant's documents) and serves **both** the
+email attachment and `GET /api/billing/invoices/:id/pdf`, so what the operator
+downloads and what the client receives cannot drift. The document carries the
+vendor's identity, the client's name, the description, the charge lines, the
+amount due and the footer from Settings. It carries no store data and no till
+count beyond the licensed quantity on the recurring line.
+
+Two layout rules are load-bearing, and both were bugs first:
+
+- **The money column must fit the figure.** A 57pt column was narrower than
+  `R 14 500,00` (59.9pt at 11pt bold), so pdfkit drew the amount as
+  `R 14 500,0` / `0`. It is 110pt now, drawn with `lineBreak: false`, and
+  `moneyColumnFits()` (pdfkit's own metrics) is asserted in
+  `invoicePdf.test.ts` so a width change cannot reintroduce it.
+- **Anything that can wrap must be measured.** A wrapped description advanced a
+  fixed 16pt and the total rule cut through its second line; a long client name
+  ran into the row beneath it. Both offsets come from `heightOfString()` now, and
+  the footer flows after the charge block instead of being pinned to the foot of
+  the page (which left half an A4 blank on a one-line invoice).
+
+### Charging once off (2026-09-16)
+
+**Support is not a separate charge — it is included in the per-terminal rate**
+(owner decision, 2026-09-16). There is deliberately no support line, no support
+plan column and no support charge type: `licensed terminals × rate` is the whole
+recurring model, and support comes with it. Do not add one without the owner
+saying so — asked directly, the answer was *"we charging per terminal which
+includes support"*.
+
+**The once-off charge is captured automatically.** Whichever invoice is raised
+next for a client that has never been billed its onboarding charge carries it —
+`initial`, `renewal` (including the automated sweep), or a hand-priced invoice.
+The office does not have to remember a second step; nine live clients had each
+been left with an unbilled R10 000 by exactly that.
+
+| What is raised                                     | What the invoice carries                                          |
+| -------------------------------------------------- | ----------------------------------------------------------------- |
+| Subscription, `purpose: 'initial'`                 | recurring + the unbilled once-off (itemised separately)           |
+| Subscription, `purpose: 'renewal'`                 | recurring + the unbilled once-off — the sweep counts these in `onboardingCharged` |
+| Hand-priced (`amountCents` + `description`)         | the agreed amount + the unbilled once-off                         |
+| `purpose: 'onboarding'`                            | the once-off **alone** — for a client already invoiced for a period (409 `setup_fee_not_due` when there is none due) |
+| Any of the above with `includeOnboarding: false`    | the invoice's own charge only; the once-off waits for the next one |
+
+The guard against double-billing is `setupFeeDueCents`, which is zero the moment
+the charge sits on a standing invoice, is paid, or is waived. So there is no
+"bill it twice" case to reason about — and `includeOnboarding: false` is the
+operator saying "not on this one", which leaves the charge owed and available to
+the next invoice.
+
+**The once-off leads the invoice lines whenever it applies** (owner, 2026-09-16).
+It is the first thing the client is asked to pay for, on the PDF, in the emailed
+invoice, in the Billing detail view and in the Raise-an-Invoice preview alike —
+subscription lines follow it. The invoice's *subject* (the `description`) stays
+with the title rather than sitting in the amounts column, where a line with no
+amount reads as an uncharged item.
+
+**It is called "Vula onboarding and deployment"** wherever it is itemised
+(`SETUP_FEE_LINE_LABEL` in `services/billing.ts`, mirrored in the SPA's
+`lib/storeVocab.ts` as `SETUP_FEE_LABEL` — the two cannot share a module across
+the build). The plan-level field keeps the name *once-off onboarding* on the plan
+form and the subscription's status vocabulary; the invoice line is what the client
+reads, and it says what the money bought.
+
+**A hand-priced invoice must carry a `description`** (400
+`invoice_description_required`). It is how a once-off charge says what it is for,
+and it is what stops a client receiving a bare "Amount due: R2 500,00" — the
+description shows on the invoice list, the detail, the PDF and the email. When
+the control plane computes the amount itself it derives the description instead
+(`Subscription — Vula Network (monthly) + Vula onboarding and deployment`).
+
+**Cancelling the last invoice that carries the onboarding charge frees it**
+(2026-09-16): the subscription goes back to `not_invoiced` and the response says
+`setupFeeReleased: true`. Without that, the charge was stranded — no standing
+invoice carried it, and the client was recorded as though it had been billed, so
+it could never be raised again. Cancelling an already-cancelled invoice is
+idempotent and still performs that release, which is also how a registry that hit
+the hole before it was fixed is repaired.
+
+Surfaces name where the charge sits as `setupFeeRef` (the invoice number) rather
+than anything containing "invoice": the §40 privacy test walks field *names* on
+the client and company endpoints and cannot tell a vendor document number from a
+merchant's billing data — the same reason `tradingBlocked` is not `salesBlocked`.
+
 ## 6. Auth & session conventions
 
 - Single office admin from env; password bcrypt-hashed once at boot, compared
@@ -546,5 +681,10 @@ grouped query (`deploymentStepCounts`) rather than per job.
 
 Live store insight (sales/cash-up dashboards across the fleet), central
 catalogue, IBT, tenant-side internal API implementation, Coolify
-auto-provisioning, audit trail, DELETE store, automated health sweep. Tracked
-in `tidbits.md` and the za-pos `task_plan.md`.
+auto-provisioning. Tracked in `tidbits.md` and the za-pos `task_plan.md`.
+
+Corrected 2026-09-16: this section used to list "audit trail, DELETE store,
+automated health sweep" as out of scope, though all three shipped
+(2026-09-11/12 — `audit_logs` §38, pause-first teardown §21, `healthSweep`).
+Flagged in `findings.md` on 2026-09-14 and fixed here, since a stale scope list
+is worse than no list.

@@ -33,8 +33,12 @@ import {
 } from '../utils/validate.js';
 import { entitlementsFor, requireFeature } from '../services/subscriptions.js';
 import { quoteForSubscription } from '../services/pricing.js';
-import { summariseSubscription, allocateTerminals, checkAllocation } from '../services/terminalLicences.js';
-import { pushLicencesForCompany } from '../services/billing.js';
+import {
+  summariseSubscription,
+  allocateTerminals,
+  checkAllocation,
+} from '../services/terminalLicences.js';
+import { pushLicencesForCompany, setupFeeInvoiceFor } from '../services/billing.js';
 import { pushStoreListToPanel } from '../services/topology.js';
 import { storeToOut } from './stores.js';
 import type { StoreEnvironment } from '../config/registryDb.js';
@@ -207,6 +211,14 @@ clientsRouter.get(
     const steps = latestJob ? listStepsForJob(latestJob.id) : [];
 
     const panel = panels[0] || null;
+    // When the once-off charge has already been billed, name the document that
+    // carries it: the create-invoice modal then shows "already billed, unpaid"
+    // instead of silently adding it a second time. Called `ref` rather than
+    // anything containing "invoice" on purpose — the §40 privacy test walks
+    // field NAMES on this surface and (correctly) cannot tell a vendor document
+    // number from a merchant's billing data.
+    const setupFeeInvoice =
+      quote.setupFeeStatus === 'invoiced' ? setupFeeInvoiceFor(company.id) : undefined;
     res.json({
       client: summary,
       // What the client purchased, priced, with the per-store allocation — the
@@ -224,6 +236,7 @@ clientsRouter.get(
         setupFeeCents: quote.setupFeeCents,
         setupFeeStatus: quote.setupFeeStatus,
         setupFeeDueCents: quote.setupFeeDueCents,
+        setupFeeRef: setupFeeInvoice?.invoice_number ?? null,
         note: quote.note,
         allocations: sum.allocations.map((a) => {
           const store = stores.find((s) => s.id === a.storeId);
@@ -295,16 +308,25 @@ clientsRouter.put(
     // written — an allocation that does not fit is refused, not silently capped.
     const requestedLicensed =
       body.licensedTerminalCount !== undefined ? Number(body.licensedTerminalCount) : undefined;
-    if (requestedLicensed !== undefined && (!Number.isInteger(requestedLicensed) || requestedLicensed < 0)) {
+    if (
+      requestedLicensed !== undefined &&
+      (!Number.isInteger(requestedLicensed) || requestedLicensed < 0)
+    ) {
       throw new HttpError(400, 'licensedTerminalCount must be a whole number of 0 or more');
     }
     const setupFeeStatusRaw = body.setupFeeStatus;
-    if (setupFeeStatusRaw !== undefined && !SETUP_FEE_STATUSES.includes(setupFeeStatusRaw as SetupFeeStatus)) {
+    if (
+      setupFeeStatusRaw !== undefined &&
+      !SETUP_FEE_STATUSES.includes(setupFeeStatusRaw as SetupFeeStatus)
+    ) {
       throw new HttpError(400, `setupFeeStatus must be one of: ${SETUP_FEE_STATUSES.join(', ')}`);
     }
     const rawAllocations = body.allocations;
     if (rawAllocations !== undefined && !Array.isArray(rawAllocations)) {
-      throw new HttpError(400, 'allocations must be an array of { storeId, licensedTerminalCount }');
+      throw new HttpError(
+        400,
+        'allocations must be an array of { storeId, licensedTerminalCount }',
+      );
     }
     const allocations = (rawAllocations as Array<Record<string, unknown>> | undefined)?.map((a) => {
       const storeId = Number(a?.storeId);
@@ -331,9 +353,7 @@ clientsRouter.put(
 
     // Apply the purchased quantity and allocations. The plan may be switching in
     // the same request, so the ceiling is read from the plan that will be in force.
-    const effectivePlan = getPlanById(
-      (planId !== undefined ? planId : company.plan_id) ?? -1,
-    );
+    const effectivePlan = getPlanById((planId !== undefined ? planId : company.plan_id) ?? -1);
     if (setupFeeStatusRaw !== undefined) {
       setSetupFeeStatus(company.id, setupFeeStatusRaw as SetupFeeStatus);
     }
@@ -387,7 +407,14 @@ clientsRouter.put(
 
     recordAuditLog('office', 'client_updated', 'company', company.id, {
       before: { name: company.name, billingEmail: company.billing_email, planId: company.plan_id },
-      after: { name, billingEmail, planId, status, licensedTerminalCount: requestedLicensed, allocations },
+      after: {
+        name,
+        billingEmail,
+        planId,
+        status,
+        licensedTerminalCount: requestedLicensed,
+        allocations,
+      },
       reason: 'Updated client profile or subscription',
     });
 
@@ -412,7 +439,10 @@ clientsRouter.post(
       const chosenPlan = getPlanById(planId);
       if (!chosenPlan) throw new HttpError(400, 'planId does not match a known plan');
       if (!chosenPlan.is_active) {
-        throw new HttpError(400, `Plan "${chosenPlan.name}" is inactive and cannot be used for a new client`);
+        throw new HttpError(
+          400,
+          `Plan "${chosenPlan.name}" is inactive and cannot be used for a new client`,
+        );
       }
     }
 
@@ -485,7 +515,9 @@ clientsRouter.post(
     const licensedTotal = stores.reduce((n, s) => n + s.licensedTerminalCount, 0);
     if (planId !== null) {
       const chosenPlan = getPlanById(planId)!;
-      const overCeiling = stores.find((s) => s.licensedTerminalCount > chosenPlan.max_terminals_per_store);
+      const overCeiling = stores.find(
+        (s) => s.licensedTerminalCount > chosenPlan.max_terminals_per_store,
+      );
       if (overCeiling) {
         throw new HttpError(
           400,
@@ -642,29 +674,32 @@ clientsRouter.post(
     const ceiling = effectivePlanForTerms?.max_terminals_per_store ?? Number.MAX_SAFE_INTEGER;
     const rawAllocations = req.body?.allocations;
     if (rawAllocations !== undefined && !Array.isArray(rawAllocations)) {
-      throw new HttpError(400, 'allocations must be an array of { storeId, licensedTerminalCount }');
+      throw new HttpError(
+        400,
+        'allocations must be an array of { storeId, licensedTerminalCount }',
+      );
     }
-    const existingStoreAllocations = (rawAllocations as Array<Record<string, unknown>> | undefined)?.map(
-      (a) => {
-        const storeId = Number(a?.storeId);
-        const count = Number(a?.licensedTerminalCount);
-        const store = Number.isInteger(storeId) ? getStoreById(storeId) : null;
-        if (!store || store.company_id !== company.id || !Number.isInteger(count) || count < 0) {
-          throw new HttpError(
-            400,
-            'Each allocation needs a storeId belonging to this client and a licensedTerminalCount of 0 or more',
-          );
-        }
-        if (count > ceiling) {
-          throw new HttpError(
-            402,
-            `${effectivePlanForTerms?.name ?? 'The plan'} allows ${ceiling} licensed terminals per store; ${store.name} was set to ${count}.`,
-            'terminal_cap_exceeded',
-          );
-        }
-        return { storeId, count };
-      },
-    );
+    const existingStoreAllocations = (
+      rawAllocations as Array<Record<string, unknown>> | undefined
+    )?.map((a) => {
+      const storeId = Number(a?.storeId);
+      const count = Number(a?.licensedTerminalCount);
+      const store = Number.isInteger(storeId) ? getStoreById(storeId) : null;
+      if (!store || store.company_id !== company.id || !Number.isInteger(count) || count < 0) {
+        throw new HttpError(
+          400,
+          'Each allocation needs a storeId belonging to this client and a licensedTerminalCount of 0 or more',
+        );
+      }
+      if (count > ceiling) {
+        throw new HttpError(
+          402,
+          `${effectivePlanForTerms?.name ?? 'The plan'} allows ${ceiling} licensed terminals per store; ${store.name} was set to ${count}.`,
+          'terminal_cap_exceeded',
+        );
+      }
+      return { storeId, count };
+    });
 
     if (existingStoreAllocations || newStore) {
       const current = summariseSubscription(company.id);

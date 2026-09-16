@@ -65,6 +65,7 @@ za-pos-control-plane/
 │   ├── routes/            # auth.ts (login), clients.ts (client-first wizard +
 │   │                      # subscription), stores.ts, companies.ts (+ plans),
 │   │                      # panels.ts, billing.ts, errors.ts (failure feed §30),
+│   │                      # settings.ts (the office's own settings + SMTP),
 │   │                      # devices.ts (fleet devices §25),
 │   │                      # versions.ts (build distribution §32),
 │   │                      # deployments.ts (job history §33, read-only)
@@ -72,10 +73,14 @@ za-pos-control-plane/
 │   │                      # pricing (THE recurring calculator),
 │   │                      # terminalLicences (purchase + allocations + caps),
 │   │                      # billing (invoices/licences), licenceSigner,
+│   │                      # officeSettings (the singleton),
+│   │                      # mailer (nodemailer; invoice + test sends),
+│   │                      # invoicePdf (pdfkit; the invoice document),
 │   │                      # storeClient, features, coolify, storeProvisioning,
 │   │                      # clientOrchestrator, healthSweep,
 │   │                      # fleetView (derived health/config state + devices)
 │   ├── utils/             # logger, asyncHandler, validate, errors (HttpError),
+│   │                      # money (cents → ZAR, for server-rendered mail),
 │   │                      # rateLimiter
 │   └── __tests__/         # env-setup.ts, helpers.ts + suites (*.test.ts)
 ├── scripts/
@@ -90,7 +95,7 @@ za-pos-control-plane/
 │       ├── pages/         # Clients (+wizard), ClientDetail, StoreDetail, Plans,
 │       │                  # Billing, Companies (advanced), Panels (advanced),
 │       │                  # Devices (§25), Versions (§32), Deployments (§33),
-│       │                  # Errors (§30 feed)
+│       │                  # Errors (§30 feed), Settings (office identity + SMTP)
 │       └── types.ts       # camelCase mirrors of the API types
 └── prompts/
     └── deploy-coolify-control-plane.md  # runbook: deploy stores + this CP
@@ -114,7 +119,10 @@ za-pos-control-plane/
   src/routes/stores.ts, mirrored 1:1 in frontend/src/types.ts).
 - Frontend: fetch via `api.*` only; Tailwind utilities; `@theme` brand colors
   in index.css (no tailwind.config).
-- Money: none in this app (no prices stored here).
+- Money: integer cents in the registry and on the wire, ZAR labels in the SPA
+  (`frontend/src/lib/money.ts`) and in server-rendered mail
+  (`src/utils/money.ts` — the two cannot share a module across the build).
+  No floating-point arithmetic on amounts.
 
 ## Naming — two planes, two products
 
@@ -125,7 +133,21 @@ za-pos-control-plane/
 
 "Control plane" is the fleet-management layer and only the vendor app is one, so
 do **not** write "SaaS CP" / "Multistore CP" — two names ending in CP keep the
-ambiguity alive. See `CONTEXT.md` §2a.
+ambiguity alive. See `CONTEXT.md` §2a. The same rule applies to what clients
+*read*: the phrase must never appear in a mail or document a merchant receives
+(the invoice footer is the office's own name).
+
+## Commercial rules locked with the owner
+
+- **`licensed terminals × rate` is the whole recurring model, and the rate
+  includes support** (2026-09-16). No support line, no support tier, no support
+  charge type. Do not add one without the owner saying so.
+- The **once-off onboarding charge is captured automatically** on the next invoice
+  raised for a client that has never been billed it — across `initial`, `renewal`
+  and hand-priced invoices. `includeOnboarding: false` is the one-invoice opt-out.
+- **A hand-priced invoice must say what it is for** (`description`).
+- Never invent an amount: a `custom`-priced client is invoiced only with an agreed
+  figure the office supplied.
 
 ## API surface (`/api` prefix, `{ error }` on failure)
 
@@ -141,7 +163,7 @@ ambiguity alive. See `CONTEXT.md` §2a.
 | GET `/stores`                                | office                          | fleet list — company, plan, billing state, licensed vs configured terminals; never returns the token                                                                                            |
 | POST `/stores`                               | office                          | create store + **allocate its licensed terminals** + first push and first licence; refuses a duplicate URL, a Head Office URL, and a client with no licensed terminals; a generated token is returned **once** |
 | GET `/stores/:id`                            | office                          | detail: terminal preview Till 1..N + config snapshot + licensed allowance                                                                                                                      |
-| PUT `/stores/:id`                            | office                          | name/vatRegNo-free/terminalCount/baseUrl/companyId/terminalNames (slug immutable; **no auto-push**); refuses configuring above the licence                                                       |
+| PUT `/stores/:id`                            | office                          | name/vertical/terminalCount/baseUrl/companyId/terminalNames (slug immutable; **no auto-push**); refuses configuring above the licence; **`controlPlaneToken`** replaces the push credential when a deployment holds its own (the "Invalid control plane token" repair), blank is refused, never echoed back |
 | PATCH `/stores/:id/pause` · `/resume`        | office                          | paused stores 409 push/reset-admin/licence                                                                                                                                                     |
 | DELETE `/stores/:id`                         | office                          | **pause-first teardown**: 409 `store_active` while active; removes the registry row only, never the deployment                                                                                |
 | POST `/stores/:id/push`                      | office                          | push `{terminalCount, terminals: Till 1..N}`; 402 if over the plan's till ceiling or the store's licence                                                                                       |
@@ -156,8 +178,9 @@ ambiguity alive. See `CONTEXT.md` §2a.
 | GET `/panels/licence/key`                    | office                          | as `/stores/licence/key`                                                                                                                                                                      |
 | POST `/panels/:id/health`                    | office                          | ping the panel's own `/api/internal/status`, record health + version                                                                                                                          |
 | POST `/panels/:id/licence`                   | office                          | re-issue and deliver the company licence to a panel                                                                                                                                           |
-| GET/POST `/billing/invoices`                 | office                          | invoices with their pricing evidence (`terminalCount` × `terminalPriceCents`, `setupFeeCents`); an amountless invoice for a custom-priced client is 400 `custom_pricing_requires_amount`       |
+| GET/POST `/billing/invoices`                 | office                          | invoices with their pricing evidence (`terminalCount` × `terminalPriceCents`, `setupFeeCents`) and a `description` of what is charged; `purpose: initial\|renewal\|manual\|onboarding`; **an unbilled once-off onboarding charge rides on whichever invoice is raised next** unless `includeOnboarding: false`; a hand-priced invoice without a description is 400 `invoice_description_required`; `onboarding` bills the once-off alone (409 `setup_fee_not_due` when none is due); an amountless invoice for a custom-priced client is 400 `custom_pricing_requires_amount` |
 | POST `/billing/invoices/:id/pay` · `/cancel` | office                          | settlement (advances `paid_through`, marks the onboarding charge paid, re-pushes licences) / cancel                                                                                            |
+| GET `/billing/invoices/:id/pdf`              | office                          | the invoice as a downloadable A4 PDF — the same document the email attaches                                                                                                                   |
 | POST `/billing/renew-check`                  | office                          | renewal sweep: recurring-only invoices, explicit settlement, custom-priced clients skipped                                                                                                    |
 | GET `/errors`                                | office                          | grouped failure feed (§30): fingerprint, message, sources, occurrences, stores/head-offices hit, first/last seen                                                                              |
 | GET `/errors/:fingerprint`                   | office                          | one fault with every occurrence behind it (entity, source, times, version, environment); 404 on an unknown fingerprint                                                                        |
@@ -165,6 +188,9 @@ ambiguity alive. See `CONTEXT.md` §2a.
 | GET `/versions`                              | office                          | fleet build distribution (§32): version → stores/panels + environments + members, schema spread, most-deployed per environment; no minimum-supported policy (see tidbits)                       |
 | GET `/deployments`                           | office                          | every orchestrated deployment across the fleet, newest first (§33, read-only) with a one-query step tally                                                                                     |
 | GET `/deployments/:id`                       | office                          | one job with its steps — status, attempts, warnings, error; 404 on an unknown job                                                                                                             |
+| POST `/billing/invoices/:id/email`           | office                          | **really sends** the invoice over the configured SMTP; 400 `smtp_not_configured` when the host is missing, 502 `mailer_failed` with the relay's reason; stamps `emailedAt`/`emailedTo` and audits (ok/failed) only on a relay that accepted it |
+| GET/PUT `/settings`                          | office                          | the office's **own** settings singleton: identity, `invoiceDueDays`, `invoiceFooter`, the SMTP block; `smtpPass` masked on read and mask = unchanged on write; audited (`settings_updated`) |
+| POST `/settings/test-email`                  | office                          | send a proof message (`to` optional → office email); 400 `smtp_not_configured` / 502 `mailer_failed`                                                                                          |
 | GET `/health`                                | public                          | liveness (Coolify healthcheck)                                                                                                                                                                |
 
 ## Testing conventions

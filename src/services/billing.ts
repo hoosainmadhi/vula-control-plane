@@ -13,6 +13,7 @@ import {
   listInvoices,
   createPayment as dbCreatePayment,
   getBillingSettings,
+  getOfficeSettings,
   getSubscription,
   setSetupFeeStatus,
   updateCompany,
@@ -29,6 +30,22 @@ import { quoteForSubscription } from './pricing.js';
 import { HttpError } from '../utils/errors.js';
 import { logger } from '../config/env.js';
 
+/**
+ * The label the once-off charge carries wherever it is itemised — the PDF, the
+ * emailed invoice and the Billing screens. One constant, so the client reads the
+ * same words the office does. (The plan-level field stays "once-off onboarding";
+ * this is the line the invoice shows.)
+ */
+export const SETUP_FEE_LINE_LABEL = 'Vula onboarding and deployment';
+
+/**
+ * The standing invoice carrying a client's once-off onboarding charge, if it has
+ * been billed and not cancelled. One helper so every surface names the same
+ * invoice rather than each re-deriving "where does this charge sit".
+ */
+export const setupFeeInvoiceFor = (companyId: number): InvoiceRecord | undefined =>
+  listInvoices(companyId).find((i) => i.status !== 'cancelled' && (i.setup_fee_cents ?? 0) > 0);
+
 export interface RenewalResult {
   invoice: InvoiceRecord;
   payment: PaymentRecord;
@@ -44,19 +61,34 @@ export interface AutomatedRenewalSummary {
   companiesEvaluated: number;
   invoicesCreated: number;
   renewalsProcessed: number;
+  /** Renewals that also captured a once-off onboarding charge never billed before. */
+  onboardingCharged: number;
   /** Companies on negotiated pricing — the sweep never invents an amount for them. */
   customPricingSkipped: number;
   errors: string[];
 }
 
-/** What an invoice is for. Only `initial` may carry the once-off onboarding fee. */
-export type InvoicePurpose = 'initial' | 'renewal' | 'manual';
+/**
+ * What an invoice is for. `initial` bills the first period plus the once-off
+ * onboarding charge; `onboarding` bills **only** that charge, for a client who
+ * has already been invoiced for a period (billing `initial` again would charge
+ * the recurring line a second time); `renewal` is the sweep's recurring-only
+ * invoice; `manual` carries an amount the office agreed.
+ */
+export type InvoicePurpose = 'initial' | 'renewal' | 'manual' | 'onboarding';
 
 export interface CreateInvoiceOptions {
   amountCents?: number;
   dueDate?: string;
   invoiceNumber?: string;
   purpose?: InvoicePurpose;
+  /** What the charge is for. Derived from the subscription when omitted. */
+  description?: string;
+  /**
+   * Whether an unbilled once-off onboarding charge rides on this invoice.
+   * Default true; `false` is the operator saying "not on this one".
+   */
+  includeOnboarding?: boolean;
 }
 
 /**
@@ -220,11 +252,46 @@ export function createInvoiceForCompany(
   const explicit = options?.amountCents !== undefined;
   const purpose: InvoicePurpose = options?.purpose ?? (explicit ? 'manual' : 'initial');
 
+  /**
+   * The once-off onboarding charge rides on whichever invoice is raised next
+   * while it is still unbilled — never only on the first one. Raising an invoice
+   * for a client that owes it is the moment to capture it; waiting for the
+   * operator to remember a separate "bill onboarding" step is how nine live
+   * clients ended up with an unbilled R10 000 each.
+   *
+   * `setupFeeDueCents` is the guard against double-billing: it is zero as soon as
+   * the charge sits on a standing invoice (or is paid/waived), and a cancelled
+   * invoice releases it again. `includeOnboarding: false` lets the office say no
+   * for one invoice — the modal shows what will be added.
+   */
+  const chargeOnboarding =
+    purpose !== 'onboarding' && options?.includeOnboarding !== false && quote.setupFeeDueCents > 0;
+  const onboardingCents = chargeOnboarding ? quote.setupFeeDueCents : 0;
+
   let amountCents: number;
   let lines: InvoiceLines | undefined;
 
   if (explicit) {
-    amountCents = options!.amountCents!;
+    amountCents = options!.amountCents! + onboardingCents;
+    lines = {
+      description: options?.description,
+      setupFeeCents: chargeOnboarding ? onboardingCents : null,
+    };
+  } else if (purpose === 'onboarding') {
+    // The once-off charge on its own: a client invoiced for a period already
+    // must not be charged that period again just to be billed its onboarding.
+    if (quote.setupFeeDueCents === 0) {
+      throw new HttpError(
+        409,
+        `There is no onboarding charge to bill for ${company.name} — it is ${quote.setupFeeStatus.replace('_', ' ')}.`,
+        'setup_fee_not_due',
+      );
+    }
+    amountCents = quote.setupFeeDueCents;
+    lines = {
+      setupFeeCents: quote.setupFeeDueCents,
+      description: options?.description ?? 'Once-off onboarding',
+    };
   } else {
     if (quote.recurringAmountCents === null) {
       throw new HttpError(
@@ -240,28 +307,41 @@ export function createInvoiceForCompany(
         'no_licensed_terminals',
       );
     }
-    const setupFeeDue = purpose === 'initial' ? quote.setupFeeDueCents : 0;
-    amountCents = quote.recurringAmountCents + setupFeeDue;
+    amountCents = quote.recurringAmountCents + onboardingCents;
     lines = {
       // A per-terminal plan itemises its arithmetic; a custom plan's agreed
       // amount is a flat line, so no terminal count or rate is recorded.
       terminalCount: quote.pricingMode === 'per_terminal' ? quote.licensedTerminalCount : null,
       terminalPriceCents: quote.pricingMode === 'per_terminal' ? quote.rateCents : null,
-      setupFeeCents: setupFeeDue > 0 ? setupFeeDue : null,
+      setupFeeCents: chargeOnboarding ? onboardingCents : null,
+      // Derived, not invented: the invoice says which subscription period it is
+      // for, and the PDF/email itemise the arithmetic behind the figure.
+      description:
+        options?.description ??
+        `Subscription — ${quote.planName}${
+          quote.billingPeriod === 'annual'
+            ? ' (annual)'
+            : quote.billingPeriod === 'monthly'
+              ? ' (monthly)'
+              : ''
+        }${chargeOnboarding ? ` + ${SETUP_FEE_LINE_LABEL}` : ''}`,
     };
   }
 
   const due = options?.dueDate
     ? new Date(`${options.dueDate}T12:00:00.000Z`)
-    : new Date(Date.now() + 14 * 24 * 60 * 60 * 1000); // 14 days default
+    : // Payment terms are an office setting (Settings page); 14 days is only the
+      // value the singleton row is seeded with.
+      new Date(Date.now() + getOfficeSettings().invoice_due_days * 24 * 60 * 60 * 1000);
 
   const invoiceNumber = options?.invoiceNumber || generateInvoiceNumber();
 
   const invoice = dbCreateInvoice(companyId, amountCents, due, invoiceNumber, lines);
 
   // The onboarding charge is once-off: the moment an invoice carries it, the
-  // subscription records it as invoiced so no later invoice repeats it.
-  if (!explicit && lines?.setupFeeCents && lines.setupFeeCents > 0) {
+  // subscription records it as invoiced so no later invoice repeats it — on any
+  // kind of invoice, hand-priced included.
+  if (lines?.setupFeeCents && lines.setupFeeCents > 0) {
     setSetupFeeStatus(companyId, 'invoiced');
   }
 
@@ -313,7 +393,10 @@ export async function processPaymentAndRenew(input: {
   })!;
 
   // The once-off onboarding charge is settled with the invoice that carried it.
-  if ((invoice.setup_fee_cents ?? 0) > 0 && getSubscription(company.id)?.setup_fee_status === 'invoiced') {
+  if (
+    (invoice.setup_fee_cents ?? 0) > 0 &&
+    getSubscription(company.id)?.setup_fee_status === 'invoiced'
+  ) {
     setSetupFeeStatus(company.id, 'paid');
   }
 
@@ -364,6 +447,7 @@ export async function runAutomatedRenewals(options?: {
     companiesEvaluated: 0,
     invoicesCreated: 0,
     renewalsProcessed: 0,
+    onboardingCharged: 0,
     customPricingSkipped: 0,
     errors: [],
   };
@@ -412,12 +496,15 @@ export async function runAutomatedRenewals(options?: {
     if (existingInvoices.length > 0) {
       invoiceToPay = existingInvoices[0];
     } else {
-      // Create the renewal invoice: recurring charges only, never the setup fee.
+      // Create the renewal invoice: the recurring line, plus any once-off
+      // onboarding charge this client has never been billed for — the sweep is
+      // the last place to catch it, and it is counted so the office sees it.
       invoiceToPay = createInvoiceForCompany(company.id, {
         dueDate: paidThrough || nowDateStr,
         purpose: 'renewal',
       });
       summary.invoicesCreated++;
+      if ((invoiceToPay.setup_fee_cents ?? 0) > 0) summary.onboardingCharged++;
     }
 
     // Entitlement is never extended just because the sweep ran. Without a real

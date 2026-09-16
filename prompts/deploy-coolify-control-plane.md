@@ -105,19 +105,27 @@ checklist to close before cutover — see
    COOLIFY_PROJECT_UUID / COOLIFY_SERVER_UUID / COOLIFY_GITHUB_APP_UUID
    LOG_LEVEL=info
    ```
-   Two traps in this image: its `EXPOSE`/`HEALTHCHECK` are pinned to **3240**
-   while Coolify injects `PORT=3000` for the proxy, so the container can serve
-   fine and still be marked unhealthy — pin the proxy port or align the image,
-   do not leave it to chance. And the licence key is checked **lazily**, not at
-   boot: a production CP with no key starts up looking healthy and exits the
-   first time it issues a licence.
+   Two things this block used to warn about, both **fixed 2026-09-14** and no
+   longer traps: the image's default, `EXPOSE` and healthcheck all agree on
+   **3000**, matching the `PORT` Coolify injects — so the proxy and the probe
+   cannot disagree; and `LEASE_PRIVATE_KEY` is checked **at boot**, so a
+   production CP without a key refuses to start instead of dying on its first
+   licence issue.
 3. **Persistent Storage:** volume mounted at `/data` (registry DB + WAL), host
    path `/data/apps/vula-app/cp` per the production layout. It must be owned by
    uid 1000 before first start: the container runs as `node` and a bind mount
    overrides the image's `chown`, so a root-owned directory stops SQLite creating
-   its WAL.
+   its WAL. (The image's entrypoint now makes a root-owned `/data` writable and
+   drops to `node`, which covers a directory that becomes root-owned later.)
 4. **Domains:** `https://cp.vula-app.co.za` → **Deploy**. Healthcheck hits
    `/health` (`{ status: 'ok' }`).
+5. **After the first boot — Settings.** This is configuration, not env: sign in and
+   set the office identity (the name that appears on invoices), the payment terms,
+   and the SMTP account, then press **Send test email** and confirm it arrives.
+   Until a mail server is configured, "Email to client" refuses with
+   `smtp_not_configured` rather than reporting a send nobody received. No env var
+   and no headless browser is needed for invoice mail — the PDF is drawn
+   server-side with pdfkit.
 
 ## Day-2 operations
 
@@ -128,13 +136,20 @@ checklist to close before cutover — see
 | Cashier locked out at a store        | Store row → **Admin password** (one-time temp password, shown once) |
 | Take a store offline for maintenance | **Pause** — push and admin reset are refused (409) until **Resume** |
 | Add another store                    | Repeat Part A + Part B                                              |
+| Send a client their invoice          | Billing → the invoice → **Email to client** (the PDF is attached)   |
+| Bill a once-off charge               | Billing → **Raise an Invoice** — an unbilled onboarding charge rides on it unless unticked |
+| Change mail account / invoice terms  | **Settings** — identity, payment terms, SMTP (+ test send)           |
 
 ## Troubleshooting
 
+- **First push / Push now fails with "Invalid control plane token"** — the
+  registry row and the deployment disagree about the credential. Paste the store's
+  `CONTROL_PLANE_TOKEN` (from its Coolify env) into the store's **Configure** modal
+  — *Control-plane token* — and save; the next push authenticates. Do **not** delete
+  and recreate the row: that path was the only one before 2026-09-16 and it throws
+  away the store's history, licence allocation and deployment jobs.
 - **First push / Push now fails (502, or row goes red)** — check in order:
-  1. the store's `CONTROL_PLANE_TOKEN` env equals the token the control plane
-     generated at store creation (the registry never displays it — if it was
-     lost, delete and recreate the store row; v1 has no token-rotation UI);
+  1. the credential above;
   2. `https://<slug>.vula-app.co.za/health` responds and the domain resolves;
   3. the store image ships `/api/internal/*` (shipped in za-pos 2026-09-03 —
      CONTEXT.md §4 is the contract reference; `npm run stub` in the CP repo
@@ -143,9 +158,14 @@ checklist to close before cutover — see
 - **Health shows Down but the store works in a browser** — the ping uses
   `GET /api/internal/status` with the token header; check the store logs for
   401s (token mismatch) and confirm the internal router is mounted.
+- **"Email to client" refuses (400 `smtp_not_configured`)** — that is the honest
+  answer, not a fault: set the SMTP account on **Settings** and send the test.
+- **Invoice email fails 502 `mailer_failed`** — the relay refused the message; the
+  reason is in the response and in the audit trail (`invoice_emailed`, `failed`).
 - **CP won't boot (production)** — check `OFFICE_ADMIN_EMAIL`,
-  `OFFICE_ADMIN_PASSWORD` (not the placeholder) and `JWT_SECRET`; the boot
-  gate exits with a FATAL line naming the missing var.
+  `OFFICE_ADMIN_PASSWORD` (not the placeholder), `JWT_SECRET` and
+  `LEASE_PRIVATE_KEY`; the boot gate exits with a FATAL line naming the missing
+  variable.
 - **Registry lost?** — restore `data/control-plane.db` from the volume
   backup, or re-onboard stores (their `CONTROL_PLANE_TOKEN` env values on the
   store containers must match freshly created rows — see first bullet).

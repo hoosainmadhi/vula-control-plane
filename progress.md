@@ -1,5 +1,223 @@
 # Progress
 
+## 2026-09-16 (sixth pass) — the once-off leads the invoice, under one name
+
+Owner: *"alway have the Vula onboarding and deployment first line item when
+applicable in invoice."*
+
+- **It is now the first line item, everywhere the charge is itemised**: the PDF,
+  the emailed invoice, the Billing detail view and the Raise-an-Invoice preview.
+  Subscription lines follow it, and the preview's total still adds both.
+- **One name, one place.** The label is `SETUP_FEE_LINE_LABEL` in
+  `services/billing.ts` ("Vula onboarding and deployment" — the wording the
+  Billing detail view already used, and what the owner calls it), mirrored as
+  `SETUP_FEE_LABEL` in the SPA's `lib/storeVocab.ts` with a comment explaining
+  that the two cannot share a module across the build. The client page's
+  subscription summary and the subscription editor now use the same words; the
+  plan's field and the status vocabulary keep "once-off onboarding", and CONTEXT
+  §5e says which is which.
+- **The invoice subject moved out of the amounts column.** The `description` was
+  drawn as the first row of the lines table — with no amount beside it, which
+  reads as an uncharged item and pushed the real first line item to second place.
+  It now sits with the "Subscription invoice" title, and the table holds only
+  charged lines, led by the once-off.
+- **A stale helper corrected while in there:** the subscription editor still said
+  "the onboarding charge rides the client's first invoice only — never a renewal",
+  which the fourth pass made untrue. A claim in the UI that a later change
+  invalidated is worse than no claim.
+- Test added: the email's rows are asserted to put
+  `Vula onboarding and deployment` before `Licensed terminals` — the order is
+  readable as text there, and the PDF draws the same sequence from the same
+  constant. Verified live too: invoice INV-20260916-1553 renders
+  "Vula onboarding and deployment R10 000,00" above "2 licensed terminals".
+
+Tests: CP **234 green (19 suites)**; typecheck, frontend `tsc -b` and the
+production build clean. Nothing raised, nothing committed.
+
+## 2026-09-16 (fifth pass) — the create-invoice modal said three things at once
+
+Owner: *"i dont see the once off when creating an invoice"* and *"this is
+confusing: What is this for? (optional) -> Left blank, the invoice describes the
+subscription it bills."*
+
+Both were the same fault: the modal explained the invoice in prose, in the wrong
+places, and the once-off was a footnote in small grey type.
+
+- **The modal now shows the invoice, not a description of it.** A "What this
+  invoice will carry" panel lists the subscription line (`Subscription — Vula
+  Spares Network (7 × R 500,00) R3 500,00`), the once-off owed
+  (`Once-off onboarding · Never billed for this client — added to this invoice ·
+  R10 000,00`) and **the total** — so the arithmetic is not left to the reader.
+  The once-off line carries the tick that waves it off, and its own explanation
+  ("Left off this invoice; it stays owed and the next invoice picks it up").
+- **The contradictory field label is gone.** "What is this for? (optional)" became
+  required the moment an amount was typed, and its helper explained an internal
+  rule ("the invoice describes the subscription it bills"). Now: the amount field
+  says *"— leave empty to bill the subscription"*, the description field appears
+  **only when an amount is typed**, and it asks *"What is this amount for?"* with
+  one line saying where it is read (client, PDF, email). With no amount, the modal
+  states the sentence the invoice will carry instead.
+- **Before a client is chosen the panel has a placeholder** — "Choose a client to
+  see the subscription, any once-off charge still owed, and the invoice total" —
+  because with nothing selected there was previously nothing to see at all, which
+  is precisely what "I don't see the once off" looked like.
+- Also: "Company" → "Client" (the UI's vocabulary everywhere else), and the submit
+  button is "Raise Invoice" (the heading said "Raise an Invoice" while the button
+  said "Generate Invoice").
+
+Verified live on Kloof Auto Spares: empty amount → subscription R3 500 + once-off
+R10 000 = **R13 500**; typing R2 500 → "Your charge R2 500,00" + once-off =
+**R12 500**, with the description field appearing and required. Nothing was
+created (fleet still 12 invoices). Tests **233 green (19 suites)**, typecheck,
+frontend `tsc -b` and the build clean.
+
+## 2026-09-16 (fourth pass) — the once-off is captured automatically; support is not a charge
+
+Owner: *"when creating an invoice: check if once-off has been payed. if not it
+invoice it"* and *"Allow to bill for support as well"*.
+
+- **The once-off now rides on whichever invoice is raised next.** It used to be
+  charged only on an `initial` invoice, so a client whose first invoice went out
+  before the charge existed kept it unbilled forever unless someone remembered the
+  separate "Bill onboarding" step. Now `initial`, `renewal` (the sweep included)
+  and hand-priced invoices all carry it while it is unbilled, itemised as its own
+  line, and the sweep counts them (`onboardingCharged`) so automatic captures are
+  visible rather than silent. `includeOnboarding: false` waves it off for one
+  invoice; the charge stays owed and the next invoice picks it up.
+  - Double-billing is structurally impossible: `setupFeeDueCents` is zero as soon
+    as the charge sits on a standing invoice, and my earlier fix releases it if
+    that invoice is cancelled. Four tests cover the ways in.
+  - The Billing modal shows the line and lets the operator untick it; when the
+    charge is already billed, it says which document carries it
+    (`setupFeeRef`) instead of adding it twice.
+- **Support is deliberately not billed.** Asked how support should be charged, the
+  owner answered: *"ignore support charges. we charging per terminal which includes
+  support"*. So no support line, tier or charge type — and it is written into
+  CONTEXT §5e, the glossary, AGENTS.md ("Commercial rules locked with the owner")
+  and tidbits, because "add a support fee" is an obvious-looking feature for a
+  future session to invent.
+- **A field name had to change for §40.** Naming the carrying document
+  `setupFeeInvoiceNumber` failed the privacy-boundary test, which walks field
+  *names* on the client and company endpoints and cannot tell a vendor document
+  number from a merchant's billing data. Renamed `setupFeeRef` — the same lesson
+  as `salesBlocked` → `tradingBlocked` in 2026-09-11.
+
+Tests: CP **233 green (19 suites)**; backend typecheck, frontend `tsc -b` and the
+production build clean. Six existing billing tests were given an explicit
+`includeOnboarding: false`, each with a comment saying why that invoice is not the
+moment to capture the charge. Not committed (house rule).
+
+## 2026-09-16 (third pass) — the invoice as a document, and somewhere to bill a once-off
+
+Owner follow-ups on the mailer, all about the invoice itself:
+
+1. *"in Email: Sent by the Vula control plane"* — "control plane" is internal
+   vendor vocabulary a merchant should never read on an invoice. Every mail now
+   signs off with the office's own name (`Sent by {office name}`), the test email
+   included, and a test asserts the phrase never appears in an invoice email.
+2. *"can we not have pdf invoice attached to email"* — **yes.** `services/invoicePdf.ts`
+   renders an A4 invoice with pdfkit (the tenant's engine and conventions), the
+   mailer attaches it, and `GET /api/billing/invoices/:id/pdf` serves the same
+   document, so the download and the attachment cannot diverge. The Billing
+   invoice modal gained "Download PDF" (fetched with the session token, then
+   handed to the browser as a blob).
+3. *"What about charging once off payment? need somewhere to bill it"* — this was
+   the real gap. Invoices carried an amount and nothing saying what it was for,
+   so a once-off charge (installation, training, a migration) had nowhere to
+   live, and the plan's onboarding fee was **visible but unbillable** for an
+   existing client. Now: `invoices.description`, a hand-priced invoice must state
+   one (400 `invoice_description_required`), the Billing "Raise an Invoice" modal
+   asks for it, and the client page has a **"Bill R… onboarding"** button that
+   raises the once-off charge alone (`purpose: 'onboarding'`) — not `initial`,
+   which would re-bill the client's current period.
+   **Nine of the eleven live clients owe R10 000 onboarding that had no path to
+   being raised** (AHK Spares and Street Gym are already marked paid). Nothing was
+   billed for them — that is the owner's call.
+
+**Layout defects the PDF had, found by reading it rather than assuming** — each
+is now fixed and pinned by a test:
+
+- The amount was drawn as `R 14 500,0` / `0`: a 57pt money column is narrower
+  than the string at 11pt bold (59.9pt). The column is 110pt and `lineBreak:
+  false`; `moneyColumnFits()` asserts the fit with pdfkit's own metrics.
+- A wrapped description advanced a fixed 16pt, so the total rule could cut
+  through its second line; a long client name ran into the row beneath it. Both
+  offsets are measured now.
+- The footer was pinned to the foot of the page, leaving **48% of an A4 blank**
+  on a one-line invoice. It flows after the charge block.
+- The money column ran 5pt past the right margin (inherited from the tenant's
+  geometry, whose content edge is 552pt). The content box is a clean 48pt/547pt.
+
+**A stranded onboarding charge, found by watching the owner use the new UI.** A
+few minutes after the reset, two invoices appeared for myDiner (an `initial` one,
+cancelled, and a hand-priced "Installation" one) — the owner exercising the new
+billing form. The cancelled one had carried the R10 000 onboarding charge, and
+the subscription still read `invoiced` with nothing due: the charge could never be
+raised again, because a cancelled invoice had marked it billed. Fixed in the same
+pass — cancelling the last standing invoice that carries the charge releases it
+(`setupFeeReleased: true`, back to `not_invoiced`) — with two tests, and the live
+row repaired through the API (myDiner is billable again).
+
+Tests: CP **230 green (19 suites)** (was 218/18), backend typecheck, frontend
+`tsc -b` and the production build clean. Doctrine: CONTEXT §5e (+ the geometry
+and once-off rules). Not committed (house rule).
+
+**One mistake worth recording.** A throwaway script meant for a scratch registry
+set `CP_DB_PATH` in its own first line — too late, because ESM hoists imports, so
+it opened the **live** registry: it created a demo company, its invoice and
+overwrote the office's identity settings. Repaired the same hour (company deleted
+through the API, which cascaded its invoice; settings restored from the values
+captured in a PDF rendered two minutes earlier and re-verified; SMTP credentials
+untouched) and the scratch scripts now refuse to run unless `CP_DB_PATH` is under
+`/tmp`. See findings.md.
+
+## 2026-09-16 (later) — Phase 2: the office's own settings, and a mailer that sends
+
+Owner: *"continue with phase 2"* — the CP settings singleton + Settings page +
+real SMTP mailer. Also carried in this pass, from two owner reports on the same
+screen: the store credential had no repair path, and "unable to edit a store".
+
+- **The invoice email was a fabricated success.** `POST /api/billing/invoices/:id/email`
+  audited an email, returned `ok: true` and a `sentAt`, and **sent nothing** — the
+  same shape of defect as the auto-renewal that used to record a payment nobody
+  made. It now goes through `services/mailer.ts` (nodemailer, transport built per
+  send from the stored settings): 400 `smtp_not_configured` when no host is set,
+  502 `mailer_failed` with the relay's reason when it refuses, and only on
+  acceptance are `emailed_at`/`emailed_to` stamped and the audit written `ok`. A
+  failed send is audited `failed`, so the trail never claims an email.
+- **`office_settings`** — a true singleton (`CHECK (id = 1)`, seeded on first
+  boot) holding the vendor's own identity, `invoice_due_days`, `invoice_footer`
+  and the SMTP block. Named apart from `billing_settings` (per client) on purpose:
+  three different things in this codebase are called settings, and only one of
+  them is the office's. `invoice_due_days` replaced the hard-coded 14-day term in
+  `createInvoiceForCompany`.
+- **`GET/PUT /api/settings` + `POST /api/settings/test-email` + a Settings page**
+  (new nav entry). The SMTP password is never returned; the mask
+  (`••••••••`) submitted back means "unchanged", so a form round-trip cannot
+  blank a working credential. Clearing the host clears the user, password and
+  from-address with it. Audited with the masked view.
+- **Test-email ordering matters.** The first cut asked for a recipient before
+  noticing there was no mail server at all, which sends the operator to fix the
+  wrong field; the missing host is now reported first (caught live in the browser,
+  not by a test).
+- **The store credential is repairable (the `ahk-spares-ct` report).** A store
+  added without pasting its deployment's `CONTROL_PLANE_TOKEN` gets a generated
+  one, every push answers "Invalid control plane token", and until today the only
+  way out was to delete the registry row and create it again — losing its history,
+  licence allocation and job records. `PUT /api/stores/:id` now accepts
+  `controlPlaneToken` (blank refused; audited as `store_credential_set` without
+  the value; never echoed back), the edit modal gained the field, and the client
+  page's "Add Store to Fleet" gained both the token input and the reveal-once
+  modal it was swallowing.
+- **Verified against the live store at `:3278`** (the one from the report):
+  create without the token → `Invalid control plane token`; paste the
+  deployment's token via the edit path → **push ok**, health **up**
+  ("AHK Spares Cpt"), audit row written without the value. Probe store removed
+  afterwards; fleet back to 64.
+- Tests: CP **218 green (18 suites)** (was 198/17), backend typecheck, frontend
+  `tsc -b` and the production build all clean. Doctrine: CONTEXT §5e + the
+  `invoices`/`office_settings` rows in §5.
+
 ## 2026-09-16 — store Remove looked inert because its refusal was rendered off-screen
 
 Owner report: *"client : Client Details -> remove -> Confirm remove : store is not

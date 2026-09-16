@@ -21,6 +21,7 @@ const NAV: NavItem[] = [
   { to: '/versions', label: 'Versions' },
   { to: '/deployments', label: 'Deployments' },
   { to: '/errors', label: 'Errors' },
+  { to: '/settings', label: 'Settings' },
 ];
 
 export default function Layout({ title, children }: LayoutProps) {
