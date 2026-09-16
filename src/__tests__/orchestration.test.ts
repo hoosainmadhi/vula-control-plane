@@ -24,6 +24,8 @@ let token = '';
 let coolifyCreateCalls = 0;
 /** Every storage request the CP made, so the host tree it asks for can be asserted. */
 let storageCalls: Array<{ url: string; body: string }> = [];
+/** Every intended-branch-list push, so the panel's picker can be asserted. */
+let rosterCalls: Array<{ url: string; body: string }> = [];
 
 const configureCoolify = (): void => {
   process.env.COOLIFY_API_URL = COOLIFY_URL;
@@ -54,6 +56,7 @@ beforeEach(() => {
   configureCoolify();
   coolifyCreateCalls = 0;
   storageCalls = [];
+  rosterCalls = [];
   fetchMock = jest.spyOn(globalThis, 'fetch');
   fetchMock.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
     const s = String(url);
@@ -76,6 +79,10 @@ beforeEach(() => {
     }
 
     // Panel internal API (Head Office)
+    if (s.includes('/api/internal/branches/roster')) {
+      rosterCalls.push({ url: s, body: String(init?.body ?? '') });
+      return jsonResponse(200, { ok: true, count: 1 });
+    }
     if (s.includes('/api/internal/branches')) {
       return jsonResponse(201, { ok: true });
     }
@@ -280,5 +287,51 @@ describe('deployment job truthfulness', () => {
     expect(storeStep?.status).toBe('complete');
     const warnings = JSON.parse(storeStep?.warnings_json ?? '[]') as string[];
     expect(warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe('the intended store list reaches the Head Office', () => {
+  it('pushes the client`s stores when a branch is wired', async () => {
+    await createMultiStoreClient();
+
+    const push = rosterCalls.at(-1);
+    expect(push).toBeDefined();
+    expect(String(push!.url)).toContain('/api/internal/branches/roster');
+
+    const sent = JSON.parse(push!.body) as {
+      branches: Array<{ slug: string; name: string; baseUrl: string; headOfficeToken: string | null }>;
+    };
+    // The whole intended set, not just the branch that was just wired — that is
+    // what lets the panel offer the ones the merchant has not registered.
+    expect(sent.branches.map((b) => b.slug)).toEqual(['urban-threads-sandton']);
+    expect(sent.branches[0]).toMatchObject({
+      name: 'Urban Threads Sandton',
+      baseUrl: 'http://localhost:3246',
+    });
+    // With the credential the branch actually expects, so registering it in the
+    // panel is one click and cannot be pasted wrong.
+    expect(sent.branches[0]!.headOfficeToken).toEqual(expect.any(String));
+  });
+
+  it('pushes on demand, and says so when the client has no Head Office', async () => {
+    const { clientId } = await createMultiStoreClient();
+
+    const ok = await request(app)
+      .post(`/api/clients/${clientId}/push-stores`)
+      .set(auth())
+      .expect(200);
+    expect(ok.body).toEqual({ ok: true, stores: 1 });
+
+    // A client with no panel is a single-store merchant, not an error to crash on.
+    const bare = await request(app)
+      .post('/api/companies')
+      .set(auth())
+      .send({ name: 'Solo Trader', slug: 'solo-trader' })
+      .expect(201);
+    const refused = await request(app)
+      .post(`/api/clients/${bare.body.id}/push-stores`)
+      .set(auth())
+      .expect(400);
+    expect(refused.body.error).toMatch(/no Head Office/i);
   });
 });

@@ -35,6 +35,7 @@ import { entitlementsFor, requireFeature } from '../services/subscriptions.js';
 import { quoteForSubscription } from '../services/pricing.js';
 import { summariseSubscription, allocateTerminals, checkAllocation } from '../services/terminalLicences.js';
 import { pushLicencesForCompany } from '../services/billing.js';
+import { pushStoreListToPanel } from '../services/topology.js';
 import { storeToOut } from './stores.js';
 import type { StoreEnvironment } from '../config/registryDb.js';
 import {
@@ -45,6 +46,33 @@ import {
 
 export const clientsRouter = Router();
 clientsRouter.use(requireOffice);
+
+/**
+ * Hand this client's intended store list to its Head Office panel, on demand.
+ *
+ * The panel keeps what the merchant has registered separately, so pushing this
+ * never activates or removes a branch — it lets the merchant see which of their
+ * stores are still to be registered. Wiring does it automatically; this is for
+ * an operator who wants to reconcile without waiting for the next store change.
+ */
+clientsRouter.post(
+  '/:id/push-stores',
+  asyncHandler(async (req, res) => {
+    const company = getCompanyById(parseIdParam(req.params.id));
+    if (!company) throw new HttpError(404, 'Client not found');
+
+    const outcome = await pushStoreListToPanel(company.id);
+    if (outcome === 'no-panel') {
+      throw new HttpError(400, 'This client has no Head Office to push to');
+    }
+
+    recordAuditLog('office', 'store_list_pushed', 'company', company.id, {
+      after: { stores: outcome.pushed },
+      reason: `Pushed ${outcome.pushed} store(s) to the client's Head Office`,
+    });
+    res.json({ ok: true, stores: outcome.pushed });
+  }),
+);
 
 // --- Wire Types ---
 

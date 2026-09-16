@@ -1,12 +1,39 @@
 import crypto from 'crypto';
 import {
   listPanelsForCompany,
+  listStores,
   setStoreHeadOfficeToken,
   type StoreRecord,
 } from '../config/registryDb.js';
-import { pushTerminals, registerBranchWithPanel } from './storeClient.js';
+import { pushBranchRosterToPanel, pushTerminals, registerBranchWithPanel } from './storeClient.js';
 
 export type WiringOutcome = 'wired' | 'no-panel';
+
+/**
+ * Push the merchant's intended branch list to its Head Office, so the panel can
+ * offer the branches the control plane knows about but which are not registered
+ * there yet. Silent no-op for a client with no panel — that is a single-store
+ * merchant, not a failure.
+ */
+export const pushStoreListToPanel = async (
+  companyId: number,
+): Promise<{ pushed: number } | 'no-panel'> => {
+  const panel = listPanelsForCompany(companyId)[0];
+  if (!panel) return 'no-panel';
+
+  const stores = listStores().filter((store) => store.company_id === companyId);
+  await pushBranchRosterToPanel(
+    panel,
+    stores.map((store) => ({
+      slug: store.slug,
+      name: store.name,
+      baseUrl: store.base_url,
+      vertical: store.vertical,
+      headOfficeToken: store.head_office_token,
+    })),
+  );
+  return { pushed: stores.length };
+};
 
 /**
  * Pair a branch with its merchant's Head Office — both directions, with the same
@@ -50,6 +77,10 @@ export const wireStoreToHeadOffice = async (store: StoreRecord): Promise<WiringO
     headOfficeToken,
     vertical: store.vertical,
   });
+
+  // And refresh the intended list, so a branch the control plane has but the
+  // merchant has not registered yet shows up in their picker.
+  await pushStoreListToPanel(store.company_id);
 
   return 'wired';
 };
