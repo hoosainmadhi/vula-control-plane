@@ -38,9 +38,10 @@ import {
   allocateTerminals,
   checkAllocation,
 } from '../services/terminalLicences.js';
-import { pushLicencesForCompany, setupFeeInvoiceFor } from '../services/billing.js';
+import { currentProRata, pushLicencesForCompany, setupFeeInvoiceFor } from '../services/billing.js';
 import { pushStoreListToPanel } from '../services/topology.js';
 import { storeToOut } from './stores.js';
+import { recordAgreedPricing } from './companies.js';
 import type { StoreEnvironment } from '../config/registryDb.js';
 import {
   orchestrateClientDeployment,
@@ -237,6 +238,15 @@ clientsRouter.get(
         setupFeeStatus: quote.setupFeeStatus,
         setupFeeDueCents: quote.setupFeeDueCents,
         setupFeeRef: setupFeeInvoice?.invoice_number ?? null,
+        /** Where the price comes from: the client's agreement, or the plan. */
+        pricingSource: quote.pricingSource,
+        pricedAt: quote.pricedAt,
+        /**
+         * Terminals bought mid-period, and what the rest of the period is worth
+         * at the agreed rate. Null when there is nothing to charge (see
+         * `proRataForIncrease`) — never a guessed figure.
+         */
+        midPeriodCharge: currentProRata(company, null, quote),
         note: quote.note,
         allocations: sum.allocations.map((a) => {
           const store = stores.find((s) => s.id === a.storeId);
@@ -422,6 +432,49 @@ clientsRouter.put(
   }),
 );
 
+/**
+ * Re-prices a client to the plan they are on now.
+ *
+ * Plans no longer re-price the clients on them (grandfathering, 2026-09-16), so
+ * this is how a price rise is actually applied: explicitly, one client at a time,
+ * audited. The new price governs invoices raised from here on — anything already
+ * issued keeps the figures it was issued with.
+ */
+clientsRouter.post(
+  '/:id/reprice',
+  asyncHandler(async (req, res) => {
+    const id = parseIdParam(req.params.id);
+    const company = getCompanyById(id);
+    if (!company) throw new HttpError(404, 'Client not found');
+    const plan = company.plan_id ? getPlanById(company.plan_id) : null;
+    if (!plan) {
+      throw new HttpError(
+        400,
+        'This client has no plan, so there is no price to apply. Assign a plan first.',
+        'no_plan_to_price',
+      );
+    }
+    const before = quoteForSubscription(company, plan);
+    recordAgreedPricing(
+      company.id,
+      plan,
+      'office',
+      `Re-priced ${company.name} to the ${plan.name} price in force`,
+    );
+    const after = quoteForSubscription(getCompanyById(id)!, plan);
+    res.json({
+      ok: true,
+      planCode: plan.code,
+      pricingMode: plan.pricing_mode,
+      rateCents: plan.terminal_price_cents,
+      customAmountCents: plan.custom_amount_cents,
+      recurringAmountCents: after.recurringAmountCents,
+      previousRecurringAmountCents: before.recurringAmountCents,
+      note: 'This price governs invoices raised from now on; invoices already issued keep their figures.',
+    });
+  }),
+);
+
 clientsRouter.post(
   '/',
   asyncHandler(async (req, res) => {
@@ -533,6 +586,15 @@ clientsRouter.post(
       }
     }
     setLicensedTerminalCount(company.id, licensedTotal);
+
+    // The wizard states the quantity and the plan states the price: record both as
+    // the client's agreement, so a later edit to the plan cannot re-price them.
+    recordAgreedPricing(
+      company.id,
+      planId ? getPlanById(planId) : null,
+      'office',
+      'Recorded the price agreed when the client was onboarded',
+    );
 
     // 3. Format Head Office if multi_store
     let headOffice:

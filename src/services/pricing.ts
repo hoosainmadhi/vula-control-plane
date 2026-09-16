@@ -33,13 +33,100 @@ export function calculateRecurringSubscriptionAmount(
   if (plan.pricing_mode === 'custom') {
     return plan.custom_amount_cents > 0 ? plan.custom_amount_cents : null;
   }
-  const count = Number.isInteger(licensedTerminals) && licensedTerminals > 0 ? licensedTerminals : 0;
+  const count =
+    Number.isInteger(licensedTerminals) && licensedTerminals > 0 ? licensedTerminals : 0;
   return count * plan.terminal_price_cents;
 }
+
+/**
+ * Days in a billing period, for pro-rating a mid-period change.
+ *
+ * A flat convention rather than calendar months: "a month counts as 30 days, a
+ * year as 365" is explainable on an invoice, and it does not change the figure
+ * depending on which month the client upgraded. It is a convention, not a law —
+ * change it here and every pro-rata figure follows.
+ */
+export const PERIOD_DAYS: Record<PlanPeriod, number> = {
+  monthly: 30,
+  annual: 365,
+  'once-off': 0,
+};
+
+export interface ProRataInput {
+  pricingMode: PlanPricingMode | 'none';
+  /** The agreed per-terminal rate (from the subscription snapshot, not the plan). */
+  rateCents: number;
+  /** What the client is licensed for now. */
+  licensedTerminalCount: number;
+  /** What they have actually been invoiced and paid for this period. */
+  paidTerminalCount: number | null;
+  /** When the period they have paid for ends. */
+  paidThrough: string | null;
+  billingPeriod: PlanPeriod | null;
+  today?: Date;
+}
+
+export interface ProRataCharge {
+  /** Extra terminals bought mid-period. */
+  extraTerminals: number;
+  /** What the client receives if they settle it: the extra terminals for the rest. */
+  amountCents: number;
+  daysRemaining: number;
+  periodDays: number;
+  /** The window the charge covers, for the invoice line. */
+  from: string;
+  to: string;
+}
+
+/**
+ * What a mid-period increase is worth — the extra terminals, for the days left in
+ * a period the client has already paid for.
+ *
+ * Returns `null` when there is nothing to charge: not a per-terminal deal, no
+ * increase, no paid period to pro-rate against, or a period that has already
+ * lapsed. Reductions are deliberately not credited here — a smaller quantity
+ * takes effect from the next period.
+ */
+export const proRataForIncrease = (input: ProRataInput): ProRataCharge | null => {
+  if (input.pricingMode !== 'per_terminal' || input.rateCents <= 0) return null;
+  if (input.paidTerminalCount === null) return null;
+  const extra = input.licensedTerminalCount - input.paidTerminalCount;
+  if (extra <= 0) return null;
+  if (!input.paidThrough || !input.billingPeriod || input.billingPeriod === 'once-off') return null;
+
+  const periodDays = PERIOD_DAYS[input.billingPeriod];
+  if (periodDays <= 0) return null;
+
+  const today = input.today ?? new Date();
+  const startOfDay = (d: Date): Date =>
+    new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const end = new Date(`${input.paidThrough}T00:00:00.000Z`);
+  const daysRemaining = Math.floor(
+    (end.getTime() - startOfDay(today).getTime()) / (24 * 60 * 60 * 1000),
+  );
+  // A period that has ended (or ends today) has nothing left to charge for. A
+  // period with its whole length still to run DOES: the client has paid for this
+  // period already, and the extra terminals are not covered by it — the next
+  // invoice is for the *next* period, not this one.
+  if (daysRemaining <= 0) return null;
+
+  return {
+    extraTerminals: extra,
+    amountCents: Math.round((extra * input.rateCents * daysRemaining) / periodDays),
+    daysRemaining,
+    periodDays,
+    from: startOfDay(today).toISOString().slice(0, 10),
+    to: input.paidThrough,
+  };
+};
 
 export interface SubscriptionQuote {
   /** `none` when the client has no plan at all. */
   pricingMode: PlanPricingMode | 'none';
+  /** Where the price came from: the client's agreement, or the plan in force. */
+  pricingSource: 'agreed' | 'plan' | 'none';
+  /** When the office last recorded the price (null when never). */
+  pricedAt: string | null;
   planCode: string;
   planName: string;
   billingPeriod: PlanPeriod | null;
@@ -76,11 +163,49 @@ export function quoteForSubscription(
   const licensed = subscription?.licensed_terminal_count ?? licensedTerminalCount(company.id);
   const allocated = allocatedTerminalCount(company.id);
   const setupFeeStatus: SetupFeeStatus = subscription?.setup_fee_status ?? 'not_invoiced';
-  const recurringAmountCents = calculateRecurringSubscriptionAmount(plan, licensed);
-  const setupFeeCents = plan?.setup_fee_cents ?? 0;
+
+  // The price the client AGREED to, when one is on record. Everything below reads
+  // the agreement first and the plan only as a fallback — so a plan edit re-prices
+  // nobody (grandfathering), while caps and features keep tracking the plan.
+  const agreed = subscription?.priced_at
+    ? {
+        pricingMode: subscription.pricing_mode ?? 'per_terminal',
+        rateCents: subscription.rate_cents ?? 0,
+        customAmountCents: subscription.custom_amount_cents ?? 0,
+        setupFeeCents: subscription.setup_fee_cents ?? 0,
+        billingPeriod: subscription.billing_period ?? null,
+      }
+    : null;
+  const pricingMode: PlanPricingMode | 'none' = agreed
+    ? agreed.pricingMode
+    : (plan?.pricing_mode ?? 'none');
+  const rateCents = agreed
+    ? agreed.rateCents
+    : plan?.pricing_mode === 'per_terminal'
+      ? plan.terminal_price_cents
+      : 0;
+  const customAmountCents = agreed
+    ? agreed.customAmountCents
+    : plan?.pricing_mode === 'custom'
+      ? plan.custom_amount_cents
+      : 0;
+  const recurringAmountCents =
+    pricingMode === 'none'
+      ? null
+      : pricingMode === 'custom'
+        ? customAmountCents > 0
+          ? customAmountCents
+          : null
+        : licensed * rateCents;
+  const setupFeeCents = agreed ? agreed.setupFeeCents : (plan?.setup_fee_cents ?? 0);
   const setupFeeDueCents = setupFeeStatus === 'not_invoiced' ? setupFeeCents : 0;
 
   const notes: string[] = [];
+  if (!agreed && plan) {
+    notes.push(
+      'Priced from the plan — no agreed price recorded for this client yet, so an edit to the plan would change what they pay. Set the agreed price on the subscription.',
+    );
+  }
   if (!plan) {
     notes.push('No plan assigned — the subscription has no rate.');
   } else if (plan.pricing_mode === 'custom' && recurringAmountCents === null) {
@@ -95,22 +220,30 @@ export function quoteForSubscription(
       `Over-allocated: ${allocated} terminals placed across stores but only ${licensed} licensed.`,
     );
   } else if (allocated < licensed) {
-    notes.push(`${licensed - allocated} licensed terminal${licensed - allocated === 1 ? '' : 's'} not yet allocated to a store.`);
+    notes.push(
+      `${licensed - allocated} licensed terminal${licensed - allocated === 1 ? '' : 's'} not yet allocated to a store.`,
+    );
   }
-  if (setupFeeStatus === 'not_invoiced' && setupFeeCents === 0 && plan?.pricing_mode === 'per_terminal') {
+  if (
+    setupFeeStatus === 'not_invoiced' &&
+    setupFeeCents === 0 &&
+    plan?.pricing_mode === 'per_terminal'
+  ) {
     notes.push('The plan carries no once-off onboarding charge.');
   }
 
   return {
-    pricingMode: plan?.pricing_mode ?? 'none',
+    pricingMode,
+    pricingSource: agreed ? 'agreed' : plan ? 'plan' : 'none',
+    pricedAt: subscription?.priced_at ?? null,
     planCode: plan?.code ?? 'unassigned',
     planName: plan?.name ?? 'Unassigned',
-    billingPeriod: plan?.billing_period ?? null,
-    // `rateCents` is the per-terminal rate; a custom plan's agreed amount is
+    billingPeriod: agreed?.billingPeriod ?? plan?.billing_period ?? null,
+    // `rateCents` is the per-terminal rate; a custom deal's agreed amount is
     // carried as the recurring amount instead, so the UI never presents it as a
     // per-terminal figure.
-    rateCents: plan?.pricing_mode === 'per_terminal' ? plan.terminal_price_cents : 0,
-    customAmountCents: plan?.pricing_mode === 'custom' ? plan.custom_amount_cents : 0,
+    rateCents: pricingMode === 'per_terminal' ? rateCents : 0,
+    customAmountCents: pricingMode === 'custom' ? customAmountCents : 0,
     licensedTerminalCount: licensed,
     allocatedTerminalCount: allocated,
     unallocatedTerminalCount: licensed - allocated,

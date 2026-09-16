@@ -18,7 +18,7 @@ import type { SendMailOptions } from 'nodemailer';
 import { HttpError } from '../utils/errors.js';
 import { formatCents } from '../utils/money.js';
 import { getRawOfficeSettings } from './officeSettings.js';
-import { SETUP_FEE_LINE_LABEL } from './billing.js';
+import { invoiceLineItems } from './billing.js';
 import { buildInvoicePdf, invoicePdfFilename } from './invoicePdf.js';
 import type { CompanyRecord, InvoiceRecord, OfficeSettingsRecord } from '../config/registryDb.js';
 
@@ -118,32 +118,17 @@ export const invoiceHtml = (
   { invoice, company }: InvoiceEmailInput,
   settings: OfficeSettingsRecord,
 ): string => {
-  const rows: string[] = [];
-  // The once-off leads, exactly as it does on the PDF: same order in every
-  // document the client sees.
-  if (invoice.setup_fee_cents) {
-    rows.push(
-      `<tr><td style="padding:4px 0">${esc(SETUP_FEE_LINE_LABEL)}<br>
-        <span style="color:#94a3b8;font-size:11px">Once-off — charged when the subscription starts</span></td>
-        <td style="text-align:right;vertical-align:top">${formatCents(
-          invoice.setup_fee_cents,
-        )}</td></tr>`,
-    );
-  }
-  if (invoice.terminal_count !== null && invoice.terminal_price_cents !== null) {
-    rows.push(
-      `<tr><td style="padding:4px 0">Licensed terminals${
-        invoice.plan_name
-          ? `<br><span style="color:#94a3b8;font-size:11px">${esc(invoice.plan_name)}</span>`
+  // One shared line model for every invoice document (`invoiceLineItems`).
+  const rows = invoiceLineItems(invoice).map(
+    (item) =>
+      `<tr><td style="padding:4px 0">${esc(item.label)}${
+        item.detail
+          ? `<br><span style="color:#94a3b8;font-size:11px">${esc(item.detail)}</span>`
           : ''
-      }</td><td style="text-align:right;vertical-align:top">${
-        invoice.terminal_count
-      } × ${formatCents(invoice.terminal_price_cents)}<br>
-        <span style="font-weight:bold">${formatCents(
-          invoice.terminal_count * invoice.terminal_price_cents,
-        )}</span></td></tr>`,
-    );
-  }
+      }</td><td style="text-align:right;vertical-align:top;white-space:nowrap">${formatCents(
+        item.amountCents,
+      )}</td></tr>`,
+  );
 
   return `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1e293b">
     <div style="border-bottom:3px solid #059669;padding-bottom:12px;margin-bottom:16px">

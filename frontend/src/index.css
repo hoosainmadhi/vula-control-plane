@@ -17,3 +17,47 @@ body {
     Roboto,
     sans-serif;
 }
+
+/*
+ * Printing an invoice. The Billing page's Print button used to print the whole
+ * SPA: nav, filters, the invoice table and a grey overlay. The invoice itself
+ * carries `print-invoice`, and only that subtree survives the print stylesheet —
+ * the rest is hidden with `visibility` (not `display`), so the layout the operator
+ * is looking at does not reflow underneath them.
+ */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  .print-invoice,
+  .print-invoice * {
+    visibility: visible;
+  }
+
+  .print-invoice {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    max-width: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  /* The modal's grey wash is screen decoration, not document. */
+  .print-overlay {
+    background: none !important;
+    backdrop-filter: none !important;
+  }
+
+  /* Anything that is a control, not content. */
+  .print-hide,
+  .print-invoice button {
+    display: none !important;
+  }
+
+  body {
+    background: #fff;
+  }
+}

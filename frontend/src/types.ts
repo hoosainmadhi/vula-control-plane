@@ -416,6 +416,20 @@ export interface ClientSubscriptionDetail {
   setupFeeDueCents: number;
   /** The document carrying the charge, when it has been billed. */
   setupFeeRef: string | null;
+  /** Where the price comes from: the client's agreement, or the plan in force. */
+  pricingSource: 'agreed' | 'plan' | 'none';
+  pricedAt: string | null;
+  /** Extra terminals bought mid-period, and what the rest of the period is worth. */
+  midPeriodCharge: {
+    extraTerminals: number;
+    amountCents: number;
+    daysRemaining: number;
+    periodDays: number;
+    from: string;
+    to: string;
+    /** The invoice already carrying it for this period, if any. */
+    billedOn: string | null;
+  } | null;
   note: string;
   allocations: Array<{
     storeId: number;

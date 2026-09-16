@@ -1,5 +1,55 @@
 # Findings
 
+## 2026-09-16 (tenth pass) — a price is a deal, and a plan is a catalogue
+
+- **The bug was in the direction of the read, not the arithmetic.** Nothing was
+  wrong with `licensed × rate`; what was wrong was *where the rate came from* —
+  the plan, read live at invoice time. Eleven clients across four tiers meant one
+  plan edit moved every client's bill with no decision and no record. The fix
+  copies the terms onto the client and never reads the plan again for money
+  (caps and features still come from the plan: they are entitlements, not prices).
+  Worth stating as a rule: **anything a client has been promised belongs to the
+  client's record, not to the catalogue that generated it.**
+- **A snapshot needs a way to be updated, or it is a trap.** Grandfathering without
+  a re-price action would mean a price rise could never reach an existing client —
+  revenue stranded in the name of correctness. `POST /clients/:id/reprice` is
+  therefore part of the feature, not an extra: audited, one client at a time, with
+  the client page saying which state they are in.
+- **The change broke the sweep, and the sweep was already fragile.** The renewal
+  sweep read the *plan* to decide whether a client had a billable figure, so once
+  prices moved to the agreement it tried to invoice a client that had agreed
+  nothing — and because `createInvoiceForCompany` was not isolated per client, that
+  one client aborted the whole sweep (the route returned 400 and nobody else was
+  evaluated). Both fixed: the guard reads the effective price, and each client is
+  wrapped so its failure is recorded in `summary.errors` and the sweep continues —
+  the same isolation the health sweep gives each store.
+- **Pro-rata needed a period identity, not just a number.** The first cut computed
+  the charge from (current quantity vs last settled quantity) and never recorded
+  that it had billed it, so the button could be pressed twice and bill the same
+  days twice. `invoices.pro_rata_period` names the paid period a charge covered, so
+  "already billed" is a fact about the data rather than a hope about the operator —
+  and voiding frees it, which is the same release semantics as the onboarding
+  charge. A rule that can be applied twice is not a rule.
+- **A whole period remaining is still chargeable.** The first guard refused to
+  pro-rate when the days left equalled the period length, on the reasoning that the
+  next invoice would cover it — but the next invoice is for the *next* period. The
+  client had paid for this one, so the extra terminals are uncovered for all of it.
+  The test now pins the 30-of-30 case.
+- **An invoice line with no line.** A hand-priced or custom-priced invoice showed
+  its amount only in the totals: the PDF's line table had no rows, because the rows
+  were built from `terminal_count`/`setup_fee_cents` and nothing else. Putting the
+  description in the header was a partial fix; the real one is a line model
+  (`invoiceLineItems`) that turns any amount the structured lines do not explain
+  into its own line, shared by the PDF and the email so the two cannot drift. This
+  is what a pro-rata charge needed, and it fixed hand-priced invoices at the same
+  time.
+- **Conventions must be stated where they are used.** 30 days for a month and 365
+  for a year are arithmetic choices, not facts about the world; they live in one
+  exported constant with the reasoning beside them, and CONTEXT §5e repeats it. A
+  silent convention is indistinguishable from a bug to whoever reads the next
+  invoice.
+
+## 2026-09-16 (ninth pass) — labels that promise what the system does not do
 ## 2026-09-16 (ninth pass) — labels that promise what the system does not do
 
 - **"Pay" was a claim about money movement.** The button recorded a settlement that

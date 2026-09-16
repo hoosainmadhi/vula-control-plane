@@ -1,5 +1,62 @@
 # Progress
 
+## 2026-09-16 (tenth pass) — grandfathering, pro-rata, and print CSS
+
+Owner: *"pro-rata+gf then print css"* — the two commercial rules from the
+what's-next list, then the last Phase 3 item.
+
+**Grandfathering — a plan is a catalogue, not a live price.**
+- The agreed terms now live on the subscription (`pricing_mode`, `rate_cents`,
+  `custom_amount_cents`, `setup_fee_cents`, `billing_period`, `priced_at`) and are
+  stamped at exactly three moments: onboarding, moving a client to another plan,
+  and an explicit re-price. `quoteForSubscription` reads the agreement first and
+  falls back to the plan only when none is recorded, reporting
+  `pricingSource: 'agreed' | 'plan'`.
+- **Editing a plan re-prices nobody.** Caps, terminal ceilings and features still
+  track the plan — they are entitlements, not prices.
+- `POST /api/clients/:id/reprice` applies the plan's current price to one client
+  (audited `subscription_priced`), which is how a rise actually lands. The client
+  page says "Priced from the plan — no agreed price recorded yet" for a legacy row
+  and offers that button; all eleven live clients are in that state.
+- The renewal sweep now reads the **effective** price instead of the plan, so a
+  client with no agreed figure is skipped rather than invoiced from a plan they
+  never agreed to. That fix was forced by this change, not bolted on.
+
+**Pro-rata — terminals bought mid-period.**
+- `proRataForIncrease` (in `services/pricing.ts`, the recurring calculator) charges
+  `extra × agreed rate × daysRemaining / periodDays`, monthly = 30 days and
+  annual = 365 by a stated convention. Only increases, only `per_terminal` deals,
+  only against a period that has actually been paid for (`paidTerminalsFor` reads
+  the last settled invoice).
+- One charge **per paid period**: the invoice stamps `pro_rata_period`, so the same
+  increase cannot be billed twice; voiding it frees the period again, mirroring the
+  onboarding rule. 409 `nothing_to_pro_rate` / 409 `pro_rata_already_billed`.
+- The client page shows the figure and the window ("2 extra terminals · 15 of 30
+  days · 2026-09-15 to 2026-09-30") with a **Bill the difference** action. A
+  reduction is never credited — it applies from the next period.
+
+**One line model for every invoice.** `invoiceLineItems` now builds the lines for
+the PDF and the email from a single place, and anything the structured lines do not
+explain becomes its own line labelled with the description. That is what makes a
+hand-priced, custom-priced or pro-rata charge appear as a real line with its amount
+instead of a bare total — a gap that had been there since the first invoice.
+
+**Two bugs this surfaced, both fixed:** the renewal sweep aborted entirely on one
+client's bad data (`createInvoiceForCompany` was not isolated per client — the same
+isolation the health sweep gives each store), and its "custom pricing" guard read
+the plan rather than the client's agreement.
+
+**Print CSS** (the last Phase 3 item): the invoice modal prints as a document —
+`@media print` keeps the `.print-invoice` subtree, drops the nav, filters, table
+and buttons, and neutralises the modal's grey overlay. Print was previously the
+whole SPA.
+
+Tests: `pricing.test.ts` (13) covers the calculator's arithmetic and every
+"nothing to charge" case, the client surface, the re-price action and the
+grandfathering rule; total CP **260 green (20 suites)**, typecheck, frontend
+`tsc -b` and the production build clean. Verified live: the client page shows the
+pricing-source note and the action, and the invoice modal carries the print hooks.
+
 ## 2026-09-16 (ninth pass) — "Record payment", and voiding instead of cancelling
 
 Owner: *"Record Payment"* + *"remove the Stripe Paypal Card Terminal"* + *"I agree

@@ -458,18 +458,34 @@ describe('L3 Billing & Invoicing', () => {
       .expect(200);
     expect(renewCheck.body.subscription.recurringAmountCents).toBe(750_000);
 
-    // 3. The sweep no longer skips it: the agreed amount renews, and the
-    //    client with nothing agreed is still left for the office.
+    // 3. The sweep invoices the client whose deal has a figure, and leaves the one
+    //    whose deal does not — and, since 2026-09-16, that is decided by what each
+    //    client AGREED, not by what the plan says today. Undecided Co was onboarded
+    //    before the plan carried an amount, so the plan's later figure never
+    //    reaches it: it stays for the office to price.
     const sweep = await request(app).post('/api/billing/renew-check').set(auth()).expect(200);
-    expect(sweep.body.summary.invoicesCreated).toBeGreaterThanOrEqual(1);
+    expect(sweep.body.summary.errors).toEqual([]);
+    expect(sweep.body.summary.customPricingSkipped).toBeGreaterThanOrEqual(1);
+
+    const undecidedDetail = await request(app)
+      .get(`/api/clients/${undecided.id}`)
+      .set(auth())
+      .expect(200);
+    expect(undecidedDetail.body.subscription.recurringAmountCents).toBeNull();
+    expect(undecidedDetail.body.subscription.note).toContain('no agreed amount');
+
     const invoices = await request(app).get('/api/billing/invoices').set(auth()).expect(200);
+    const forUndecided = (invoices.body as Array<{ companyId: number }>).filter(
+      (inv) => inv.companyId === undecided.id,
+    );
+    // Nothing was invented for it.
+    expect(forUndecided).toHaveLength(0);
+
     const forDecided = (invoices.body as Array<{ companyId: number; amountCents: number }>).filter(
       (inv) => inv.companyId === decided.id,
     );
     expect(forDecided.length).toBeGreaterThanOrEqual(1);
-    // Every invoice for this client is the agreed amount — the referral carries
-    // no terminal arithmetic and, once the once-off has been captured, no
-    // onboarding either.
+    // Every invoice for this client is the agreed amount — no terminal arithmetic.
     expect(forDecided.every((inv) => inv.amountCents >= 750_000)).toBe(true);
   });
 

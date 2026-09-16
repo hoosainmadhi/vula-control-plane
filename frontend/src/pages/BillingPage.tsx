@@ -838,9 +838,11 @@ export default function BillingPage() {
 
       {/* View Invoice Modal */}
       {viewingInvoice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-2xs">
-          <div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl border border-slate-200">
-            {/* Printable Invoice Container */}
+        <div className="print-overlay fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-2xs">
+          {/* `print-invoice` is the subtree the print stylesheet keeps; the rest of
+              the page — nav, filters, the invoice table — is hidden. */}
+          <div className="print-invoice w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl border border-slate-200">
+            {/* Invoice header */}
             <div className="border-b border-slate-200 pb-4 flex justify-between items-start">
               <div>
                 <div className="flex items-center gap-2">
@@ -1005,7 +1007,7 @@ export default function BillingPage() {
             </div>
 
             {/* Actions */}
-            <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center">
+            <div className="print-hide mt-4 pt-3 border-t border-slate-100 flex justify-between items-center">
               <div className="flex gap-2">
                 <button
                   type="button"

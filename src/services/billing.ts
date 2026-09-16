@@ -21,15 +21,21 @@ import {
   type CompanyRecord,
   type InvoiceLines,
   type PlanPeriod,
+  type PlanRecord,
   type InvoiceRecord,
   type PaymentRecord,
 } from '../config/registryDb.js';
 import { issueLicence } from './licenceSigner.js';
 import { pushLicence, pushLicenceToPanel } from './storeClient.js';
 import { entitlementsFor, entitlementsForStore } from './subscriptions.js';
-import { quoteForSubscription } from './pricing.js';
+import {
+  proRataForIncrease,
+  quoteForSubscription,
+  type ProRataCharge,
+  type SubscriptionQuote,
+} from './pricing.js';
 import { HttpError } from '../utils/errors.js';
-import { exclusiveCents, vatPortionCents } from '../utils/money.js';
+import { exclusiveCents, formatCents as formatCents2, vatPortionCents } from '../utils/money.js';
 import { logger } from '../config/env.js';
 
 /**
@@ -65,8 +71,11 @@ export interface AutomatedRenewalSummary {
   renewalsProcessed: number;
   /** Renewals that also captured a once-off onboarding charge never billed before. */
   onboardingCharged: number;
-  /** Companies on negotiated pricing — the sweep never invents an amount for them. */
+  /** Companies with no formula to invoice from — custom pricing with no agreed
+   *  amount, or no plan at all. The sweep never invents a figure for them. */
   customPricingSkipped: number;
+  /** Companies with nothing to bill: no licensed terminals purchased. */
+  noLicensedTerminalsSkipped: number;
   errors: string[];
 }
 
@@ -77,7 +86,7 @@ export interface AutomatedRenewalSummary {
  * the recurring line a second time); `renewal` is the sweep's recurring-only
  * invoice; `manual` carries an amount the office agreed.
  */
-export type InvoicePurpose = 'initial' | 'renewal' | 'manual' | 'onboarding';
+export type InvoicePurpose = 'initial' | 'renewal' | 'manual' | 'onboarding' | 'pro_rata';
 
 export interface CreateInvoiceOptions {
   amountCents?: number;
@@ -237,6 +246,103 @@ export async function pushLicencesForCompany(companyId: number): Promise<{
 }
 
 /**
+ * The terminals a client has actually been invoiced **and paid** for, from the
+ * most recent settled invoice for the current period. That figure is what a
+ * mid-period increase is measured against: they have paid for N terminals until
+ * `paid_through`, so anything above N is unbilled time.
+ *
+ * `null` when no invoice has been settled — with no paid period there is nothing
+ * to pro-rate.
+ */
+export const paidTerminalsFor = (companyId: number): number | null => {
+  const settled = listInvoices(companyId)
+    .filter((inv) => inv.status === 'paid')
+    .sort((a, b) => (a.paid_date ?? '').localeCompare(b.paid_date ?? '') || a.id - b.id);
+  return settled.length > 0 ? (settled[settled.length - 1].terminal_count ?? null) : null;
+};
+
+/**
+ * The mid-period charge a client owes right now, or null when there is nothing to
+ * charge. Computed from the AGREED rate — a plan edit must not change what an
+ * existing client's increase costs.
+ */
+export type MidPeriodCharge = ProRataCharge & {
+  /** The invoice that already bills this increase for this period, if any. */
+  billedOn: string | null;
+};
+
+export const currentProRata = (
+  company: CompanyRecord,
+  plan: PlanRecord | null,
+  quote?: SubscriptionQuote,
+): MidPeriodCharge | null => {
+  const priced = quote ?? quoteForSubscription(company, plan);
+  const charge = proRataForIncrease({
+    pricingMode: priced.pricingMode,
+    rateCents: priced.rateCents,
+    licensedTerminalCount: priced.licensedTerminalCount,
+    paidTerminalCount: paidTerminalsFor(company.id),
+    paidThrough: company.paid_through,
+    billingPeriod: priced.billingPeriod,
+  });
+  if (!charge) return null;
+  // One charge per paid period: an invoice that already covers this period means
+  // the increase is billed, and raising it again would bill the same days twice.
+  const billed = listInvoices(company.id).find(
+    (inv) => inv.status !== 'cancelled' && inv.pro_rata_period === company.paid_through,
+  );
+  return { ...charge, billedOn: billed?.invoice_number ?? null };
+};
+
+/**
+ * The lines a client reads on an invoice, in order, from one place — so the PDF
+ * and the emailed invoice cannot show different arithmetic.
+ *
+ * Anything the structured lines do not explain becomes its own line labelled with
+ * the invoice's description: that is how a hand-priced charge, a pro-rata increase
+ * and a negotiated amount appear as real line items instead of a bare total.
+ */
+export interface InvoiceLineItem {
+  label: string;
+  detail: string;
+  amountCents: number;
+}
+
+export const invoiceLineItems = (invoice: InvoiceRecord): InvoiceLineItem[] => {
+  const items: InvoiceLineItem[] = [];
+  // The once-off leads whenever it is on the invoice (owner, 2026-09-16).
+  if ((invoice.setup_fee_cents ?? 0) > 0) {
+    items.push({
+      label: SETUP_FEE_LINE_LABEL,
+      detail: 'Once-off — charged when the subscription starts',
+      amountCents: invoice.setup_fee_cents!,
+    });
+  }
+  if (invoice.terminal_count !== null && invoice.terminal_price_cents !== null) {
+    items.push({
+      label: 'Licensed terminals',
+      detail: [
+        invoice.plan_name,
+        `${invoice.terminal_count} × ${formatCents2(invoice.terminal_price_cents)}`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      amountCents: invoice.terminal_count * invoice.terminal_price_cents,
+    });
+  }
+  const explained = items.reduce((sum, i) => sum + i.amountCents, 0);
+  const residual = invoice.amount_cents - explained;
+  if (residual > 0 || items.length === 0) {
+    items.push({
+      label: invoice.description ?? 'Subscription charge',
+      detail: '',
+      amountCents: residual > 0 ? residual : invoice.amount_cents,
+    });
+  }
+  return items;
+};
+
+/**
  * Create a billing invoice for a company.
  *
  * Without an explicit amount the invoice is computed from the subscription: the
@@ -300,6 +406,39 @@ export function createInvoiceForCompany(
     lines = {
       setupFeeCents: quote.setupFeeDueCents,
       description: options?.description ?? SETUP_FEE_LINE_LABEL,
+      planCode: plan?.code ?? null,
+      planName: plan?.name ?? null,
+    };
+  } else if (purpose === 'pro_rata') {
+    // Terminals bought mid-period, charged for the days left in the period the
+    // client has already paid for. Nothing to charge means nothing is raised —
+    // this never invents a figure (see `proRataForIncrease`).
+    const charge = currentProRata(company, plan, quote);
+    if (!charge) {
+      throw new HttpError(
+        409,
+        `Nothing to pro-rate for ${company.name}: the licensed quantity has not increased above what this period was invoiced for, or the period it was invoiced for has lapsed.`,
+        'nothing_to_pro_rate',
+      );
+    }
+    if (charge.billedOn) {
+      throw new HttpError(
+        409,
+        `The mid-period increase for ${company.name} is already on ${charge.billedOn}. Settle or void that invoice before raising another.`,
+        'pro_rata_already_billed',
+      );
+    }
+    amountCents = charge.amountCents + onboardingCents;
+    lines = {
+      // Deliberately no terminal_count/rate: this line is NOT `count × rate`, it
+      // is the extra terminals for part of a period. The description carries the
+      // arithmetic, and the document renders it as its own line.
+      description: `Mid-period increase — ${charge.extraTerminals} extra terminal${
+        charge.extraTerminals === 1 ? '' : 's'
+      } for ${charge.daysRemaining} of ${charge.periodDays} days (${charge.from} to ${charge.to})`,
+      // Stamped so this period cannot be pro-rated twice.
+      proRataPeriod: charge.to,
+      setupFeeCents: chargeOnboarding ? onboardingCents : null,
       planCode: plan?.code ?? null,
       planName: plan?.name ?? null,
     };
@@ -475,6 +614,7 @@ export async function runAutomatedRenewals(options?: {
     renewalsProcessed: 0,
     onboardingCharged: 0,
     customPricingSkipped: 0,
+    noLicensedTerminalsSkipped: 0,
     errors: [],
   };
 
@@ -486,12 +626,22 @@ export async function runAutomatedRenewals(options?: {
     const plan = getPlanById(company.plan_id!);
     if (!plan) continue;
 
-    // A custom plan renews from its agreed amount; a custom plan with none has
-    // no formula, so the sweep leaves it for the office rather than inventing one.
-    if (plan.pricing_mode === 'custom' && plan.custom_amount_cents <= 0) {
+    // What this client actually pays comes from their AGREED price, not from the
+    // plan in force — a plan edit must not re-price them, and a client whose
+    // agreed deal is custom with no figure has no formula to invoice from. Both
+    // cases are left for the office rather than guessed at.
+    const quote = quoteForSubscription(company, plan);
+    if (quote.recurringAmountCents === null) {
       summary.customPricingSkipped++;
       logger.info(
         `Renewal sweep skipped ${company.slug}: ${plan.name} is custom-priced with no agreed amount — raise its invoice with the agreed amount`,
+      );
+      continue;
+    }
+    if (quote.licensedTerminalCount === 0) {
+      summary.noLicensedTerminalsSkipped++;
+      logger.info(
+        `Renewal sweep skipped ${company.slug}: no licensed terminals, so there is nothing to bill`,
       );
       continue;
     }
@@ -522,13 +672,24 @@ export async function runAutomatedRenewals(options?: {
     if (existingInvoices.length > 0) {
       invoiceToPay = existingInvoices[0];
     } else {
-      // Create the renewal invoice: the recurring line, plus any once-off
-      // onboarding charge this client has never been billed for — the sweep is
-      // the last place to catch it, and it is counted so the office sees it.
-      invoiceToPay = createInvoiceForCompany(company.id, {
-        dueDate: paidThrough || nowDateStr,
-        purpose: 'renewal',
-      });
+      try {
+        // Create the renewal invoice: the recurring line, plus any once-off
+        // onboarding charge this client has never been billed for — the sweep is
+        // the last place to catch it, and it is counted so the office sees it.
+        invoiceToPay = createInvoiceForCompany(company.id, {
+          dueDate: paidThrough || nowDateStr,
+          purpose: 'renewal',
+        });
+      } catch (err) {
+        // One client's data must not abort the sweep for everyone else — the same
+        // isolation the health sweep gives each store. Recorded for the office.
+        const msg = `Renewal skipped for ${company.name} (${company.slug}): ${
+          err instanceof Error ? err.message : String(err)
+        }`;
+        logger.error(msg);
+        summary.errors.push(msg);
+        continue;
+      }
       summary.invoicesCreated++;
       if ((invoiceToPay.setup_fee_cents ?? 0) > 0) summary.onboardingCharged++;
     }

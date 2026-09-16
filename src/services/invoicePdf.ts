@@ -11,7 +11,7 @@
 import PDFDocument from 'pdfkit';
 import type { CompanyRecord, InvoiceRecord, OfficeSettingsRecord } from '../config/registryDb.js';
 import { formatCents } from '../utils/money.js';
-import { SETUP_FEE_LINE_LABEL } from './billing.js';
+import { invoiceLineItems } from './billing.js';
 
 const BRAND = '#059669';
 const GRAY = '#64748b';
@@ -160,32 +160,10 @@ export const buildInvoicePdf = ({ invoice, company, settings }: InvoicePdfInput)
       y += detail ? 28 : 16;
     };
 
-    // The once-off charge leads the lines whenever it is on the invoice: it is
-    // the first thing the client is being asked to pay for (owner, 2026-09-16).
-    if (invoice.setup_fee_cents) {
-      row(
-        SETUP_FEE_LINE_LABEL,
-        'Once-off — charged when the subscription starts',
-        formatCents(invoice.setup_fee_cents),
-      );
-    }
-    if (invoice.terminal_count !== null && invoice.terminal_price_cents !== null) {
-      row(
-        'Licensed terminals',
-        // The plan it belongs to, then the arithmetic that produced the charge.
-        [
-          invoice.plan_name,
-          `${invoice.terminal_count} × ${formatCents(invoice.terminal_price_cents)}`,
-        ]
-          .filter(Boolean)
-          .join(' · '),
-        formatCents(invoice.terminal_count * invoice.terminal_price_cents),
-      );
-    }
-    if (!invoice.description && !invoice.terminal_count && !invoice.setup_fee_cents) {
-      doc.fillColor(GRAY).fontSize(9).text('Subscription charge', 48, y);
-      y += 16;
-      doc.fillColor(INK).fontSize(9.5);
+    // The lines come from one shared model (`invoiceLineItems`), so this document
+    // and the emailed one cannot show different arithmetic.
+    for (const item of invoiceLineItems(invoice)) {
+      row(item.label, item.detail, formatCents(item.amountCents));
     }
 
     y = rule(Math.max(y + 6, 140));

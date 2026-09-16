@@ -154,9 +154,12 @@ billingRouter.post(
     const purposeRaw = req.body?.purpose;
     if (
       purposeRaw !== undefined &&
-      !['initial', 'renewal', 'manual', 'onboarding'].includes(String(purposeRaw))
+      !['initial', 'renewal', 'manual', 'onboarding', 'pro_rata'].includes(String(purposeRaw))
     ) {
-      throw new HttpError(400, 'purpose must be one of: initial, renewal, manual, onboarding');
+      throw new HttpError(
+        400,
+        'purpose must be one of: initial, renewal, manual, onboarding, pro_rata',
+      );
     }
     // A hand-priced invoice must say what it is for. It is how a once-off charge
     // gets a home (installation, training, a data migration), and it is what
@@ -177,7 +180,8 @@ billingRouter.post(
       dueDate: dueDate ?? undefined,
       description: description ?? undefined,
       includeOnboarding,
-      purpose: purposeRaw as 'initial' | 'renewal' | 'manual' | 'onboarding' | undefined,
+      purpose: purposeRaw as
+        'initial' | 'renewal' | 'manual' | 'onboarding' | 'pro_rata' | undefined,
     });
 
     res.status(201).json(invoiceToOut(invoice));

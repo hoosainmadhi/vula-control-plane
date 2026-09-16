@@ -142,6 +142,9 @@ const INVOICES_DDL = `
     -- renaming a plan never restates what an issued invoice says.
     plan_code            TEXT,
     plan_name            TEXT,
+    -- For a mid-period increase: the paid period this charge covered, so the same
+    -- increase cannot be billed twice for one period.
+    pro_rata_period      TEXT,
     -- The tax split of amount_cents, which is VAT-INCLUSIVE (owner decision,
     -- 2026-09-16). Held as three columns rather than derived on read: a rate
     -- change must never rewrite a document that has already been issued.
@@ -389,6 +392,18 @@ const COMPANY_SUBSCRIPTIONS_DDL = `
     licensed_terminal_count INTEGER NOT NULL DEFAULT 0 CHECK (licensed_terminal_count >= 0),
     setup_fee_status        TEXT    NOT NULL DEFAULT 'not_invoiced'
       CHECK (setup_fee_status IN ('not_invoiced', 'invoiced', 'paid', 'waived')),
+    -- THE AGREED PRICE TERMS (2026-09-16). Copied from the plan when the client is
+    -- onboarded, when the office moves them to another plan, or when the office
+    -- explicitly re-prices them — never re-read from the plan afterwards, so
+    -- editing a plan cannot silently re-price the clients already on it.
+    -- A NULL priced_at means no agreement has been recorded yet: the quote then
+    -- falls back to the plan and says so.
+    pricing_mode            TEXT,
+    rate_cents              INTEGER,
+    custom_amount_cents     INTEGER,
+    setup_fee_cents         INTEGER,
+    billing_period          TEXT,
+    priced_at               TEXT,
     created_at              TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
   )`;
@@ -682,9 +697,29 @@ export const getRegistryDb = (): Database.Database => {
   // story when a plan is renamed.
   addInvoiceColumn('plan_code', 'plan_code TEXT');
   addInvoiceColumn('plan_name', 'plan_name TEXT');
+  addInvoiceColumn('pro_rata_period', 'pro_rata_period TEXT');
   addInvoiceColumn('subtotal_cents', 'subtotal_cents INTEGER');
   addInvoiceColumn('vat_cents', 'vat_cents INTEGER');
   addInvoiceColumn('vat_rate', 'vat_rate INTEGER');
+
+  const subCols = db.prepare('PRAGMA table_info(company_subscriptions)').all() as Array<{
+    name: string;
+  }>;
+  const addSubColumn = (name: string, ddl: string) => {
+    if (!subCols.some((c) => c.name === name)) {
+      db.exec(`ALTER TABLE company_subscriptions ADD COLUMN ${ddl}`);
+    }
+  };
+  // Existing clients keep NULLs here on purpose: the control plane does not
+  // invent an agreed price for a deal it never recorded. The quote falls back to
+  // the plan and reports that, and the office stamps the agreement with one
+  // action (or it happens automatically the next time they change the plan).
+  addSubColumn('pricing_mode', 'pricing_mode TEXT');
+  addSubColumn('rate_cents', 'rate_cents INTEGER');
+  addSubColumn('custom_amount_cents', 'custom_amount_cents INTEGER');
+  addSubColumn('setup_fee_cents', 'setup_fee_cents INTEGER');
+  addSubColumn('billing_period', 'billing_period TEXT');
+  addSubColumn('priced_at', 'priced_at TEXT');
 
   const officeCols = db.prepare('PRAGMA table_info(office_settings)').all() as Array<{
     name: string;
@@ -1618,6 +1653,8 @@ export interface InvoiceRecord {
   /** The plan at the time of issue (a snapshot); null on a hand-priced invoice. */
   plan_code: string | null;
   plan_name: string | null;
+  /** The paid period a mid-period increase covered (null on other invoices). */
+  pro_rata_period: string | null;
   /** `amount_cents` exclusive of VAT — the split, stored on the document. */
   subtotal_cents: number | null;
   /** The VAT portion of `amount_cents`, which is VAT-inclusive. */
@@ -1746,9 +1783,52 @@ export interface CompanySubscriptionRecord {
   company_id: number;
   licensed_terminal_count: number;
   setup_fee_status: SetupFeeStatus;
+  /** The agreed terms; all NULL until an agreement is recorded (`priced_at`). */
+  pricing_mode: PlanPricingMode | null;
+  rate_cents: number | null;
+  custom_amount_cents: number | null;
+  setup_fee_cents: number | null;
+  billing_period: PlanPeriod | null;
+  priced_at: string | null;
   created_at: string;
   updated_at: string;
 }
+
+export interface SubscriptionPricing {
+  pricingMode: PlanPricingMode;
+  rateCents: number;
+  customAmountCents: number;
+  setupFeeCents: number;
+  billingPeriod: PlanPeriod | null;
+}
+
+/**
+ * Records the price a client has agreed to. Called when they are onboarded, when
+ * the office moves them to another plan, and when the office explicitly re-prices
+ * them — the three moments a price is actually agreed.
+ */
+export const setSubscriptionPricing = (
+  companyId: number,
+  pricing: SubscriptionPricing,
+): CompanySubscriptionRecord => {
+  ensureSubscription(companyId);
+  getRegistryDb()
+    .prepare(
+      `UPDATE company_subscriptions
+          SET pricing_mode = ?, rate_cents = ?, custom_amount_cents = ?, setup_fee_cents = ?,
+              billing_period = ?, priced_at = datetime('now'), updated_at = datetime('now')
+        WHERE company_id = ?`,
+    )
+    .run(
+      pricing.pricingMode,
+      pricing.rateCents,
+      pricing.customAmountCents,
+      pricing.setupFeeCents,
+      pricing.billingPeriod,
+      companyId,
+    );
+  return getSubscription(companyId)!;
+};
 
 export interface StoreTerminalLicenceRecord {
   id: number;
@@ -2091,6 +2171,8 @@ export interface InvoiceLines {
   /** The plan the subscription was on, snapshotted onto the document. */
   planCode?: string | null;
   planName?: string | null;
+  /** The paid period this mid-period charge covers. */
+  proRataPeriod?: string | null;
   /** The tax split of `amountCents` (which is VAT-inclusive). */
   subtotalCents?: number | null;
   vatCents?: number | null;
@@ -2154,8 +2236,9 @@ export const createInvoice = (
     .prepare(
       `INSERT INTO invoices (company_id, invoice_number, amount_cents, due_date, status,
                              terminal_count, terminal_price_cents, setup_fee_cents, description,
-                             plan_code, plan_name, subtotal_cents, vat_cents, vat_rate)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                             plan_code, plan_name, pro_rata_period,
+                             subtotal_cents, vat_cents, vat_rate)
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       companyId,
@@ -2170,6 +2253,7 @@ export const createInvoice = (
       lines?.description ?? null,
       lines?.planCode ?? null,
       lines?.planName ?? null,
+      lines?.proRataPeriod ?? null,
       lines?.subtotalCents ?? null,
       lines?.vatCents ?? null,
       lines?.vatRate ?? null,

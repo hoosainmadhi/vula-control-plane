@@ -18,6 +18,8 @@ import {
   licensedTerminalCount,
   setLicensedTerminalCount,
   setSetupFeeStatus,
+  setSubscriptionPricing,
+  recordAuditLog,
   PLAN_PERIODS,
   PLAN_PRICING_MODES,
   SETUP_FEE_STATUSES,
@@ -140,6 +142,40 @@ const planToOut = (plan: PlanRecord): PlanOut => ({
   isActive: Boolean(plan.is_active),
   createdAt: plan.created_at,
 });
+
+/**
+ * Records the price a client has agreed to, copied from the plan they are on.
+ *
+ * The three moments a price is agreed: onboarding, moving a client to another
+ * plan, and the office explicitly re-pricing them. Everywhere else, editing a plan
+ * must not touch what an existing client pays — see `services/pricing.ts` and
+ * CONTEXT §5e.
+ */
+export const recordAgreedPricing = (
+  companyId: number,
+  plan: PlanRecord | null,
+  actor = 'office',
+  reason = 'Recorded the price agreed with this client',
+): void => {
+  if (!plan) return;
+  setSubscriptionPricing(companyId, {
+    pricingMode: plan.pricing_mode,
+    rateCents: plan.terminal_price_cents,
+    customAmountCents: plan.custom_amount_cents,
+    setupFeeCents: plan.setup_fee_cents,
+    billingPeriod: plan.billing_period,
+  });
+  recordAuditLog(actor, 'subscription_priced', 'company', companyId, {
+    after: {
+      planCode: plan.code,
+      pricingMode: plan.pricing_mode,
+      rateCents: plan.terminal_price_cents,
+      customAmountCents: plan.custom_amount_cents,
+      setupFeeCents: plan.setup_fee_cents,
+    },
+    reason,
+  });
+};
 
 const companyToOut = (company: CompanyRecord): CompanyOut => {
   const ent = entitlementsFor(company);
@@ -442,6 +478,14 @@ companiesRouter.post(
               boundedInt(req.body.licensedTerminalCount, 'licensedTerminalCount', 0, 5000),
             );
           }
+          // And the price they agreed to, copied onto the subscription so a later
+          // edit to the plan cannot quietly re-price them.
+          recordAgreedPricing(
+            company.id,
+            planId ? getPlanById(planId) : null,
+            'office',
+            'Recorded the price agreed when the client was onboarded',
+          );
           return getCompanyById(company.id)!;
         })(),
       ),
@@ -520,6 +564,12 @@ companiesRouter.put(
         : undefined;
     const status = body.status !== undefined ? (body.status as 'active' | 'suspended') : undefined;
 
+    // Moving a client to another plan IS agreeing a new price (one of the three
+    // moments a price is agreed), so the plan's terms are recorded on the
+    // subscription here. Editing the plan itself never does this — that is what
+    // keeps an existing client's price stable.
+    const planChanged = planId !== undefined && planId !== company.plan_id;
+
     const updated = updateCompany(company.id, {
       ...(body.name !== undefined ? { name: requireString(body, 'name') } : {}),
       ...(body.billingEmail !== undefined
@@ -530,6 +580,15 @@ companiesRouter.put(
       ...(trialEndsAt !== undefined ? { trialEndsAt } : {}),
       ...(status !== undefined ? { status } : {}),
     });
+
+    if (planChanged) {
+      recordAgreedPricing(
+        company.id,
+        planId ? getPlanById(planId) : null,
+        'office',
+        `Moved ${company.name} to ${planId ? getPlanById(planId)?.name : 'no plan'} — priced at that plan's terms`,
+      );
+    }
 
     // The purchased quantity and the state of the once-off onboarding charge.
     // Lowering the quantity is allowed even when stores hold more licences than

@@ -16,7 +16,32 @@ CONTEXT.md "Internal API contract").
 
 ## Current Phase
 
-**Phase 3 (partial) — invoice numbering and VAT on inclusive prices
+**Phase 3 complete — pro-rata, grandfathering and print CSS (2026-09-16).**
+Owner: *"pro-rata+gf then print css"*.
+
+- **Grandfathering**: the agreed price terms live on the subscription and are
+  stamped only when the office onboards, moves or explicitly re-prices a client, so
+  **editing a plan re-prices nobody**; caps and features still track the plan.
+  `POST /clients/:id/reprice` is how a rise reaches an existing client (audited),
+  and the client page says which state each client is in.
+- **Pro-rata**: terminals bought mid-period are charged at the agreed rate for the
+  days left in the paid period (monthly = 30 days, annual = 365), once per period
+  (`invoices.pro_rata_period`), never credited on a reduction, never applied to a
+  negotiated flat deal. The client page shows the figure and the window; the office
+  raises it (`purpose: 'pro_rata'`).
+- **Print CSS**: the invoice prints as a document, not as the SPA.
+- Two bugs fell out and were fixed: the renewal sweep aborted on one client's data
+  (now isolated per client, like the health sweep per store) and read the plan
+  rather than the client's agreement; and every invoice line now comes from one
+  model, so a hand-priced or pro-rata charge itemises instead of showing a bare
+  total.
+
+Tests CP **260 green (20 suites)**; typecheck, frontend `tsc -b` and the production
+build clean. Doctrine: CONTEXT §5e. **Phase 3 is now closed** — the deferred
+commercial items (reduction credits, per-client overrides, bulk re-price, the
+payment gateway) are in tidbits.md.
+
+Previous — **Phase 3 (partial) — invoice numbering and VAT on inclusive prices
 (2026-09-16, complete).** Owner: *"fix invoice numbering"* + *"prices inc VAT"* —
 the two items that stood between this panel and an invoice usable with a real
 client:

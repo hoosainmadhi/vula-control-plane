@@ -93,6 +93,16 @@ CREATE TABLE IF NOT EXISTS company_subscriptions (
   licensed_terminal_count INTEGER NOT NULL DEFAULT 0 CHECK (licensed_terminal_count >= 0),
   setup_fee_status        TEXT    NOT NULL DEFAULT 'not_invoiced'
     CHECK (setup_fee_status IN ('not_invoiced', 'invoiced', 'paid', 'waived')),
+  -- The price the client AGREED to: copied from the plan when they are onboarded,
+  -- moved to another plan, or explicitly re-priced — never read back from the plan,
+  -- so editing a plan re-prices nobody. A NULL priced_at means no agreement has
+  -- been recorded and the quote falls back to the plan (and says so).
+  pricing_mode            TEXT,
+  rate_cents              INTEGER,
+  custom_amount_cents     INTEGER,
+  setup_fee_cents         INTEGER,
+  billing_period          TEXT,
+  priced_at               TEXT,
   created_at              TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -157,6 +167,9 @@ CREATE TABLE IF NOT EXISTS invoices (
   -- what an issued invoice says.
   plan_code            TEXT,
   plan_name            TEXT,
+  -- For a mid-period increase: the paid period this charge covered, so the same
+  -- increase cannot be billed twice for one period.
+  pro_rata_period      TEXT,
   -- The tax split of amount_cents, which is VAT-INCLUSIVE (prices are quoted
   -- incl. VAT). Stored per invoice so a rate change never restates a document
   -- already issued; NULL on invoices raised before the split existed.

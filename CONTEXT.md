@@ -655,6 +655,70 @@ incremented in the statement that reads it, and a year's counter starts from the
 highest number already written for that year, so a restored backup or an imported
 fleet cannot re-issue a number.
 
+### The price a client agreed — grandfathering (2026-09-16)
+
+A **plan** is a catalogue entry; what a client pays is their own record. When a
+client is onboarded (the wizard, or `POST /companies`), when the office moves them
+to another plan, or when the office explicitly re-prices them, the plan's terms are
+copied onto the subscription:
+
+| `company_subscriptions` | Meaning                                              |
+| ----------------------- | ---------------------------------------------------- |
+| `pricing_mode`          | `per_terminal` or `custom`, as agreed                |
+| `rate_cents`            | The agreed per-terminal rate                         |
+| `custom_amount_cents`   | The agreed flat charge, for a negotiated deal         |
+| `setup_fee_cents`       | The agreed once-off onboarding charge                |
+| `billing_period`        | `monthly` / `annual` / `once-off`                     |
+| `priced_at`             | When the office recorded it (NULL = never recorded)  |
+
+`quoteForSubscription` reads the **agreement first** and falls back to the plan
+only when `priced_at` is NULL, reporting `pricingSource: 'agreed' | 'plan'` so the
+UI can say which. **Editing a plan therefore re-prices nobody** — that is the whole
+point: eleven clients on four tiers would otherwise all move on one save.
+`POST /api/clients/:id/reprice` is how a rise is actually applied (one client,
+audited as `subscription_priced`); the client page shows "Priced from the plan —
+no agreed price recorded yet" for a legacy row and offers that button.
+
+Caps, terminal ceilings and features keep tracking the **plan** live: they are
+entitlements, not prices. Moving a client onto an archived plan is still refused.
+
+### Mid-period increases (pro-rata, 2026-09-16)
+
+When a client buys terminals *after* the period they have paid for, the extra
+terminals are charged for the days left in that period — not for the whole next
+period, and not free:
+
+```
+extra     = licensed now − terminals on the last SETTLED invoice
+amount    = round(extra × agreed rate × daysRemaining / periodDays)
+periodDays: monthly = 30, annual = 365          (a stated convention, not a law)
+daysRemaining = paid_through − today
+```
+
+- **Only increases.** A reduction is not credited; it applies from the next period.
+- **Only `per_terminal` deals.** A negotiated flat amount has no per-terminal figure
+  to multiply, so a quantity change is priced by the office, as with any hand-priced
+  invoice.
+- **Only against a paid period.** `paidTerminalCount` comes from the most recent
+  **settled** invoice — with nothing settled there is no unbilled time to charge for,
+  and a lapsed period has nothing left either.
+- **One charge per paid period.** The invoice stamps `pro_rata_period` with the
+  period it covered, so the same increase cannot be billed twice; voiding it frees
+  the period again, exactly as voiding releases the once-off onboarding charge.
+- **The office raises it, the amount is shown first.** The client page shows the
+  figure and the window ("2 extra terminals · 15 of 30 days · 2026-09-15 to
+  2026-09-30"), and `POST /api/billing/invoices {purpose: 'pro_rata'}` raises it —
+  409 `nothing_to_pro_rate`, or 409 `pro_rata_already_billed` naming the invoice
+  that already has it. Nothing is invoiced without that act, and the office can
+  always see what it owes.
+
+The line is deliberately **not** `count × rate`: it is time-based, so it carries no
+`terminal_count`/`terminal_price_cents`, and the description spells out the
+arithmetic. Every invoice line — structured or not — comes from one model
+(`invoiceLineItems` in `services/billing.ts`), so the PDF and the email cannot
+disagree, and a hand-priced or pro-rata charge appears as a real line with its
+amount instead of a bare total.
+
 ### Settling and voiding (2026-09-16)
 
 **The action is "Record payment", never "Pay".** The control plane does not charge

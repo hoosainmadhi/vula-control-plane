@@ -145,13 +145,19 @@ Order is buildable-first; each is its own increment.
   automatic renewal either set a per-terminal rate, or put the old flat figure in
   the plan's **agreed amount** (2026-09-13) so it bills flat each period. (See
   findings.md 2026-09-13.)
-- **Pro-rata upgrades** — changing the licensed quantity mid-period bills the new
-  quantity from the next period, not pro rata. Decide the policy before real money.
+- ~~**Pro-rata upgrades**~~ **shipped 2026-09-16** — increases are charged for the
+  days left in the paid period, once per period. Still open from that work:
+  **reductions are not credited** (they apply from the next period — deliberate,
+  and worth confirming before a client asks), **no per-client rate override** (a
+  discount for one client has to go through their plan or a hand-priced invoice),
+  and **no bulk re-price** — a fleet-wide rise is one `POST /clients/:id/reprice`
+  per client, fine for eleven and not for a hundred.
+- ~~**Subscription snapshots / grandfathering**~~ **shipped 2026-09-16** (the agreed
+  terms live on `company_subscriptions`; a plan edit re-prices nobody). Legacy rows
+  show "Priced from the plan" until the office applies a price, which is honest but
+  worth clearing before a live price change.
 - **Per-invoice VAT** — the invoice still has no subtotal/VAT/total split (see the
   older item below); the redesign put the arithmetic in place, not the tax.
-- **Subscription snapshots / grandfathering** — a plan edit still changes every
-  client on it. Snapshot the rate onto the subscription before changing a price on a
-  live customer.
 - **Additional-branch onboarding fee (§14 of the brief)** — deliberately not built.
   The architecture allows it (a plan column + a per-store charged flag); today the
   onboarding charge is once per client.
