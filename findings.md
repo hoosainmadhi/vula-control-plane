@@ -1,5 +1,59 @@
 # Findings
 
+## 2026-09-16 — an action that reports its refusal where nobody is looking
+
+- **"The button does nothing" was a working guard with an invisible message.** The
+  pause-first rule on store teardown (`409 store_active`) fired correctly and the
+  UI surfaced it correctly — into a banner rendered in document flow at the bottom
+  of the page. On a 44-card client that is several screens below the card the
+  operator just clicked. The refusal was never missing; its *position* was. Worth
+  checking first on any "nothing happens" report: is the feedback rendered, or just
+  rendered off-screen?
+- **Collapsing the confirm UI on failure removes the last evidence of the click.**
+  `removeStore` calls `onDone?.()` in both the success and failure paths, so a
+  refused remove resets Confirm/Cancel to a plain "Remove" — the one visible change
+  the operator would otherwise notice. A failed destructive action should leave its
+  confirmation (and the reason) standing, not tidy itself away.
+- **A fixed toast is the right home for action outcomes here, and inline flow is
+  not.** The fleet surfaces are unbounded in length by design; anything reported at
+  the foot of them is invisible in practice. Anchoring to the viewport costs one
+  shared component and removes the whole class of bug for every action that
+  reports through `notify` — push, diagnostics, pause, support, remove.
+- **The guard is right; the ergonomics were not.** Pause-first exists so a live till
+  cannot vanish from the fleet in one click, and CONTEXT §2a documents it. The
+  correct fix was to make the refusal legible, never to soften the guard.
+- **A throwaway unassigned store is the clean way to prove a teardown path.**
+  `POST /api/stores` without `companyId` is not cap-policed and allocates nothing,
+  so the full create → refuse → pause → delete cycle can be exercised against a
+  live CP without touching any client's licensed terminals. Worth remembering
+  before probing destructive routes against real fleet rows (which is how
+  `ahk-spares-jhb` was removed during this investigation).
+- **Demo registries accumulate cruft that later reads as a bug.** Three stale
+  `reseed-fleet` AHK rows (localhost URLs, build `0.3.0`, licence push failed) sat
+  inside the mockup client and made its counts disagree with its own branches —
+  44 stores where 41 were seeded. Seeding tools should own the whole client's rows,
+  or the leftover set becomes indistinguishable from a defect on screen.
+- **A running Vite dev server can serve a stale transform, and the page then lies
+  about your fix.** After editing the three pages, the browser kept rendering the
+  old inline banner while the file on disk was correct — the long-running
+  `vite` process had picked up an earlier edit but missed the later writes, so its
+  module graph kept the superseded transform. A `touch` on the edited files fixed
+  it. The check that settles it in one command: `curl -s
+  http://localhost:3241/src/pages/<Page>.tsx | grep -c NoticeBanner`. Beware the
+  trap in grepping transformed output — it emits double quotes, so a search for
+  `notice.kind === 'ok'` finds nothing even when the old code is what is being
+  served; absence of the new symbol is the reliable signal.
+- **High-level Playwright clicks did not register in this in-app browser; page-side
+  `.click()` did.** Tabs and card buttons both ignored `locator.click()` while
+  `evaluate(() => el.click())` worked immediately — worth knowing before
+  concluding a UI control is broken rather than the click never landing.
+- **Stale doc, noticed not fixed:** `0195a43`'s message records "Suite 199 green (17
+  suites)"; the suite reports **198** tests across those 17 suites, consistently, on
+  the same tree. One test's worth of drift in a commit message changes nothing about
+  the code, so it is left as history rather than rewritten — noted here because this
+  repo treats a doc/code disagreement as something to record, not to quietly
+  reconcile.
+
 ## 2026-09-14 — Deployments: the half-success a status pill hides
 
 - **The orchestration history was already durable and already detailed** — it was

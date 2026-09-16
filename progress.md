@@ -1,5 +1,41 @@
 # Progress
 
+## 2026-09-16 — store Remove looked inert because its refusal was rendered off-screen
+
+Owner report: *"client : Client Details -> remove -> Confirm remove : store is not
+removed."* Not a broken handler — the pause-first guard was working exactly as
+designed and saying so, into the wrong place.
+
+- **Diagnosis.** `DELETE /api/stores/:id` refuses an `active` store with **409
+  `store_active`** ("Pause it first, then remove it"). Every seeded store is
+  active, so every Remove was refused. The refusal *was* reported:
+  `useStoreActions.removeStore` catches it and calls `notify('error', …)`. But the
+  notice rendered **in document flow at the foot of the page** — below all 44
+  store cards on the AHK client — so the click read as a no-op. `removeStore` also
+  calls `onDone?.()` on failure, collapsing Confirm/Cancel back to a plain Remove,
+  which removed the last on-screen evidence that anything had happened at all.
+- **Fix — `NoticeBanner` (`frontend/src/components/storeUi.tsx`).** The action
+  outcome is now a **fixed, viewport-anchored toast** (`role="status"`,
+  `aria-live="polite"`), so it cannot be scrolled away from. Adopted by the three
+  surfaces that share the store-action hook — `ClientDetailPage`, `StoresPage`
+  (advanced/unlinked), `StoreDetailPage` — replacing three copies of the same
+  inline block. `CompaniesPage`/`PanelsPage` still carry their own simpler
+  string-only notice (no `kind`), left alone as they are advanced surfaces.
+- **Verified end-to-end** against the running CP with a throwaway *unassigned*
+  store (so no client's allocations were touched): create → DELETE while active →
+  **409 `store_active`** → Pause → DELETE → **200**, probe row gone, fleet back to
+  64 stores. Backend **198 green (17 suites)**; backend typecheck, frontend
+  `tsc -b` and the production build all clean.
+- **Registry hygiene (demo data, not code).** AHK Spares' licensed quantity set
+  back **130 → 123**, matching its 41 branches × 3 tills (123 configured, 123
+  allocated), clearing the over-allocation note and restoring R61,500/mo. The
+  three stale `reseed-fleet` AHK rows (`ahk-spares-jhb/dbn/ct`) are all gone from
+  the registry.
+- **Not covered by a test.** The refusal itself is covered
+  (`stores.test.ts` asserts 409 + "pause it first"); the *presentation* fix is not,
+  because this repo has no frontend test runner (no `test` script in
+  `frontend/package.json`). Recorded in tidbits.md.
+
 ## 2026-09-14 — production deployment plan documented (shared with za-pos)
 
 Owner will register `vula-app.co.za`; the readiness answer is written down rather

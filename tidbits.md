@@ -191,6 +191,20 @@ into that plan.
 
 ## Still deferred
 
+- **No frontend test runner.** `frontend/package.json` has no `test` script, so
+  UI-level regressions cannot be covered — e.g. the 2026-09-16 fix that moved
+  action notices into a fixed toast (the backend refusal it surfaces *is* covered,
+  in `stores.test.ts`). Adding vitest + testing-library is the prerequisite before
+  any further UI-behaviour fixes claim test coverage.
+- **Remove-then-pause ergonomics on the store card.** Remove still refuses an
+  active store by design (pause-first teardown, CONTEXT §2a); the 2026-09-16 fix
+  only made that refusal visible. A future pass could put the Pause action *inside*
+  the remove confirmation, or disable Remove on an active card with the reason
+  shown, so the two steps read as one workflow.
+- **Two notice idioms.** `ClientDetailPage`/`StoresPage`/`StoreDetailPage` use the
+  shared `NoticeBanner` (typed `Notice`); `CompaniesPage`/`PanelsPage` still carry
+  their own string-only inline block. Converge when those advanced pages are next
+  touched.
 - Auto-re-push on PUT when terminal_count/base_url changes (deliberately
   explicit-only in v1 — F1 adds drift visibility; revisit auto-push if
   drift bites).
