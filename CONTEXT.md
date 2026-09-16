@@ -655,6 +655,30 @@ incremented in the statement that reads it, and a year's counter starts from the
 highest number already written for that year, so a restored backup or an imported
 fleet cannot re-issue a number.
 
+### Settling and voiding (2026-09-16)
+
+**The action is "Record payment", never "Pay".** The control plane does not charge
+anyone: a settlement happens outside it (EFT, bank transfer, cash) and the office
+records it — a payment row with the method and reference, `paid_through` advanced,
+signed licences re-pushed. "Pay" implied money movement this app never performs,
+which is the same class of mislabelling as the invoice-email stub that reported a
+send it never made.
+
+**Only the methods that actually happen are offered**: Manual EFT / Bank Deposit,
+and Direct Debit / Bank Transfer. Stripe, PayPal and card-terminal options were
+removed from the UI because no gateway is integrated — choosing one recorded a
+charge no system had made. The API enum still accepts those values, because the
+method describes how money arrived rather than asking the CP to move it; when a
+gateway lands it is a **new action** ("Charge card"), not a relabelling of this one.
+
+**An issued invoice is voided, not cancelled** — "Cancel" sat beside "Record
+payment" and read as "cancel the payment". The stored status stays `cancelled`
+(the DDL CHECK cannot be altered in place, and the wire value is unchanged); the
+Screens read it as *Voided*. A void keeps the invoice on the record and simply
+stops it being payable, releases the once-off onboarding charge if this was the
+last invoice carrying it (the response says `setupFeeReleased: true`, and the UI
+says so out loud), and is attributed in the audit trail as `invoice_voided`.
+
 ### Charging once off (2026-09-16)
 
 **Support is not a separate charge — it is included in the per-terminal rate**

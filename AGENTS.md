@@ -148,6 +148,10 @@ ambiguity alive. See `CONTEXT.md` §2a. The same rule applies to what clients
   raised for a client that has never been billed it — across `initial`, `renewal`
   and hand-priced invoices. `includeOnboarding: false` is the one-invoice opt-out.
 - **A hand-priced invoice must say what it is for** (`description`).
+- **The office *records* payments; it never charges anyone.** Only manual EFT and
+  bank transfer are offered until a gateway exists; "Pay" is not a word for this
+  action, and an issued invoice is **voided**, not cancelled (the stored status
+  stays `cancelled`).
 - **Every price is quoted VAT-inclusive** (2026-09-16). The invoice breaks the tax
   *out* of the total (`subtotal + vat = total`, integer cents); nothing is added on
   top. The rate and Vula's own `vat_reg_no` are office settings, stored per
@@ -187,7 +191,7 @@ ambiguity alive. See `CONTEXT.md` §2a. The same rule applies to what clients
 | POST `/panels/:id/health`                    | office                          | ping the panel's own `/api/internal/status`, record health + version                                                                                                                          |
 | POST `/panels/:id/licence`                   | office                          | re-issue and deliver the company licence to a panel                                                                                                                                           |
 | GET/POST `/billing/invoices`                 | office                          | invoices with their pricing evidence (`terminalCount` × `terminalPriceCents`, `setupFeeCents`), their tax split (`subtotalCents` + `vatCents` + `vatRate`; the total is VAT-inclusive), a `description` of what is charged and the `planCode`/`planName` snapshot of the plan at issue; numbers are a monotonic `VULA-<year>-<6 digits>` sequence; `purpose: initial\|renewal\|manual\|onboarding`; **an unbilled once-off onboarding charge rides on whichever invoice is raised next** unless `includeOnboarding: false`; a hand-priced invoice without a description is 400 `invoice_description_required`; `onboarding` bills the once-off alone (409 `setup_fee_not_due` when none is due); an amountless invoice for a custom-priced client is 400 `custom_pricing_requires_amount` |
-| POST `/billing/invoices/:id/pay` · `/cancel` | office                          | settlement (advances `paid_through`, marks the onboarding charge paid, re-pushes licences) / cancel                                                                                            |
+| POST `/billing/invoices/:id/pay` · `/cancel` | office                          | **record a settlement** (the UI's *Record payment* — advances `paid_through`, marks the onboarding charge paid, re-pushes licences) / **void** (stored `cancelled`, releases the once-off if it was the last invoice carrying it, audited `invoice_voided`) |
 | GET `/billing/invoices/:id/pdf`              | office                          | the invoice as a downloadable A4 PDF — the same document the email attaches                                                                                                                   |
 | POST `/billing/renew-check`                  | office                          | renewal sweep: recurring-only invoices, explicit settlement, custom-priced clients skipped                                                                                                    |
 | GET `/errors`                                | office                          | grouped failure feed (§30): fingerprint, message, sources, occurrences, stores/head-offices hit, first/last seen                                                                              |

@@ -252,10 +252,11 @@ billingRouter.post(
 
     const updated = updateInvoice(id, { status: 'cancelled' });
 
-    // A cancelled invoice must not keep the once-off onboarding charge marked as
+    // A voided invoice must not keep the once-off onboarding charge marked as
     // billed: the charge would then be uncollectable — no invoice carries it, and
     // the client cannot be billed for it again. Only the last standing invoice
     // carrying it releases it.
+    let setupFeeReleased = false;
     if ((invoice.setup_fee_cents ?? 0) > 0) {
       const standing = listInvoices(invoice.company_id).filter(
         (i) => i.id !== invoice.id && i.status !== 'cancelled' && (i.setup_fee_cents ?? 0) > 0,
@@ -263,16 +264,25 @@ billingRouter.post(
       const subscription = getSubscription(invoice.company_id);
       if (standing.length === 0 && subscription?.setup_fee_status === 'invoiced') {
         setSetupFeeStatus(invoice.company_id, 'not_invoiced');
-        res.json({
-          ok: true,
-          invoice: invoiceToOut(updated!),
-          setupFeeReleased: true,
-        });
-        return;
+        setupFeeReleased = true;
       }
     }
 
-    res.json({ ok: true, invoice: invoiceToOut(updated!) });
+    // Voiding an issued document is a privileged act, so it is attributed like
+    // every other one (push, pause, licence, settings).
+    recordAuditLog('office', 'invoice_voided', 'invoice', invoice.id, {
+      before: { status: invoice.status },
+      after: { status: 'cancelled', setupFeeReleased },
+      reason: `Voided ${invoice.invoice_number}${
+        setupFeeReleased ? ' — released the once-off onboarding charge it carried' : ''
+      }`,
+    });
+
+    res.json({
+      ok: true,
+      invoice: invoiceToOut(updated!),
+      ...(setupFeeReleased ? { setupFeeReleased: true } : {}),
+    });
   }),
 );
 

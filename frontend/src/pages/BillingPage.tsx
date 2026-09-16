@@ -3,6 +3,19 @@ import { api, getToken } from '../api';
 import type { Invoice, Payment, Company } from '../types';
 import { SETUP_FEE_LABEL } from '../lib/storeVocab';
 
+/**
+ * What the operator reads. The stored status stays `cancelled` — the DDL's CHECK
+ * cannot be altered in place and the wire value is unchanged — but nobody
+ * "cancels" an issued invoice, they void it.
+ */
+const INVOICE_STATUS_LABELS: Record<string, string> = {
+  all: 'all',
+  pending: 'pending',
+  paid: 'paid',
+  overdue: 'overdue',
+  cancelled: 'voided',
+};
+
 export default function BillingPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -181,17 +194,31 @@ export default function BillingPage() {
     }
   };
 
-  const handleCancelInvoice = async (invoice: Invoice) => {
-    if (!confirm(`Cancel invoice ${invoice.invoiceNumber}?`)) return;
+  /**
+   * Voiding is not deleting: the invoice stays on the record as `cancelled` and
+   * simply stops being payable. If it was the last invoice carrying a client's
+   * once-off onboarding charge, the API releases that charge — which is worth
+   * saying out loud, because it means the next invoice will pick it up.
+   */
+  const handleVoidInvoice = async (invoice: Invoice) => {
+    if (!confirm(`Void invoice ${invoice.invoiceNumber}? It stays on the record.`)) return;
     setBanner(null);
     try {
-      await api(`/billing/invoices/${invoice.id}/cancel`, { method: 'POST' });
-      setBanner({ kind: 'ok', message: `Invoice ${invoice.invoiceNumber} cancelled.` });
+      const res = await api<{ setupFeeReleased?: boolean }>(
+        `/billing/invoices/${invoice.id}/cancel`,
+        { method: 'POST' },
+      );
+      setBanner({
+        kind: 'ok',
+        message: res.setupFeeReleased
+          ? `Invoice ${invoice.invoiceNumber} voided. The once-off onboarding charge it carried is no longer billed — whichever invoice you raise next will pick it up.`
+          : `Invoice ${invoice.invoiceNumber} voided.`,
+      });
       loadData();
     } catch (err) {
       setBanner({
         kind: 'error',
-        message: err instanceof Error ? err.message : 'Failed to cancel invoice',
+        message: err instanceof Error ? err.message : 'Could not void the invoice',
       });
     }
   };
@@ -322,7 +349,7 @@ export default function BillingPage() {
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
               }`}
             >
-              {status}
+              {INVOICE_STATUS_LABELS[status] ?? status}
             </button>
           ))}
         </div>
@@ -440,21 +467,23 @@ export default function BillingPage() {
                           <button
                             type="button"
                             onClick={() => setPayModalInvoice(inv)}
+                            title="Record a settlement that has already happened — the control plane does not charge anyone"
                             className="rounded-md bg-emerald-600 px-2.5 py-1 text-xs font-bold text-white shadow-2xs hover:bg-emerald-700 cursor-pointer"
                           >
-                            Pay
+                            Record Payment
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleCancelInvoice(inv)}
+                            onClick={() => handleVoidInvoice(inv)}
+                            title="Void this invoice. It stays on the record; it is no longer payable."
                             className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200 cursor-pointer"
                           >
-                            Cancel
+                            Void
                           </button>
                         </>
                       ) : (
                         <span className="text-xs text-slate-400">
-                          {inv.status === 'paid' ? `Settled on ${inv.paidDate}` : 'Cancelled'}
+                          {inv.status === 'paid' ? `Settled on ${inv.paidDate}` : 'Voided'}
                         </span>
                       )}
                     </td>
@@ -749,7 +778,7 @@ export default function BillingPage() {
         </div>
       )}
 
-      {/* Record Payment Modal */}
+      {/* Record a settlement that already happened */}
       {payModalInvoice && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-2xs">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
@@ -767,11 +796,11 @@ export default function BillingPage() {
                   onChange={(e) => setPayMethod(e.target.value as any)}
                   className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm"
                 >
+                  {/* Only what actually happens. Stripe, PayPal and card-terminal
+                      options were removed 2026-09-16: no gateway is integrated, and
+                      an operator picking one would record a charge no system made. */}
                   <option value="manual">Manual EFT / Bank Deposit</option>
                   <option value="bank_transfer">Direct Debit / Bank Transfer</option>
-                  <option value="stripe">Stripe Gateway</option>
-                  <option value="credit_card">Card Terminal / POS</option>
-                  <option value="paypal">PayPal</option>
                 </select>
               </div>
               <div>
@@ -780,7 +809,7 @@ export default function BillingPage() {
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. EFT-2026-9481 or ch_3P7..."
+                  placeholder="e.g. EFT-2026-9481"
                   value={payTxId}
                   onChange={(e) => setPayTxId(e.target.value)}
                   className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm font-mono text-xs"
@@ -799,7 +828,7 @@ export default function BillingPage() {
                   disabled={submitting}
                   className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50"
                 >
-                  {submitting ? 'Settling…' : 'Confirm Payment & Push Licence'}
+                  {submitting ? 'Recording…' : 'Record Payment'}
                 </button>
               </div>
             </form>
@@ -836,7 +865,7 @@ export default function BillingPage() {
                         : 'bg-slate-100 text-slate-600'
                   }`}
                 >
-                  {viewingInvoice.status}
+                  {INVOICE_STATUS_LABELS[viewingInvoice.status] ?? viewingInvoice.status}
                 </span>
                 <div className="font-mono text-sm font-black text-slate-900 mt-1">
                   {viewingInvoice.invoiceNumber}

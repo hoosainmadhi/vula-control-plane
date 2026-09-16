@@ -155,9 +155,12 @@ Order is buildable-first; each is its own increment.
 - **Additional-branch onboarding fee (§14 of the brief)** — deliberately not built.
   The architecture allows it (a plan column + a per-store charged flag); today the
   onboarding charge is once per client.
-- **Payment gateway** — settlement is still recorded by hand (payments now record
-  `completed`, and the sweep never fabricates one). A provider webhook is the next
-  step; nothing in the invoice model blocks it.
+- **Payment gateway** — settlement is still recorded by hand (payments record
+  `completed`, the sweep never fabricates one, and the UI offers only manual EFT
+  and bank transfer since 2026-09-16). A provider webhook is the next step; nothing
+  in the invoice model blocks it. When it lands, "charge the card" is a **new
+  action** beside *Record payment* — not a relabelling of it — and the gateway
+  method values the API still accepts gain their real meaning.
 - **Register display of the allowance** — `/api/runtime-config` publishes
   `subscription.maxTerminals` and the register's type carries it; the "N of M
   licensed" line in the till picker is not drawn yet (the gate itself is live).

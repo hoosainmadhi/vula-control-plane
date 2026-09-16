@@ -1238,3 +1238,80 @@ describe('the plan on an invoice', () => {
     expect(res.body.planName).toBeNull();
   });
 });
+
+describe('voiding an invoice', () => {
+  it('keeps the invoice on the record, attributes it, and reports the release', async () => {
+    const company = await makeCompany();
+    const billed = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'onboarding' })
+      .expect(201);
+
+    const voided = await request(app)
+      .post(`/api/billing/invoices/${billed.body.id}/cancel`)
+      .set(auth())
+      .send({})
+      .expect(200);
+
+    // The row survives as `cancelled` — that is the stored status, and the wire
+    // value the API has always used; the UI reads it as "voided".
+    expect(voided.body.invoice.status).toBe('cancelled');
+    const still = await request(app)
+      .get(`/api/billing/invoices/${billed.body.id}`)
+      .set(auth())
+      .expect(200);
+    expect(still.body.invoiceNumber).toBe(billed.body.invoiceNumber);
+    expect(voided.body.setupFeeReleased).toBe(true);
+
+    // Attributed, like push/pause/licence/settings.
+    const entry = listAuditLogs(20).find((l) => l.action === 'invoice_voided');
+    expect(entry).toBeDefined();
+    expect(entry!.target_id).toBe(billed.body.id);
+    expect(entry!.reason).toContain('released the once-off onboarding charge');
+  });
+
+  it('does not offer a gateway: only the two methods that happen', async () => {
+    // The UI offers manual and bank transfer only. The API still accepts the
+    // gateway names — they describe how money arrived, and a script recording a
+    // card settlement is stating a fact, not asking the CP to charge anyone.
+    const company = await makeCompany();
+    const invoice = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({
+        companyId: company.id,
+        amountCents: 100000,
+        description: 'Ad hoc',
+        includeOnboarding: false,
+      })
+      .expect(201);
+
+    for (const method of ['manual', 'bank_transfer']) {
+      const other = await request(app)
+        .post('/api/billing/invoices')
+        .set(auth())
+        .send({
+          companyId: company.id,
+          amountCents: 100000,
+          description: 'Ad hoc',
+          includeOnboarding: false,
+        })
+        .expect(201);
+      const paid = await request(app)
+        .post(`/api/billing/invoices/${other.body.id}/pay`)
+        .set(auth())
+        .send({ method })
+        .expect(200);
+      expect(paid.body.payment.method).toBe(method);
+      expect(paid.body.payment.status).toBe('completed');
+    }
+
+    // An unknown method is still refused.
+    await request(app)
+      .post(`/api/billing/invoices/${invoice.body.id}/pay`)
+      .set(auth())
+      .send({ method: 'cheque' })
+      .expect(400);
+  });
+});

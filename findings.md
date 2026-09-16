@@ -1,5 +1,37 @@
 # Findings
 
+## 2026-09-16 (ninth pass) — labels that promise what the system does not do
+
+- **"Pay" was a claim about money movement.** The button recorded a settlement that
+  had already happened outside the app. Every other mislabelling we have removed
+  this session was the same shape: the invoice-email stub that reported a send, the
+  auto-renewal that recorded a payment nobody made. A label is a contract with the
+  operator about what will happen when they click; "Pay" broke it in the direction
+  that matters most, because money is involved.
+- **Offering an unintegrated payment method is the same defect in a dropdown.**
+  "Stripe Gateway", "PayPal" and "Card Terminal / POS" were selectable with no
+  gateway behind any of them, so a manual EFT could be recorded as `stripe` — and
+  the payments table would then say a card network was involved. Removing them was
+  the smallest honest fix; the deeper fix is the gateway itself (still on the
+  backlog), at which point a gateway method becomes a *new action* rather than a
+  relabelling of "Record payment".
+- **A word can be right for a status and wrong for an action.** The invoice status
+  is `cancelled` in the schema and the CHECK cannot be altered in place; the
+  operator nonetheless voids an issued document. Rather than migrate an enum for a
+  word, the SPA maps the stored value to *Voided* — the same shape as the register
+  and licence label maps, and it keeps the wire contract still.
+- **A side effect nobody is told about is a bug waiting to be reported.** Voiding
+  the last invoice carrying the once-off releases that charge; the API has said
+  `setupFeeReleased: true` since the fourth pass, but the UI ignored it, so the
+  operator's only signal was an unexplained R10 000 reappearing on the next
+  invoice. The confirmation now states it.
+- **Voiding an issued document wants attributing.** Push, pause, licence issue,
+  support sessions and settings edits were all audited; voiding was not. The
+  `invoice_voided` row now records the before/after status and whether the release
+  happened — the audit trail is the answer to "who voided this invoice and why",
+  which is exactly the question an invoice dispute starts with.
+
+## 2026-09-16 (eighth pass) — an invoice that changed its story when a plan was renamed
 ## 2026-09-16 (eighth pass) — an invoice that changed its story when a plan was renamed
 
 - **One screen was reading history through today's catalogue.** The Billing detail

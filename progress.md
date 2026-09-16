@@ -1,5 +1,42 @@
 # Progress
 
+## 2026-09-16 (ninth pass) — "Record payment", and voiding instead of cancelling
+
+Owner: *"Record Payment"* + *"remove the Stripe Paypal Card Terminal"* + *"I agree
+with Void instead of Cancel"* — the three naming decisions from the discussion
+that followed the last pass.
+
+- **`Pay` → `Record Payment`** on the invoice row and the modal's submit button.
+  The app never charges anyone; it records a settlement that already happened and
+  then advances `paid_through` and re-pushes licences. "Pay" promised an action the
+  system does not perform — the same mislabelling as the invoice-email stub that
+  used to report a send it never made. The modal heading keeps the side effect
+  visible (*Record Payment & Renew Licence*), and the row button carries a tooltip
+  saying the control plane does not charge anyone.
+- **Stripe, PayPal and card-terminal methods removed** from the payment form. No
+  gateway is integrated, so choosing one wrote a `method: 'stripe'` row for a
+  payment no system had made — a manual EFT that looks like a card charge. Manual
+  EFT / Bank Deposit and Direct Debit / Bank Transfer remain. The API enum still
+  accepts the gateway values (a method describes how money arrived, and a script
+  recording a real card settlement is stating a fact) — when a gateway lands it is
+  a **new action**, not a relabelled one. The reference-field placeholder no longer
+  suggests a Stripe charge id.
+- **`Cancel` → `Void`** on the row, in the confirm text, in the status pill and in
+  the status filter. "Cancel" sat next to "Record Payment" and read as "cancel the
+  payment". The stored status stays `cancelled` (the DDL CHECK cannot be altered in
+  place and the wire value is unchanged) — the SPA maps it to *Voided* for display.
+- **Voiding is now attributed**, like push/pause/licence/settings: an
+  `invoice_voided` audit row records the status change and whether the once-off was
+  released. And the UI now *says* when a void released the onboarding charge,
+  instead of leaving the operator to discover it on the next invoice.
+
+Tests: the void keeps the invoice on the record with status `cancelled`, reports
+`setupFeeReleased`, and writes the audit row; both offered methods record a
+`completed` payment; an unknown method is still refused. CP **247 green (19
+suites)**, typecheck, frontend `tsc -b` and the production build clean. Verified
+live: the row reads **Record Payment** / **Void**, the filters read **Voided**, and
+the modal offers only the two methods.
+
 ## 2026-09-16 (eighth pass) — the plan on the invoice
 
 Owner: *"we should [show] the plan in the invoice."*
