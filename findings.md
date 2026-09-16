@@ -1,5 +1,29 @@
 # Findings
 
+## 2026-09-16 (eighth pass) — an invoice that changed its story when a plan was renamed
+
+- **One screen was reading history through today's catalogue.** The Billing detail
+  view printed the plan by looking up the *client's* plan at render time, so
+  renaming a tier rewrote what every past invoice appeared to say — and a client
+  moved to a different plan would "have been" on the new one all along. Everything
+  else on the invoice was already a snapshot (`terminal_count`,
+  `terminal_price_cents`, `setup_fee_cents`, the VAT rate); the plan was the one
+  fact still borrowed. Asking to show the plan on the invoice surfaced it.
+- **The rule worth stating once:** an invoice is a document, so each fact that
+  describes the deal is copied onto it at issue and never re-derived. That is now
+  tabulated in CONTEXT §5e, so the next field added to an invoice starts from the
+  right question — "was this true when we raised it?" — rather than from what is
+  convenient to join.
+- **A snapshot needs an honest empty state.** A client with no plan shows "No plan
+  recorded on this invoice" instead of the previous fallback `'Custom'`, which
+  silently asserted a tier for an invoice that had none. A test asserts `null`
+  survives to the wire.
+- **The test that proves a snapshot is the rename.** Capturing a value is easy to
+  fake — reading it back from the live source also "works" until the source
+  changes. The regression test renames the plan after issuing and asserts the old
+  invoice still reads the old name while a newly raised one reads the new name.
+
+## 2026-09-16 (seventh pass) — a document that looks official and is not quite right
 ## 2026-09-16 (seventh pass) — a document that looks official and is not quite right
 
 - **Two defects of the same class, fixed together.** An invoice number that can

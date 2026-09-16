@@ -606,6 +606,24 @@ Two layout rules are load-bearing, and both were bugs first:
   the footer flows after the charge block instead of being pinned to the foot of
   the page (which left half an A4 blank on a one-line invoice).
 
+### What an invoice snapshots (2026-09-16)
+
+An invoice is a document, so everything that describes the deal at the moment it
+was raised is **copied onto it** — never read back through today's catalogue:
+
+| On the invoice          | Because                                                    |
+| ----------------------- | ---------------------------------------------------------- |
+| `terminal_count` × `terminal_price_cents` | The rate at issue; a plan's price change must not restate an issued invoice |
+| `setup_fee_cents`       | The once-off as charged, not as the plan prices it now      |
+| `plan_code` / `plan_name` | The plan the client was on when it was raised             |
+| `subtotal_cents` / `vat_cents` / `vat_rate` | The tax inside the total, at the rate then in force |
+| `description`           | What the charge was for, in the words used at the time      |
+
+The plan name is shown in the PDF's metadata block and on the subscription line
+(`Vula Network · 7 × R 500,00`), and in the client's emailed invoice; the Billing
+detail view reads it off the invoice rather than the client's current plan. A
+client with no plan shows nothing there — the invoice says what it knows.
+
 ### VAT and invoice numbering (2026-09-16)
 
 **Every price this office quotes is VAT-inclusive** (owner decision). The plan's

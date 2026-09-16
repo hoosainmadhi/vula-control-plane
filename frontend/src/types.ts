@@ -269,6 +269,9 @@ export interface Invoice {
   setupFeeCents: number | null;
   /** What the charge is for — required on a hand-priced invoice. */
   description: string | null;
+  /** The plan at the time of issue — a snapshot, not today's catalogue entry. */
+  planCode: string | null;
+  planName: string | null;
   /** The VAT split of `amountCents`, which is VAT-inclusive. Null on invoices
    *  raised before the split existed. */
   subtotalCents: number | null;

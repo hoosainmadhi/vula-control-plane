@@ -53,6 +53,9 @@ export interface InvoiceOut {
   setupFeeCents: number | null;
   /** What the charge is for — required on a hand-priced invoice. */
   description: string | null;
+  /** The plan at the time of issue — a snapshot, not today's catalogue entry. */
+  planCode: string | null;
+  planName: string | null;
   /** `amountCents` broken down: it is the VAT-inclusive total. Null on invoices
    *  raised before the split existed. */
   subtotalCents: number | null;
@@ -91,6 +94,8 @@ const invoiceToOut = (inv: InvoiceRecord): InvoiceOut => {
     terminalPriceCents: inv.terminal_price_cents ?? null,
     setupFeeCents: inv.setup_fee_cents ?? null,
     description: inv.description,
+    planCode: inv.plan_code,
+    planName: inv.plan_name,
     subtotalCents: inv.subtotal_cents,
     vatCents: inv.vat_cents,
     vatRate: inv.vat_rate,

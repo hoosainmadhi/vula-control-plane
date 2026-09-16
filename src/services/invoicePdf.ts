@@ -119,6 +119,8 @@ export const buildInvoicePdf = ({ invoice, company, settings }: InvoicePdfInput)
     field('ISSUED', invoice.created_at.slice(0, 10), top + 14);
     if (invoice.due_date) field('DUE', invoice.due_date, top + 28);
     field('STATUS', invoice.status.toUpperCase(), top + 42);
+    // The plan the subscription was on when this was raised (a snapshot).
+    if (invoice.plan_name) field('PLAN', invoice.plan_name, top + 56);
 
     field('BILLED TO', company.name, top, true);
     // Merchant names wrap, and a wrapped name must push the address down rather
@@ -134,7 +136,7 @@ export const buildInvoicePdf = ({ invoice, company, settings }: InvoicePdfInput)
     y += 8;
     doc.fontSize(8).fillColor(GRAY);
     doc.text('DESCRIPTION', 48, y, { width: DESCRIPTION_WIDTH });
-    doc.text('AMOUNT', AMOUNT_LEFT, y, { width: AMOUNT_WIDTH, align: 'right' });
+    doc.text('AMOUNT (INCL. VAT)', AMOUNT_LEFT, y, { width: AMOUNT_WIDTH, align: 'right' });
     y += 14;
 
     doc.fontSize(9.5).fillColor(INK);
@@ -170,8 +172,14 @@ export const buildInvoicePdf = ({ invoice, company, settings }: InvoicePdfInput)
     if (invoice.terminal_count !== null && invoice.terminal_price_cents !== null) {
       row(
         'Licensed terminals',
-        '',
-        `${invoice.terminal_count} × ${formatCents(invoice.terminal_price_cents)}`,
+        // The plan it belongs to, then the arithmetic that produced the charge.
+        [
+          invoice.plan_name,
+          `${invoice.terminal_count} × ${formatCents(invoice.terminal_price_cents)}`,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        formatCents(invoice.terminal_count * invoice.terminal_price_cents),
       );
     }
     if (!invoice.description && !invoice.terminal_count && !invoice.setup_fee_cents) {

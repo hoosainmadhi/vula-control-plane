@@ -905,7 +905,7 @@ describe('once-off charges', () => {
     // what billing `initial` here would have done.
     expect(billed.body.amountCents).toBe(setupFee);
     expect(billed.body.setupFeeCents).toBe(setupFee);
-    expect(billed.body.description).toBe('Once-off onboarding');
+    expect(billed.body.description).toBe('Vula onboarding and deployment');
 
     const again = await request(app)
       .post('/api/billing/invoices')
@@ -1151,5 +1151,90 @@ describe('VAT on a VAT-inclusive invoice', () => {
     expect(res.body.subtotalCents).toBeNull();
     expect(res.body.vatCents).toBeNull();
     expect(res.body.vatRate).toBeNull();
+  });
+});
+
+describe('the plan on an invoice', () => {
+  it('is recorded when the invoice is raised, and survives a plan rename', async () => {
+    const company = await makeCompany();
+    const plans = await request(app).get('/api/plans').set(auth()).expect(200);
+    const plan = (plans.body as Array<{ id: number; name: string; code: string }>).find(
+      (p) => p.code === 'vula-grow',
+    )!;
+
+    const raised = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'renewal' })
+      .expect(201);
+    expect(raised.body.planCode).toBe('vula-grow');
+    expect(raised.body.planName).toBe(plan.name);
+
+    // The catalogue entry is renamed. An issued invoice is a document: it keeps
+    // the name it was written with, rather than adopting today's.
+    await request(app)
+      .put(`/api/plans/${plan.id}`)
+      .set(auth())
+      .send({ name: 'Vula Grow Plus' })
+      .expect(200);
+
+    const after = await request(app)
+      .get(`/api/billing/invoices/${raised.body.id}`)
+      .set(auth())
+      .expect(200);
+    expect(after.body.planName).toBe(plan.name);
+    expect(after.body.planName).not.toBe('Vula Grow Plus');
+
+    // A new invoice does carry the new name — the snapshot is per document.
+    const next = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'renewal' })
+      .expect(201);
+    expect(next.body.planName).toBe('Vula Grow Plus');
+  });
+
+  it('names the plan on a hand-priced invoice too, and on an onboarding one', async () => {
+    const company = await makeCompany();
+    const handPriced = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({
+        companyId: company.id,
+        amountCents: 250000,
+        description: 'Installation',
+        includeOnboarding: false,
+      })
+      .expect(201);
+    expect(handPriced.body.planCode).toBe('vula-grow');
+
+    const onboarding = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'onboarding' })
+      .expect(201);
+    expect(onboarding.body.planName).toBeTruthy();
+  });
+
+  it('reports no plan rather than guessing one', async () => {
+    // A client with no plan: the invoice must say nothing, not invent a tier.
+    // (Created without one — the company PUT cannot clear a plan.)
+    const company = await makeCompany({
+      name: 'No Plan Co',
+      slug: 'no-plan-co',
+      planId: null,
+    });
+    const res = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({
+        companyId: company.id,
+        amountCents: 100000,
+        description: 'Ad hoc',
+        includeOnboarding: false,
+      })
+      .expect(201);
+    expect(res.body.planCode).toBeNull();
+    expect(res.body.planName).toBeNull();
   });
 });

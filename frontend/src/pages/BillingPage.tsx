@@ -913,9 +913,9 @@ export default function BillingPage() {
                             {viewingInvoice.terminalCount === 1 ? '' : 's'}
                           </div>
                           <div className="text-[11px] text-slate-500">
-                            @ {formatRand(viewingInvoice.terminalPriceCents)} per terminal ·{' '}
-                            {companies.find((c) => c.id === viewingInvoice.companyId)?.planName ??
-                              'Subscription'}
+                            @ {formatRand(viewingInvoice.terminalPriceCents)} per terminal (incl.
+                            VAT)
+                            {viewingInvoice.planName ? ` · ${viewingInvoice.planName}` : ''}
                           </div>
                         </td>
                         <td className="py-3 text-right font-mono font-bold text-slate-900">
@@ -930,15 +930,14 @@ export default function BillingPage() {
                       <td className="py-3">
                         <div className="font-bold text-slate-800">Vula POS Subscription</div>
                         <div className="text-[11px] text-slate-500">
+                          {/* The plan as it was when the invoice was raised — never the
+                              client's current one, which may have been renamed since. */}
+                          {viewingInvoice.planName
+                            ? `Plan: ${viewingInvoice.planName}`
+                            : 'No plan recorded on this invoice'}
                           {viewingInvoice.setupFeeCents && viewingInvoice.setupFeeCents > 0
-                            ? `Agreed amount · Tier: ${
-                                companies.find((c) => c.id === viewingInvoice.companyId)
-                                  ?.planName ?? 'Custom'
-                              }`
-                            : `Tier: ${
-                                companies.find((c) => c.id === viewingInvoice.companyId)
-                                  ?.planName ?? 'Custom'
-                              }`}
+                            ? ' · agreed amount'
+                            : ''}
                         </div>
                       </td>
                       <td className="py-3 text-right font-mono font-bold text-slate-900">

@@ -132,10 +132,16 @@ export const invoiceHtml = (
   }
   if (invoice.terminal_count !== null && invoice.terminal_price_cents !== null) {
     rows.push(
-      `<tr><td style="padding:4px 0">Licensed terminals</td><td style="text-align:right">${invoice.terminal_count}</td></tr>
-       <tr><td style="padding:4px 0">Rate per terminal</td><td style="text-align:right">${formatCents(
-         invoice.terminal_price_cents,
-       )}</td></tr>`,
+      `<tr><td style="padding:4px 0">Licensed terminals${
+        invoice.plan_name
+          ? `<br><span style="color:#94a3b8;font-size:11px">${esc(invoice.plan_name)}</span>`
+          : ''
+      }</td><td style="text-align:right;vertical-align:top">${
+        invoice.terminal_count
+      } × ${formatCents(invoice.terminal_price_cents)}<br>
+        <span style="font-weight:bold">${formatCents(
+          invoice.terminal_count * invoice.terminal_price_cents,
+        )}</span></td></tr>`,
     );
   }
 

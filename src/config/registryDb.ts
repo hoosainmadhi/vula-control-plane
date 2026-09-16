@@ -138,6 +138,10 @@ const INVOICES_DDL = `
     terminal_price_cents INTEGER,
     setup_fee_cents      INTEGER,
     description          TEXT,
+    -- The plan the subscription was on when the invoice was raised: a snapshot, so
+    -- renaming a plan never restates what an issued invoice says.
+    plan_code            TEXT,
+    plan_name            TEXT,
     -- The tax split of amount_cents, which is VAT-INCLUSIVE (owner decision,
     -- 2026-09-16). Held as three columns rather than derived on read: a rate
     -- change must never rewrite a document that has already been issued.
@@ -674,6 +678,10 @@ export const getRegistryDb = (): Database.Database => {
   // The tax split. NULL on invoices raised before it existed: those documents
   // were issued without a split, and inventing one now would state a tax
   // breakdown that was never on them.
+  // The plan is snapshotted per invoice: an issued document must not change its
+  // story when a plan is renamed.
+  addInvoiceColumn('plan_code', 'plan_code TEXT');
+  addInvoiceColumn('plan_name', 'plan_name TEXT');
   addInvoiceColumn('subtotal_cents', 'subtotal_cents INTEGER');
   addInvoiceColumn('vat_cents', 'vat_cents INTEGER');
   addInvoiceColumn('vat_rate', 'vat_rate INTEGER');
@@ -1607,6 +1615,9 @@ export interface InvoiceRecord {
   setup_fee_cents: number | null;
   /** What the charge is for. Required on a manually-priced invoice. */
   description: string | null;
+  /** The plan at the time of issue (a snapshot); null on a hand-priced invoice. */
+  plan_code: string | null;
+  plan_name: string | null;
   /** `amount_cents` exclusive of VAT — the split, stored on the document. */
   subtotal_cents: number | null;
   /** The VAT portion of `amount_cents`, which is VAT-inclusive. */
@@ -2077,6 +2088,9 @@ export interface InvoiceLines {
   setupFeeCents?: number | null;
   /** Human-readable label for the charge; see `createInvoiceForCompany`. */
   description?: string | null;
+  /** The plan the subscription was on, snapshotted onto the document. */
+  planCode?: string | null;
+  planName?: string | null;
   /** The tax split of `amountCents` (which is VAT-inclusive). */
   subtotalCents?: number | null;
   vatCents?: number | null;
@@ -2140,8 +2154,8 @@ export const createInvoice = (
     .prepare(
       `INSERT INTO invoices (company_id, invoice_number, amount_cents, due_date, status,
                              terminal_count, terminal_price_cents, setup_fee_cents, description,
-                             subtotal_cents, vat_cents, vat_rate)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
+                             plan_code, plan_name, subtotal_cents, vat_cents, vat_rate)
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       companyId,
@@ -2154,6 +2168,8 @@ export const createInvoice = (
       lines?.terminalPriceCents ?? null,
       lines?.setupFeeCents ?? null,
       lines?.description ?? null,
+      lines?.planCode ?? null,
+      lines?.planName ?? null,
       lines?.subtotalCents ?? null,
       lines?.vatCents ?? null,
       lines?.vatRate ?? null,

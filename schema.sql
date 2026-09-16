@@ -153,6 +153,10 @@ CREATE TABLE IF NOT EXISTS invoices (
   -- What the charge is for. Required on a hand-priced invoice, and derived from
   -- the subscription when the control plane computes the amount.
   description          TEXT,
+  -- The plan at the time of issue (a snapshot): renaming a plan must not restate
+  -- what an issued invoice says.
+  plan_code            TEXT,
+  plan_name            TEXT,
   -- The tax split of amount_cents, which is VAT-INCLUSIVE (prices are quoted
   -- incl. VAT). Stored per invoice so a rate change never restates a document
   -- already issued; NULL on invoices raised before the split existed.

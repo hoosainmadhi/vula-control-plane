@@ -1,5 +1,33 @@
 # Progress
 
+## 2026-09-16 (eighth pass) — the plan on the invoice
+
+Owner: *"we should [show] the plan in the invoice."*
+
+- **The plan is now on the document, as a snapshot.** `invoices.plan_code` /
+  `plan_name` are written when the invoice is raised and never read back from the
+  catalogue: renaming a plan must not restate what an issued invoice says. That
+  was already untrue in one place — the Billing detail view looked up the
+  *client's current* plan and printed it on old invoices — so the UI now reads the
+  invoice's own record.
+- **Where it shows**: the PDF's metadata block (`PLAN  Vula Network`), the
+  subscription line's detail (`Vula Network · 7 × R 500,00`), the emailed invoice's
+  licensed-terminals row, and the Billing detail view (falling back to "No plan
+  recorded on this invoice" for a client that has none — the invoice says what it
+  knows rather than inventing a tier).
+- **The subscription line now states its own total** (R3 500,00) beside the
+  arithmetic, matching the once-off line — previously it showed only
+  "7 × R 500,00" and left the reader to multiply. The amount column header says
+  **AMOUNT (INCL. VAT)**, since that is what the figures are.
+- Tests: the plan is captured on recurring, onboarding-only and hand-priced
+  invoices; a plan renamed after issue leaves the old invoice reading as issued
+  while the next invoice picks up the new name; a client with no plan reports
+  `null` rather than a guessed tier.
+
+Tests: CP **245 green (19 suites)**; typecheck, frontend `tsc -b` and the
+production build clean. Rendered and read back on a scratch registry: PDF
+geometry clean (no out-of-margin text, no rule crossing text).
+
 ## 2026-09-16 (seventh pass) — invoice numbering and VAT on inclusive prices
 
 Owner: *"fix invoice numbering"* + *"prices inc VAT"*. Both were on the

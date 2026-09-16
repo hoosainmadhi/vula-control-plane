@@ -283,6 +283,8 @@ export function createInvoiceForCompany(
     lines = {
       description: options?.description,
       setupFeeCents: chargeOnboarding ? onboardingCents : null,
+      planCode: plan?.code ?? null,
+      planName: plan?.name ?? null,
     };
   } else if (purpose === 'onboarding') {
     // The once-off charge on its own: a client invoiced for a period already
@@ -297,7 +299,9 @@ export function createInvoiceForCompany(
     amountCents = quote.setupFeeDueCents;
     lines = {
       setupFeeCents: quote.setupFeeDueCents,
-      description: options?.description ?? 'Once-off onboarding',
+      description: options?.description ?? SETUP_FEE_LINE_LABEL,
+      planCode: plan?.code ?? null,
+      planName: plan?.name ?? null,
     };
   } else {
     if (quote.recurringAmountCents === null) {
@@ -321,6 +325,9 @@ export function createInvoiceForCompany(
       terminalCount: quote.pricingMode === 'per_terminal' ? quote.licensedTerminalCount : null,
       terminalPriceCents: quote.pricingMode === 'per_terminal' ? quote.rateCents : null,
       setupFeeCents: chargeOnboarding ? onboardingCents : null,
+      // The plan on the document, not a pointer to today's catalogue entry.
+      planCode: plan?.code ?? null,
+      planName: plan?.name ?? null,
       // Derived, not invented: the invoice says which subscription period it is
       // for, and the PDF/email itemise the arithmetic behind the figure.
       description:
