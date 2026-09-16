@@ -125,7 +125,17 @@ describe('L3 Billing & Invoicing', () => {
   });
 
   it('records payment, marks invoice paid, advances paid_through and pushes licence', async () => {
-    const company = await makeCompany({ paidThrough: '2026-09-15' });
+    // A paid-through a few days out, so the renewal anchors on it rather than on
+    // "now" — a hard-coded past date made this test pass only until the clock
+    // passed noon on that day, then fail with a date one day out.
+    const base = new Date();
+    base.setUTCDate(base.getUTCDate() + 5);
+    const paidThrough = base.toISOString().slice(0, 10);
+    const nextMonth = new Date(base);
+    nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
+    const paidThroughPlusMonth = nextMonth.toISOString().slice(0, 10);
+
+    const company = await makeCompany({ paidThrough });
     await makeStoreForCompany(company.id, 'sandton-store');
 
     // Create an invoice
@@ -156,15 +166,15 @@ describe('L3 Billing & Invoicing', () => {
     expect(payRes.body.payment.amountCents).toBe(75000);
     expect(payRes.body.payment.transactionId).toBe('ch_1234567890');
 
-    // Advanced 1 month from existing paid_through (2026-09-15 -> 2026-10-15)
-    expect(payRes.body.newPaidThrough).toBe('2026-10-15');
+    // Advanced one month from the existing paid_through.
+    expect(payRes.body.newPaidThrough).toBe(paidThroughPlusMonth);
 
     // Check company record in DB
     const compRes = await request(app)
       .get(`/api/companies/${company.id}`)
       .set(auth())
       .expect(200);
-    expect(compRes.body.paidThrough).toBe('2026-10-15');
+    expect(compRes.body.paidThrough).toBe(paidThroughPlusMonth);
 
     // Licence push was attempted
     expect(payRes.body.licencePush.storesUpdated).toBeGreaterThanOrEqual(1);
