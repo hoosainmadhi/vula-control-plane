@@ -21,10 +21,21 @@ export const pushStoreListToPanel = async (
   const panel = listPanelsForCompany(companyId)[0];
   if (!panel) return 'no-panel';
 
+  // A store that has never been wired has no branch credential, and the panel
+  // cannot talk to it without one — so mint the missing ones here. The pushed
+  // list then always carries a value, and the branch picks it up on its next
+  // configure push.
   const stores = listStores().filter((store) => store.company_id === companyId);
+  for (const store of stores) {
+    if (!store.head_office_token) {
+      setStoreHeadOfficeToken(store.id, crypto.randomBytes(32).toString('hex'));
+    }
+  }
+
+  const withTokens = listStores().filter((store) => store.company_id === companyId);
   await pushBranchRosterToPanel(
     panel,
-    stores.map((store) => ({
+    withTokens.map((store) => ({
       slug: store.slug,
       name: store.name,
       baseUrl: store.base_url,
@@ -32,7 +43,7 @@ export const pushStoreListToPanel = async (
       headOfficeToken: store.head_office_token,
     })),
   );
-  return { pushed: stores.length };
+  return { pushed: withTokens.length };
 };
 
 /**
