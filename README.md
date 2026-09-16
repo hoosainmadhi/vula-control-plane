@@ -26,8 +26,11 @@ and **billing**. Concretely:
 - **Billing** — invoices raised from the subscription (`licensed terminals × rate`),
   the once-off **Vula onboarding and deployment** charge captured on whichever
   invoice is raised next while it is unbilled, hand-priced once-off charges,
-  settlement, and a renewal sweep that never settles anything by itself. Every
-  invoice is an A4 PDF, attached when it is emailed to the client.
+  settlement, and a renewal sweep that never settles anything by itself. Prices are
+  quoted **including VAT** and the invoice breaks the tax out of the total, headed
+  a tax invoice once Vula's VAT number is set on Settings; numbers are a monotonic
+  `VULA-2026-000001` sequence. Every invoice is an A4 PDF, attached when it is
+  emailed to the client.
 - **Office settings** — the vendor's own identity, the payment terms its invoices
   carry, and the SMTP account (with a send-a-test action). Configured **in the app**,
   not in env; the SMTP password is stored and never returned.

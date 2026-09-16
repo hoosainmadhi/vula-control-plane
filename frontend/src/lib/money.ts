@@ -22,6 +22,15 @@ export const PERIOD_LABEL: Record<'monthly' | 'annual' | 'once-off', string> = {
   'once-off': 'once-off',
 };
 
-/** The per-terminal rate, always with its recurrence: a bare number is not a price. */
-export const perTerminalLabel = (cents: number, period: 'monthly' | 'annual' | 'once-off'): string =>
-  `${rand(cents)} / terminal / ${period === 'monthly' ? 'month' : period === 'annual' ? 'year' : 'once-off'}`;
+/**
+ * The per-terminal rate, always with its recurrence: a bare number is not a price.
+ *
+ * Prices this office quotes are **VAT-inclusive** (owner, 2026-09-16), so the
+ * label says so — otherwise the office reads a rate as ex-VAT and the invoice
+ * adds a tax line nobody planned for.
+ */
+export const perTerminalLabel = (
+  cents: number,
+  period: 'monthly' | 'annual' | 'once-off',
+): string =>
+  `${rand(cents)} / terminal / ${period === 'monthly' ? 'month' : period === 'annual' ? 'year' : 'once-off'} incl. VAT`;

@@ -16,7 +16,28 @@ CONTEXT.md "Internal API contract").
 
 ## Current Phase
 
-**Phase 2d — the invoice's line order and one name for the once-off
+**Phase 3 (partial) — invoice numbering and VAT on inclusive prices
+(2026-09-16, complete).** Owner: *"fix invoice numbering"* + *"prices inc VAT"* —
+the two items that stood between this panel and an invoice usable with a real
+client:
+
+- **Numbers** are a monotonic per-year sequence, `VULA-2026-000001`, from an
+  `invoice_sequences` counter incremented in the statement that reads it. The old
+  `INV-<date>-<4 random digits>` could collide within a second (surfacing as a raw
+  UNIQUE error) and reconciled to nothing; a year seeds from the highest number
+  already issued, so a restored backup cannot re-issue one.
+- **VAT**: prices are quoted **inclusive**, so the invoice states the total and
+  breaks the tax out of it (`subtotal + vat = total`, integer cents, never a cent
+  out). `vat_reg_no` + `vat_rate` are Settings fields; the rate and the split are
+  stored **per invoice**, so a rate change never restates a document already
+  issued; pre-split invoices keep their NULLs; with a registration the document is
+  headed **Tax invoice**.
+
+Tests CP **242 green (19 suites)**; typecheck, frontend `tsc -b` and the
+production build clean. Doctrine: CONTEXT §5e ("VAT and invoice numbering").
+What is left of Phase 3: print CSS.
+
+Previous — **Phase 2d — the invoice's line order and one name for the once-off
 (2026-09-16, complete).** Owner: *"alway have the Vula onboarding and deployment
 first line item when applicable in invoice."* The charge now leads the lines on
 the PDF, the emailed invoice, the Billing detail view and the Raise-an-Invoice

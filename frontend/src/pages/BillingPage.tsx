@@ -883,7 +883,7 @@ export default function BillingPage() {
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-400 uppercase text-[10px]">
                     <th className="py-2 text-left">Description</th>
-                    <th className="py-2 text-right">Amount (ZAR)</th>
+                    <th className="py-2 text-right">Amount (incl. VAT)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -948,12 +948,30 @@ export default function BillingPage() {
                   )}
                 </tbody>
                 <tfoot>
-                  <tr className="border-t-2 border-slate-200 font-bold">
-                    <td className="pt-3 text-slate-900">Total Consideration Due</td>
+                  {/* Prices are quoted VAT-inclusive, so the total is stated first
+                      and the tax inside it broken out beneath. */}
+                  <tr className="font-bold">
+                    <td className="pt-3 text-slate-900">Total (incl. VAT)</td>
                     <td className="pt-3 text-right font-mono text-base text-slate-900">
                       {formatRand(viewingInvoice.amountCents)}
                     </td>
                   </tr>
+                  {viewingInvoice.subtotalCents !== null && viewingInvoice.vatCents !== null && (
+                    <>
+                      <tr className="text-slate-500">
+                        <td className="pt-1 text-xs">Subtotal (excl. VAT)</td>
+                        <td className="pt-1 text-right font-mono text-xs">
+                          {formatRand(viewingInvoice.subtotalCents)}
+                        </td>
+                      </tr>
+                      <tr className="text-slate-500">
+                        <td className="text-xs">VAT at {viewingInvoice.vatRate ?? 0}%</td>
+                        <td className="text-right font-mono text-xs">
+                          {formatRand(viewingInvoice.vatCents)}
+                        </td>
+                      </tr>
+                    </>
+                  )}
                 </tfoot>
               </table>
             </div>

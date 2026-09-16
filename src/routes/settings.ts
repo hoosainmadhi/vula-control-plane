@@ -61,6 +61,7 @@ settingsRouter.put(
       ['officePhone', 'office_phone', 40],
       ['officeAddress', 'office_address', 400],
       ['invoiceFooter', 'invoice_footer', 1000],
+      ['vatRegNo', 'vat_reg_no', 40],
       ['smtpHost', 'smtp_host', 254],
       ['smtpUser', 'smtp_user', 254],
       ['smtpFrom', 'smtp_from', 254],
@@ -78,6 +79,12 @@ settingsRouter.put(
     }
     if (body['invoiceDueDays'] !== undefined) {
       patch.invoice_due_days = requireInt(body, 'invoiceDueDays', { min: 1, max: 180 });
+    }
+    // The rate the office's inclusive prices are quoted at. Whole percent: the SA
+    // rate is 15, and a fractional rate would need a decision about rounding that
+    // nothing has asked for yet.
+    if (body['vatRate'] !== undefined) {
+      patch.vat_rate = requireInt(body, 'vatRate', { min: 0, max: 100 });
     }
     if (body['smtpPort'] !== undefined) {
       patch.smtp_port = requireInt(body, 'smtpPort', { min: 1, max: 65535 });

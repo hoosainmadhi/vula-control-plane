@@ -25,6 +25,8 @@ interface Form {
   officeAddress: string;
   invoiceDueDays: string;
   invoiceFooter: string;
+  vatRegNo: string;
+  vatRate: string;
   smtpHost: string;
   smtpPort: string;
   smtpUser: string;
@@ -39,6 +41,8 @@ const toForm = (s: OfficeSettings): Form => ({
   officeAddress: s.officeAddress,
   invoiceDueDays: String(s.invoiceDueDays),
   invoiceFooter: s.invoiceFooter,
+  vatRegNo: s.vatRegNo,
+  vatRate: String(s.vatRate),
   smtpHost: s.smtpHost,
   smtpPort: String(s.smtpPort),
   smtpUser: s.smtpUser,
@@ -91,6 +95,8 @@ export default function SettingsPage() {
           officeAddress: form.officeAddress,
           invoiceDueDays: Number(form.invoiceDueDays),
           invoiceFooter: form.invoiceFooter,
+          vatRegNo: form.vatRegNo,
+          vatRate: Number(form.vatRate),
           smtpHost: form.smtpHost,
           smtpPort: Number(form.smtpPort),
           smtpUser: form.smtpUser,
@@ -212,9 +218,38 @@ export default function SettingsPage() {
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs">
           <h3 className="text-sm font-bold text-slate-900">Invoicing</h3>
           <p className="mt-1 text-xs text-slate-500">
-            Terms applied when the control plane raises the next invoice.
+            Terms and tax applied when the control plane raises the next invoice.
           </p>
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className={labelCls}>VAT registration number</label>
+              <input
+                value={form.vatRegNo}
+                onChange={(e) => set({ vatRegNo: e.target.value })}
+                className={inputCls}
+                placeholder="4123456789"
+              />
+              <p className="mt-1 text-[11px] text-slate-400">
+                Vula&apos;s own registration. With it set, an invoice is headed{' '}
+                <strong>Tax invoice</strong> and carries the number; blank leaves it an invoice.
+              </p>
+            </div>
+            <div>
+              <label className={labelCls}>VAT rate (%)</label>
+              <input
+                required
+                type="number"
+                min={0}
+                max={100}
+                value={form.vatRate}
+                onChange={(e) => set({ vatRate: e.target.value })}
+                className={inputCls}
+              />
+              <p className="mt-1 text-[11px] text-slate-400">
+                Plan prices are quoted <strong>including VAT</strong>, so the invoice shows the
+                split behind the total. Raised invoices keep the rate they were issued at.
+              </p>
+            </div>
             <div>
               <label className={labelCls}>Payment terms (days)</label>
               <input

@@ -8,13 +8,7 @@ export type StoreStatus = 'active' | 'paused';
 export type ConfigStatus = 'pending' | 'ok' | 'failed';
 export type HealthStatus = 'up' | 'down' | 'unknown';
 export type StoreVertical =
-  | 'general'
-  | 'clothing'
-  | 'spares'
-  | 'hardware'
-  | 'pharmacy'
-  | 'restaurant'
-  | 'custom';
+  'general' | 'clothing' | 'spares' | 'hardware' | 'pharmacy' | 'restaurant' | 'custom';
 
 /** Deployment environment of the store (SPOG §5/§44). */
 export type StoreEnvironment = 'production' | 'staging' | 'demo' | 'development';
@@ -144,6 +138,12 @@ const INVOICES_DDL = `
     terminal_price_cents INTEGER,
     setup_fee_cents      INTEGER,
     description          TEXT,
+    -- The tax split of amount_cents, which is VAT-INCLUSIVE (owner decision,
+    -- 2026-09-16). Held as three columns rather than derived on read: a rate
+    -- change must never rewrite a document that has already been issued.
+    subtotal_cents       INTEGER,
+    vat_cents            INTEGER,
+    vat_rate             INTEGER,
     status               TEXT    NOT NULL DEFAULT 'pending'
       CHECK (status IN ('pending', 'paid', 'overdue', 'cancelled')),
     due_date             TEXT,
@@ -201,12 +201,31 @@ const OFFICE_SETTINGS_DDL = `
     invoice_due_days  INTEGER NOT NULL DEFAULT 14
       CHECK (invoice_due_days BETWEEN 1 AND 180),
     invoice_footer    TEXT    NOT NULL DEFAULT '',
+    -- The vendor's own VAT registration and the rate its (VAT-inclusive) prices
+    -- are quoted at. Nothing here is a merchant's tax data — that stays off this
+    -- plane entirely (§40).
+    vat_reg_no        TEXT    NOT NULL DEFAULT '',
+    vat_rate          INTEGER NOT NULL DEFAULT 15
+      CHECK (vat_rate BETWEEN 0 AND 100),
     smtp_host         TEXT    NOT NULL DEFAULT '',
     smtp_port         INTEGER NOT NULL DEFAULT 587,
     smtp_user         TEXT    NOT NULL DEFAULT '',
     smtp_pass         TEXT    NOT NULL DEFAULT '',
     smtp_from         TEXT    NOT NULL DEFAULT '',
     updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+  )`;
+
+/**
+ * Invoice numbers are a monotonic per-year sequence (`VULA-2026-000001`), not a
+ * date plus random digits: two invoices raised in the same second used to be able
+ * to collide on the UNIQUE index, and the loser surfaced as a raw database error
+ * instead of a retry. The counter is a row in SQLite, so it survives restarts and
+ * is incremented inside the statement that reads it.
+ */
+const INVOICE_SEQUENCES_DDL = `
+  CREATE TABLE IF NOT EXISTS invoice_sequences (
+    year       INTEGER PRIMARY KEY,
+    last_value INTEGER NOT NULL
   )`;
 
 const DEPLOYMENT_JOBS_DDL = `
@@ -560,6 +579,7 @@ export const getRegistryDb = (): Database.Database => {
   db.exec(STORE_TERMINAL_LICENCES_DDL);
   db.exec(PANELS_DDL);
   db.exec(INVOICES_DDL);
+  db.exec(INVOICE_SEQUENCES_DDL);
   db.exec(PAYMENTS_DDL);
   db.exec(BILLING_SETTINGS_DDL);
   db.exec(OFFICE_SETTINGS_DDL);
@@ -575,7 +595,9 @@ export const getRegistryDb = (): Database.Database => {
   db.exec('CREATE INDEX IF NOT EXISTS idx_payments_company ON payments(company_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_deployment_jobs_company ON deployment_jobs(company_id)');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_deployment_job_steps_job ON deployment_job_steps(job_id)');
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_deployment_job_steps_job ON deployment_job_steps(job_id)',
+  );
   db.exec('CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id)');
   // The group key the recorder upserts on, and the sort the feed reads by.
   db.exec(
@@ -630,9 +652,9 @@ export const getRegistryDb = (): Database.Database => {
   addPanelColumn('coolify_uuid', 'coolify_uuid TEXT');
   addPanelColumn('volume_name', 'volume_name TEXT');
 
-  const stepCols = db
-    .prepare('PRAGMA table_info(deployment_job_steps)')
-    .all() as Array<{ name: string }>;
+  const stepCols = db.prepare('PRAGMA table_info(deployment_job_steps)').all() as Array<{
+    name: string;
+  }>;
   if (!stepCols.some((c) => c.name === 'warnings_json')) {
     db.exec('ALTER TABLE deployment_job_steps ADD COLUMN warnings_json TEXT');
   }
@@ -641,13 +663,31 @@ export const getRegistryDb = (): Database.Database => {
   // resend is a deliberate act rather than an accident.
   const invoiceCols = db.prepare('PRAGMA table_info(invoices)').all() as Array<{ name: string }>;
   const addInvoiceColumn = (name: string, ddl: string) => {
-    if (!invoiceCols.some((c) => c.name === name)) db.exec(`ALTER TABLE invoices ADD COLUMN ${ddl}`);
+    if (!invoiceCols.some((c) => c.name === name))
+      db.exec(`ALTER TABLE invoices ADD COLUMN ${ddl}`);
   };
   addInvoiceColumn('emailed_at', 'emailed_at TEXT');
   addInvoiceColumn('emailed_to', 'emailed_to TEXT');
   // What the charge is for — required on a manually-priced invoice, so a client
   // is never sent a bare "amount due".
   addInvoiceColumn('description', 'description TEXT');
+  // The tax split. NULL on invoices raised before it existed: those documents
+  // were issued without a split, and inventing one now would state a tax
+  // breakdown that was never on them.
+  addInvoiceColumn('subtotal_cents', 'subtotal_cents INTEGER');
+  addInvoiceColumn('vat_cents', 'vat_cents INTEGER');
+  addInvoiceColumn('vat_rate', 'vat_rate INTEGER');
+
+  const officeCols = db.prepare('PRAGMA table_info(office_settings)').all() as Array<{
+    name: string;
+  }>;
+  const addOfficeColumn = (name: string, ddl: string) => {
+    if (!officeCols.some((c) => c.name === name)) {
+      db.exec(`ALTER TABLE office_settings ADD COLUMN ${ddl}`);
+    }
+  };
+  addOfficeColumn('vat_reg_no', "vat_reg_no TEXT NOT NULL DEFAULT ''");
+  addOfficeColumn('vat_rate', 'vat_rate INTEGER NOT NULL DEFAULT 15');
 
   migratePlanCustomAmount(db);
   restructurePlans(db);
@@ -948,9 +988,10 @@ const migrateSubscriptions = (db: Database.Database): void => {
 
 /** The DDL stored for a table, or null. */
 const storedDdl = (db: Database.Database, name: string): string | null =>
-  ((db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) as
-    | { sql: string }
-    | undefined) ?? null)?.sql ?? null;
+  (
+    (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) as
+      { sql: string } | undefined) ?? null
+  )?.sql ?? null;
 
 /**
  * Repair damage from the earlier faulty plans rebuild: any table whose stored DDL
@@ -1036,13 +1077,15 @@ const renameRetailPlanToBusiness = (db: Database.Database): void => {
   const hasBusiness = db.prepare('SELECT 1 FROM plans WHERE code = ?').get('business');
   if (hasBusiness) {
     // A business tier already exists (operator-created): keep it, retire retail quietly.
-    db.prepare('UPDATE plans SET name = ?, updated_at = datetime(\'now\') WHERE code = ?').run(
+    db.prepare("UPDATE plans SET name = ?, updated_at = datetime('now') WHERE code = ?").run(
       'Business',
       'retail',
     );
     return;
   }
-  db.prepare("UPDATE plans SET code = 'business', name = 'Business', updated_at = datetime('now') WHERE code = 'retail'").run();
+  db.prepare(
+    "UPDATE plans SET code = 'business', name = 'Business', updated_at = datetime('now') WHERE code = 'retail'",
+  ).run();
 };
 
 /**
@@ -1258,7 +1301,9 @@ export const recordConfigResult = (id: number, result: ConfigResultRecord): Stor
 
 export const advanceDesiredConfigVersion = (id: number): void => {
   getRegistryDb()
-    .prepare('UPDATE stores SET desired_config_version = COALESCE(desired_config_version, 0) + 1, updated_at = datetime(\'now\') WHERE id = ?')
+    .prepare(
+      "UPDATE stores SET desired_config_version = COALESCE(desired_config_version, 0) + 1, updated_at = datetime('now') WHERE id = ?",
+    )
     .run(id);
 };
 
@@ -1465,7 +1510,10 @@ export const createPlan = (input: PlanInput): PlanRecord => {
   return getPlanById(Number(info.lastInsertRowid))!;
 };
 
-export const updatePlan = (id: number, input: Partial<PlanInput> & { isActive?: boolean }): PlanRecord | null => {
+export const updatePlan = (
+  id: number,
+  input: Partial<PlanInput> & { isActive?: boolean },
+): PlanRecord | null => {
   const existing = getPlanById(id);
   if (!existing) return null;
   // `code` is the technical identifier licences and integrations depend on —
@@ -1503,7 +1551,11 @@ export const updatePlan = (id: number, input: Partial<PlanInput> & { isActive?: 
 };
 
 export const countCompaniesForPlan = (planId: number): number =>
-  (getRegistryDb().prepare('SELECT COUNT(*) AS c FROM companies WHERE plan_id = ?').get(planId) as { c: number }).c;
+  (
+    getRegistryDb()
+      .prepare('SELECT COUNT(*) AS c FROM companies WHERE plan_id = ?')
+      .get(planId) as { c: number }
+  ).c;
 
 export const deletePlan = (id: number): boolean => {
   const db = getRegistryDb();
@@ -1555,6 +1607,12 @@ export interface InvoiceRecord {
   setup_fee_cents: number | null;
   /** What the charge is for. Required on a manually-priced invoice. */
   description: string | null;
+  /** `amount_cents` exclusive of VAT — the split, stored on the document. */
+  subtotal_cents: number | null;
+  /** The VAT portion of `amount_cents`, which is VAT-inclusive. */
+  vat_cents: number | null;
+  /** The rate applied when the invoice was raised. */
+  vat_rate: number | null;
   status: 'pending' | 'paid' | 'overdue' | 'cancelled';
   due_date: string | null;
   paid_date: string | null;
@@ -1590,15 +1648,21 @@ export const listCompanies = (): CompanyRecord[] =>
   getRegistryDb().prepare('SELECT * FROM companies ORDER BY name').all() as CompanyRecord[];
 
 export const getCompanyById = (id: number): CompanyRecord | null =>
-  (getRegistryDb().prepare('SELECT * FROM companies WHERE id = ?').get(id) as CompanyRecord) ?? null;
+  (getRegistryDb().prepare('SELECT * FROM companies WHERE id = ?').get(id) as CompanyRecord) ??
+  null;
 
 export const getCompanyBySlug = (slug: string): CompanyRecord | null =>
-  (getRegistryDb().prepare('SELECT * FROM companies WHERE slug = ?').get(slug) as CompanyRecord) ?? null;
+  (getRegistryDb().prepare('SELECT * FROM companies WHERE slug = ?').get(slug) as CompanyRecord) ??
+  null;
 
 export const countStoresForCompany = (companyId: number): number =>
-  (getRegistryDb().prepare('SELECT COUNT(*) AS c FROM stores WHERE company_id = ?').get(companyId) as {
-    c: number;
-  }).c;
+  (
+    getRegistryDb()
+      .prepare('SELECT COUNT(*) AS c FROM stores WHERE company_id = ?')
+      .get(companyId) as {
+      c: number;
+    }
+  ).c;
 
 export interface CompanyInput {
   name: string;
@@ -1659,7 +1723,7 @@ export const updateCompany = (
 export const setStoreCompany = (storeId: number, companyId: number | null): StoreRecord | null => {
   if (!getStoreById(storeId)) return null;
   getRegistryDb()
-    .prepare('UPDATE stores SET company_id = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    .prepare("UPDATE stores SET company_id = ?, updated_at = datetime('now') WHERE id = ?")
     .run(companyId, storeId);
   return getStoreById(storeId);
 };
@@ -1761,11 +1825,13 @@ export const deleteAllocationForStore = (storeId: number): boolean =>
 
 /** Terminal licences allocated across a client's stores. */
 export const allocatedTerminalCount = (companyId: number): number =>
-  (getRegistryDb()
-    .prepare(
-      'SELECT COALESCE(SUM(licensed_terminal_count), 0) AS n FROM store_terminal_licences WHERE company_id = ?',
-    )
-    .get(companyId) as { n: number }).n;
+  (
+    getRegistryDb()
+      .prepare(
+        'SELECT COALESCE(SUM(licensed_terminal_count), 0) AS n FROM store_terminal_licences WHERE company_id = ?',
+      )
+      .get(companyId) as { n: number }
+  ).n;
 
 /** The quantity the client pays for — 0 when it has no subscription yet. */
 export const licensedTerminalCount = (companyId: number): number =>
@@ -1806,7 +1872,9 @@ export const getPanelBySlug = (slug: string): PanelRecord | null =>
   (getRegistryDb().prepare('SELECT * FROM panels WHERE slug = ?').get(slug) as PanelRecord) ?? null;
 
 export const listPanelsForCompany = (companyId: number): PanelRecord[] =>
-  getRegistryDb().prepare('SELECT * FROM panels WHERE company_id = ?').all(companyId) as PanelRecord[];
+  getRegistryDb()
+    .prepare('SELECT * FROM panels WHERE company_id = ?')
+    .all(companyId) as PanelRecord[];
 
 export interface PanelInput {
   companyId: number;
@@ -1974,9 +2042,7 @@ export const setPanelDeployStatus = (
  */
 export const setStoreHeadOfficeToken = (id: number, token: string): StoreRecord | null => {
   getRegistryDb()
-    .prepare(
-      `UPDATE stores SET head_office_token = ?, updated_at = datetime('now') WHERE id = ?`,
-    )
+    .prepare(`UPDATE stores SET head_office_token = ?, updated_at = datetime('now') WHERE id = ?`)
     .run(token, id);
   return getStoreById(id);
 };
@@ -1986,7 +2052,9 @@ export const setStoreHeadOfficeToken = (id: number, token: string): StoreRecord 
 export const listInvoices = (companyId?: number): InvoiceRecord[] => {
   const db = getRegistryDb();
   const query = companyId
-    ? db.prepare('SELECT * FROM invoices WHERE company_id = ? ORDER BY created_at DESC, id DESC').all(companyId)
+    ? db
+        .prepare('SELECT * FROM invoices WHERE company_id = ? ORDER BY created_at DESC, id DESC')
+        .all(companyId)
     : db.prepare('SELECT * FROM invoices ORDER BY created_at DESC, id DESC').all();
   return query as InvoiceRecord[];
 };
@@ -1997,7 +2065,9 @@ export const getInvoiceById = (id: number): InvoiceRecord | null => {
 };
 
 export const getInvoiceByNumber = (invoiceNumber: string): InvoiceRecord | null => {
-  const row = getRegistryDb().prepare('SELECT * FROM invoices WHERE invoice_number = ?').get(invoiceNumber);
+  const row = getRegistryDb()
+    .prepare('SELECT * FROM invoices WHERE invoice_number = ?')
+    .get(invoiceNumber);
   return row ? (row as InvoiceRecord) : null;
 };
 
@@ -2007,7 +2077,56 @@ export interface InvoiceLines {
   setupFeeCents?: number | null;
   /** Human-readable label for the charge; see `createInvoiceForCompany`. */
   description?: string | null;
+  /** The tax split of `amountCents` (which is VAT-inclusive). */
+  subtotalCents?: number | null;
+  vatCents?: number | null;
+  vatRate?: number | null;
 }
+
+/** `VULA-2026-000001` — what the office writes on a document. */
+export const formatInvoiceNumber = (year: number, sequence: number): string =>
+  `VULA-${year}-${String(sequence).padStart(6, '0')}`;
+
+/**
+ * Allocates the next invoice number for a year and returns it. Monotonic, unique
+ * and gapless until a number is used: the increment happens in the same statement
+ * that reads the value, so two invoices raised at once cannot share one.
+ *
+ * A year's counter starts from the highest number already written for that year,
+ * so a registry that has issued invoices under this scheme continues from where
+ * it left off rather than reusing a number.
+ */
+export const nextInvoiceNumber = (now: Date = new Date()): string => {
+  const db = getRegistryDb();
+  const year = now.getUTCFullYear();
+  return db.transaction((): string => {
+    db.prepare('INSERT OR IGNORE INTO invoice_sequences (year, last_value) VALUES (?, 0)').run(
+      year,
+    );
+    const seeded = db
+      .prepare('SELECT last_value FROM invoice_sequences WHERE year = ?')
+      .get(year) as {
+      last_value: number;
+    };
+    if (seeded.last_value === 0) {
+      const highest = db
+        .prepare(
+          'SELECT invoice_number FROM invoices WHERE invoice_number LIKE ? ORDER BY invoice_number DESC LIMIT 1',
+        )
+        .get(`VULA-${year}-%`) as { invoice_number: string } | undefined;
+      const from = highest ? Number(highest.invoice_number.slice(-6)) || 0 : 0;
+      if (from > 0) {
+        db.prepare('UPDATE invoice_sequences SET last_value = ? WHERE year = ?').run(from, year);
+      }
+    }
+    const next = db
+      .prepare(
+        'UPDATE invoice_sequences SET last_value = last_value + 1 WHERE year = ? RETURNING last_value',
+      )
+      .get(year) as { last_value: number };
+    return formatInvoiceNumber(year, next.last_value);
+  })();
+};
 
 export const createInvoice = (
   companyId: number,
@@ -2020,18 +2139,24 @@ export const createInvoice = (
   const info = db
     .prepare(
       `INSERT INTO invoices (company_id, invoice_number, amount_cents, due_date, status,
-                             terminal_count, terminal_price_cents, setup_fee_cents, description)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+                             terminal_count, terminal_price_cents, setup_fee_cents, description,
+                             subtotal_cents, vat_cents, vat_rate)
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       companyId,
-      invoiceNumber || `INV-${new Date().toISOString().slice(0, 10)}-${Math.floor(Math.random() * 10000)}`,
+      // The sequence is the default; a number may still be supplied (tests, and
+      // the historical rows this replaced).
+      invoiceNumber || nextInvoiceNumber(),
       amountCents,
       dueDate.toISOString().slice(0, 10),
       lines?.terminalCount ?? null,
       lines?.terminalPriceCents ?? null,
       lines?.setupFeeCents ?? null,
       lines?.description ?? null,
+      lines?.subtotalCents ?? null,
+      lines?.vatCents ?? null,
+      lines?.vatRate ?? null,
     );
   return getInvoiceById(Number(info.lastInsertRowid))!;
 };
@@ -2061,7 +2186,9 @@ export const updateInvoice = (
 
   values.push(id);
   getRegistryDb()
-    .prepare(`UPDATE invoices SET ${updatesList.join(', ')}, updated_at = datetime('now') WHERE id = ?`)
+    .prepare(
+      `UPDATE invoices SET ${updatesList.join(', ')}, updated_at = datetime('now') WHERE id = ?`,
+    )
     .run(...values);
 
   return getInvoiceById(id);
@@ -2088,7 +2215,9 @@ export const recordInvoiceEmail = (id: number, recipient: string): InvoiceRecord
 export const listPayments = (companyId?: number): PaymentRecord[] => {
   const db = getRegistryDb();
   const query = companyId
-    ? db.prepare('SELECT * FROM payments WHERE company_id = ? ORDER BY created_at DESC, id DESC').all(companyId)
+    ? db
+        .prepare('SELECT * FROM payments WHERE company_id = ? ORDER BY created_at DESC, id DESC')
+        .all(companyId)
     : db.prepare('SELECT * FROM payments ORDER BY created_at DESC, id DESC').all();
   return query as PaymentRecord[];
 };
@@ -2118,10 +2247,13 @@ export const createPayment = (
   return getPaymentById(Number(info.lastInsertRowid))!;
 };
 
-export const updatePayment = (id: number, updates: {
-  status?: PaymentRecord['status'];
-  transactionId?: string;
-}): PaymentRecord | null => {
+export const updatePayment = (
+  id: number,
+  updates: {
+    status?: PaymentRecord['status'];
+    transactionId?: string;
+  },
+): PaymentRecord | null => {
   if (!getPaymentById(id)) return null;
   const updatesList: string[] = [];
   const values: unknown[] = [];
@@ -2140,7 +2272,9 @@ export const updatePayment = (id: number, updates: {
 
   values.push(id);
   getRegistryDb()
-    .prepare(`UPDATE payments SET ${updatesList.join(', ')}, updated_at = datetime('now') WHERE id = ?`)
+    .prepare(
+      `UPDATE payments SET ${updatesList.join(', ')}, updated_at = datetime('now') WHERE id = ?`,
+    )
     .run(...values);
 
   return getPaymentById(id);
@@ -2162,8 +2296,14 @@ export const upsertBillingSettings = (
   const db = getRegistryDb();
   const existing = getBillingSettings(companyId);
 
-  const autoRenew = settings.auto_renew !== undefined ? (settings.auto_renew ? 1 : 0) : existing?.auto_renew ?? 1;
-  const emailInvoice = settings.email_invoice !== undefined ? (settings.email_invoice ? 1 : 0) : existing?.email_invoice ?? 1;
+  const autoRenew =
+    settings.auto_renew !== undefined ? (settings.auto_renew ? 1 : 0) : (existing?.auto_renew ?? 1);
+  const emailInvoice =
+    settings.email_invoice !== undefined
+      ? settings.email_invoice
+        ? 1
+        : 0
+      : (existing?.email_invoice ?? 1);
   const invoiceEmail = settings.invoice_email ?? existing?.invoice_email ?? '';
 
   db.prepare(
@@ -2189,6 +2329,10 @@ export interface OfficeSettingsRecord {
   office_address: string;
   invoice_due_days: number;
   invoice_footer: string;
+  /** The vendor's own VAT registration (`''` = not registered → not a tax invoice). */
+  vat_reg_no: string;
+  /** The rate its VAT-inclusive prices are quoted at. */
+  vat_rate: number;
   smtp_host: string;
   smtp_port: number;
   smtp_user: string;
@@ -2199,7 +2343,9 @@ export interface OfficeSettingsRecord {
 
 /** The singleton. Created on first boot, so this always returns a row. */
 export const getOfficeSettings = (): OfficeSettingsRecord =>
-  getRegistryDb().prepare('SELECT * FROM office_settings WHERE id = 1').get() as OfficeSettingsRecord;
+  getRegistryDb()
+    .prepare('SELECT * FROM office_settings WHERE id = 1')
+    .get() as OfficeSettingsRecord;
 
 export const updateOfficeSettings = (
   patch: Partial<Omit<OfficeSettingsRecord, 'id' | 'updated_at'>>,
@@ -2210,7 +2356,7 @@ export const updateOfficeSettings = (
     .prepare(
       `UPDATE office_settings
           SET office_name = ?, office_email = ?, office_phone = ?, office_address = ?,
-              invoice_due_days = ?, invoice_footer = ?,
+              invoice_due_days = ?, invoice_footer = ?, vat_reg_no = ?, vat_rate = ?,
               smtp_host = ?, smtp_port = ?, smtp_user = ?, smtp_pass = ?, smtp_from = ?,
               updated_at = datetime('now')
         WHERE id = 1`,
@@ -2222,6 +2368,8 @@ export const updateOfficeSettings = (
       next.office_address,
       next.invoice_due_days,
       next.invoice_footer,
+      next.vat_reg_no,
+      next.vat_rate,
       next.smtp_host,
       next.smtp_port,
       next.smtp_user,
@@ -2311,7 +2459,9 @@ export const updateDeploymentJob = (
 };
 
 export const getDeploymentJobById = (id: number): DeploymentJobRecord | null =>
-  (getRegistryDb().prepare('SELECT * FROM deployment_jobs WHERE id = ?').get(id) as DeploymentJobRecord) ?? null;
+  (getRegistryDb()
+    .prepare('SELECT * FROM deployment_jobs WHERE id = ?')
+    .get(id) as DeploymentJobRecord) ?? null;
 
 export const listDeploymentJobsForCompany = (companyId: number): DeploymentJobRecord[] =>
   getRegistryDb()
@@ -2320,7 +2470,9 @@ export const listDeploymentJobsForCompany = (companyId: number): DeploymentJobRe
 
 /** Every job in the fleet, newest first — the Releases > Deployments view (§33). */
 export const listAllDeploymentJobs = (): DeploymentJobRecord[] =>
-  getRegistryDb().prepare('SELECT * FROM deployment_jobs ORDER BY id DESC').all() as DeploymentJobRecord[];
+  getRegistryDb()
+    .prepare('SELECT * FROM deployment_jobs ORDER BY id DESC')
+    .all() as DeploymentJobRecord[];
 
 export interface DeploymentStepCounts {
   total: number;
@@ -2344,7 +2496,13 @@ export const deploymentStepCounts = (): Map<number, DeploymentStepCounts> => {
          FROM deployment_job_steps
         GROUP BY job_id`,
     )
-    .all() as Array<{ job_id: number; total: number; failed: number; complete: number; skipped: number }>;
+    .all() as Array<{
+    job_id: number;
+    total: number;
+    failed: number;
+    complete: number;
+    skipped: number;
+  }>;
   return new Map(
     rows.map((r) => [
       r.job_id,
@@ -2366,10 +2524,17 @@ export const createDeploymentStep = (
       `INSERT INTO deployment_job_steps (job_id, step_key, resource_type, resource_id, metadata_json, status, started_at)
        VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))`,
     )
-    .run(jobId, stepKey, resourceType, resourceId ?? null, metadata ? JSON.stringify(metadata) : null);
+    .run(
+      jobId,
+      stepKey,
+      resourceType,
+      resourceId ?? null,
+      metadata ? JSON.stringify(metadata) : null,
+    );
   return (
-    (db.prepare('SELECT * FROM deployment_job_steps WHERE id = ?').get(Number(info.lastInsertRowid)) as DeploymentJobStepRecord) ??
-    null
+    (db
+      .prepare('SELECT * FROM deployment_job_steps WHERE id = ?')
+      .get(Number(info.lastInsertRowid)) as DeploymentJobStepRecord) ?? null
   );
 };
 
@@ -2387,12 +2552,13 @@ export const updateDeploymentStep = (
 ): DeploymentJobStepRecord | null => {
   const db = getRegistryDb();
   const current = db.prepare('SELECT * FROM deployment_job_steps WHERE id = ?').get(id) as
-    | DeploymentJobStepRecord
-    | undefined;
+    DeploymentJobStepRecord | undefined;
   if (!current) return null;
 
-  const metadataJson = updates.metadata !== undefined ? JSON.stringify(updates.metadata) : current.metadata_json;
-  const warningsJson = updates.warnings !== undefined ? JSON.stringify(updates.warnings) : current.warnings_json;
+  const metadataJson =
+    updates.metadata !== undefined ? JSON.stringify(updates.metadata) : current.metadata_json;
+  const warningsJson =
+    updates.warnings !== undefined ? JSON.stringify(updates.warnings) : current.warnings_json;
 
   db.prepare(
     `UPDATE deployment_job_steps SET
@@ -2414,7 +2580,9 @@ export const updateDeploymentStep = (
     updates.completed ? 1 : 0,
     id,
   );
-  return db.prepare('SELECT * FROM deployment_job_steps WHERE id = ?').get(id) as DeploymentJobStepRecord;
+  return db
+    .prepare('SELECT * FROM deployment_job_steps WHERE id = ?')
+    .get(id) as DeploymentJobStepRecord;
 };
 
 export const listStepsForJob = (jobId: number): DeploymentJobStepRecord[] =>
@@ -2450,11 +2618,15 @@ export const recordAuditLog = (
       details?.reason || null,
       details?.result || 'ok',
     );
-  return db.prepare('SELECT * FROM audit_logs WHERE id = ?').get(Number(info.lastInsertRowid)) as AuditLogRecord;
+  return db
+    .prepare('SELECT * FROM audit_logs WHERE id = ?')
+    .get(Number(info.lastInsertRowid)) as AuditLogRecord;
 };
 
 export const listAuditLogs = (limit = 100): AuditLogRecord[] =>
-  getRegistryDb().prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?').all(limit) as AuditLogRecord[];
+  getRegistryDb()
+    .prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?')
+    .all(limit) as AuditLogRecord[];
 
 // --- Error feed (§30) --------------------------------------------------------
 
@@ -2512,8 +2684,9 @@ export const errorFingerprint = (message: string): string => {
 };
 
 export const getErrorEventById = (id: number): ErrorEventRecord | null =>
-  (getRegistryDb().prepare('SELECT * FROM error_events WHERE id = ?').get(id) as ErrorEventRecord) ??
-  null;
+  (getRegistryDb()
+    .prepare('SELECT * FROM error_events WHERE id = ?')
+    .get(id) as ErrorEventRecord) ?? null;
 
 /**
  * Records a failure, grouping it with earlier occurrences of the same fault for
@@ -2530,7 +2703,8 @@ export const recordErrorEvent = (input: ErrorEventInput): ErrorEventRecord | nul
         `SELECT id FROM error_events
           WHERE fingerprint = ? AND source = ? AND entity_type = ? AND entity_id = ?`,
       )
-      .get(fingerprint, input.source, input.entityType, input.entityId) as { id: number } | undefined;
+      .get(fingerprint, input.source, input.entityType, input.entityId) as
+      { id: number } | undefined;
 
     if (existing) {
       db.prepare(
@@ -2653,4 +2827,3 @@ export const listErrorEvents = (fingerprint: string): ErrorEventRecord[] =>
   getRegistryDb()
     .prepare('SELECT * FROM error_events WHERE fingerprint = ? ORDER BY last_seen DESC, id DESC')
     .all(fingerprint) as ErrorEventRecord[];
-

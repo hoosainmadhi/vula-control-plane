@@ -147,7 +147,10 @@ export const invoiceHtml = (
         settings.office_phone ? ` · ${esc(settings.office_phone)}` : ''
       }</div>
     </div>
-    <h2 style="margin:0 0 4px;font-size:16px">Subscription invoice ${esc(invoice.invoice_number)}</h2>
+    <h2 style="margin:0 0 4px;font-size:16px">${
+      // Registered for VAT → the document is a tax invoice, same as the PDF.
+      settings.vat_reg_no ? 'Tax invoice' : 'Subscription invoice'
+    } ${esc(invoice.invoice_number)}</h2>
     <p style="margin:0 0 16px;color:#64748b;font-size:13px">${
       invoice.description ? `${esc(invoice.description)} · ` : ''
     }For ${esc(company.name)}${invoice.due_date ? ` · due ${esc(invoice.due_date)}` : ''}</p>
@@ -156,7 +159,21 @@ export const invoiceHtml = (
     </table>
     <table style="width:100%;margin-top:10px;font-size:14px;border-top:1px solid #e2e8f0">
       <tbody>
-        <tr><td style="padding-top:8px"><strong>Amount due</strong></td>
+        ${
+          // VAT-inclusive prices: state the split above the total. Older invoices
+          // carry no split and show the total alone (see invoicePdf).
+          invoice.subtotal_cents !== null && invoice.vat_cents !== null
+            ? `<tr><td style="padding-top:8px;color:#64748b">Subtotal (excl. VAT)</td>
+                 <td style="text-align:right;padding-top:8px;color:#64748b">${formatCents(
+                   invoice.subtotal_cents,
+                 )}</td></tr>
+               <tr><td style="color:#64748b">VAT at ${invoice.vat_rate ?? 0}%</td>
+                 <td style="text-align:right;color:#64748b">${formatCents(invoice.vat_cents)}</td></tr>`
+            : ''
+        }
+        <tr><td style="padding-top:8px"><strong>${
+          invoice.subtotal_cents !== null ? 'Total (incl. VAT)' : 'Amount due'
+        }</strong></td>
             <td style="text-align:right;padding-top:8px"><strong>${formatCents(
               invoice.amount_cents,
             )}</strong></td></tr>

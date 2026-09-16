@@ -15,6 +15,7 @@ import {
   getBillingSettings,
   getOfficeSettings,
   getSubscription,
+  nextInvoiceNumber,
   setSetupFeeStatus,
   updateCompany,
   type CompanyRecord,
@@ -28,6 +29,7 @@ import { pushLicence, pushLicenceToPanel } from './storeClient.js';
 import { entitlementsFor, entitlementsForStore } from './subscriptions.js';
 import { quoteForSubscription } from './pricing.js';
 import { HttpError } from '../utils/errors.js';
+import { exclusiveCents, vatPortionCents } from '../utils/money.js';
 import { logger } from '../config/env.js';
 
 /**
@@ -97,12 +99,17 @@ export interface CreateInvoiceOptions {
 export const formatDateOnly = (d: Date): string => d.toISOString().slice(0, 10);
 
 /**
- * Generate a sequential or collision-free invoice number: INV-YYYYMMDD-XXXX
+ * The next invoice number: a monotonic per-year sequence, `VULA-2026-000001`.
+ *
+ * It used to be `INV-<date>-<4 random digits>`, which was neither sequential (an
+ * auditor cannot see a gap or a duplicate from the number) nor safe: two
+ * invoices raised in the same second could draw the same digits, and the UNIQUE
+ * index turned the loser into a raw database error instead of a retry. The
+ * counter lives in the registry (`nextInvoiceNumber`) and increments in the
+ * statement that reads it.
  */
 export function generateInvoiceNumber(now: Date = new Date()): string {
-  const ymd = formatDateOnly(now).replace(/-/g, '');
-  const rand = Math.floor(1000 + Math.random() * 9000);
-  return `INV-${ymd}-${rand}`;
+  return nextInvoiceNumber(now);
 }
 
 /**
@@ -328,15 +335,27 @@ export function createInvoiceForCompany(
     };
   }
 
+  const settings = getOfficeSettings();
   const due = options?.dueDate
     ? new Date(`${options.dueDate}T12:00:00.000Z`)
     : // Payment terms are an office setting (Settings page); 14 days is only the
       // value the singleton row is seeded with.
-      new Date(Date.now() + getOfficeSettings().invoice_due_days * 24 * 60 * 60 * 1000);
+      new Date(Date.now() + settings.invoice_due_days * 24 * 60 * 60 * 1000);
+
+  // Prices are quoted VAT-inclusive, so `amountCents` is the total the client pays
+  // and the split is `inclusive − exclusive`. Computed and stored per invoice: the
+  // rate is a setting, and changing it must never restate a document that has
+  // already gone out.
+  const linesWithTax = {
+    ...lines,
+    subtotalCents: exclusiveCents(amountCents, settings.vat_rate),
+    vatCents: vatPortionCents(amountCents, settings.vat_rate),
+    vatRate: settings.vat_rate,
+  };
 
   const invoiceNumber = options?.invoiceNumber || generateInvoiceNumber();
 
-  const invoice = dbCreateInvoice(companyId, amountCents, due, invoiceNumber, lines);
+  const invoice = dbCreateInvoice(companyId, amountCents, due, invoiceNumber, linesWithTax);
 
   // The onboarding charge is once-off: the moment an invoice carries it, the
   // subscription records it as invoiced so no later invoice repeats it — on any

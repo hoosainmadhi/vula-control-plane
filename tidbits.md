@@ -12,11 +12,11 @@
 
 ## Deferred from the invoice-document pass (2026-09-16)
 
-- **Phase 3 is now down to two items:** invoice numbering (a monotonic
-  `VULA-2026-000001` sequence rather than date + random 4 digits, where a UNIQUE
-  collision surfaces as a raw DB error) and the **stored VAT split** (subtotal /
-  VAT / total plus the seller's VAT number — decide incl./excl. first, and it must
-  stay the *vendor's* VAT, never a merchant's). ~~PDF~~ shipped 2026-09-16.
+- ~~**Invoice numbering**~~ **shipped 2026-09-16** (`VULA-2026-000001`, from the
+  `invoice_sequences` counter). ~~**Stored VAT split**~~ **shipped 2026-09-16**:
+  prices are quoted incl. VAT, the split is stored per invoice with the rate, and
+  the document is a tax invoice once Vula's `vat_reg_no` is set on Settings.
+  **Phase 3 is down to print CSS.**
 - **Print CSS.** The Billing page's "Print" uses the browser's default print of
   the SPA modal; a proper `@media print` sheet (or just pointing Print at the PDF)
   would drop the buttons, nav and grey overlay from a printed invoice. The PDF is

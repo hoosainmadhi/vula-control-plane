@@ -25,6 +25,10 @@ export interface OfficeSettingsOut {
   officeAddress: string;
   invoiceDueDays: number;
   invoiceFooter: string;
+  /** The vendor's own VAT registration number; '' = not registered. */
+  vatRegNo: string;
+  /** The rate its VAT-inclusive prices are quoted at. */
+  vatRate: number;
   smtpHost: string;
   smtpPort: number;
   smtpUser: string;
@@ -48,6 +52,8 @@ export const toOfficeSettingsOut = (
   officeAddress: row.office_address,
   invoiceDueDays: row.invoice_due_days,
   invoiceFooter: row.invoice_footer,
+  vatRegNo: row.vat_reg_no,
+  vatRate: row.vat_rate,
   smtpHost: row.smtp_host,
   smtpPort: row.smtp_port,
   smtpUser: row.smtp_user,

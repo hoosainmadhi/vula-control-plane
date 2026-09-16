@@ -59,9 +59,11 @@ control plane is what makes the two confusable in conversation. Do not write
   `store_terminal_licences` row per store saying where those licences sit.
   **Billing** is the arithmetic: `licensed terminals × rate`, plus the once-off
   onboarding charge on the first invoice. Only the first is editable as a
-  catalogue; the others are per-customer facts. **The rate covers support** — the
-  owner decided (2026-09-16) that support is included per terminal, so there is no
-  support line, tier or charge type. See §5e before adding one.
+  catalogue; the others are per-customer facts. **Every price is quoted including
+  VAT** (owner, 2026-09-16): the invoice states the total and the tax inside it,
+  never a rate the office then has to add tax to. **The rate covers support** — the
+  owner decided the same day that support is included per terminal, so there is no
+  support line, tier or charge type. See §5e before changing either.
 - **A plan grants** a store-count cap, a per-store terminal ceiling, a feature set,
   and its pricing. Four tiers are seeded and every value is editable: `starter`
   (1 store / 2 terminals), `business` (1/10), `multi-store` (20/10), `enterprise`
@@ -368,14 +370,16 @@ ceiling.
 
 `invoices` — `amount_cents` plus its evidence: `terminal_count`,
 `terminal_price_cents` (rate snapshot), `setup_fee_cents`, and a `description`
-(what the charge is for). `payments` records a settlement (status `completed`)
+(what the charge is for). `subtotal_cents` / `vat_cents` / `vat_rate` are the tax
+split of `amount_cents`, which is VAT-inclusive; NULL on invoices raised before
+the split existed (their documents were issued without it). `payments` records a settlement (status `completed`)
 with a method and reference. `emailed_at` / `emailed_to` are written **only after
 the mail server accepts the message**, so the stamp means "sent", never
 "attempted".
 
 `office_settings` — **the control plane's own** singleton (`CHECK (id = 1)`,
 seeded on first boot): office name/email/phone/address, `invoice_due_days`,
-`invoice_footer`, and the SMTP block (`smtp_host`, `smtp_port`, `smtp_user`,
+`invoice_footer`, the vendor's own `vat_reg_no` + `vat_rate`, and the SMTP block (`smtp_host`, `smtp_port`, `smtp_user`,
 `smtp_pass`, `smtp_from`). Three different things in this codebase are called
 settings and they must not be confused: `office_settings` is the vendor's own
 (one row, global), `billing_settings` is per client (`company_id`), and the
@@ -601,6 +605,37 @@ Two layout rules are load-bearing, and both were bugs first:
   ran into the row beneath it. Both offsets come from `heightOfString()` now, and
   the footer flows after the charge block instead of being pinned to the foot of
   the page (which left half an A4 blank on a one-line invoice).
+
+### VAT and invoice numbering (2026-09-16)
+
+**Every price this office quotes is VAT-inclusive** (owner decision). The plan's
+per-terminal rate, the onboarding charge and any hand-priced amount are all the
+figure the client pays; the tax is broken *out* of it, never added on top. That
+makes the arithmetic one-directional and exact:
+
+```
+subtotal = round(total × 100 / (100 + rate))   // VAT-exclusive
+vat      = total − subtotal                    // the portion inside the total
+```
+
+(`utils/money.ts` `exclusiveCents` / `vatPortionCents` — integer cents, and the
+two always add back to the total, so no invoice is ever a cent out.) The rate and
+the vendor's own registration are office settings: the invoice is headed **Tax
+invoice** and carries the number when `vat_reg_no` is set, and a plain invoice
+when it is not. Both are stored **on the invoice as raised** — changing a rate
+never restates a document that has already gone out.
+
+Invoices raised before the split existed keep NULLs and print the total alone.
+Back-filling them would state tax figures that were never on the document.
+
+**Invoice numbers are a monotonic per-year sequence**: `VULA-2026-000001`. They
+used to be `INV-<date>-<4 random digits>`, which was neither sequential (no gap or
+duplicate is visible from the number) nor collision-safe — two invoices raised in
+the same second could draw the same digits, and the UNIQUE index surfaced the
+loser as a raw database error. The counter is an `invoice_sequences` row
+incremented in the statement that reads it, and a year's counter starts from the
+highest number already written for that year, so a restored backup or an imported
+fleet cannot re-issue a number.
 
 ### Charging once off (2026-09-16)
 

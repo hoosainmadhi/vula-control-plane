@@ -119,6 +119,8 @@ za-pos-control-plane/
   src/routes/stores.ts, mirrored 1:1 in frontend/src/types.ts).
 - Frontend: fetch via `api.*` only; Tailwind utilities; `@theme` brand colors
   in index.css (no tailwind.config).
+- VAT lives in `src/utils/money.ts` (`vatPortionCents` / `exclusiveCents`) and is
+  always computed from an inclusive amount; the SPA never recomputes it.
 - Money: integer cents in the registry and on the wire, ZAR labels in the SPA
   (`frontend/src/lib/money.ts`) and in server-rendered mail
   (`src/utils/money.ts` — the two cannot share a module across the build).
@@ -146,6 +148,12 @@ ambiguity alive. See `CONTEXT.md` §2a. The same rule applies to what clients
   raised for a client that has never been billed it — across `initial`, `renewal`
   and hand-priced invoices. `includeOnboarding: false` is the one-invoice opt-out.
 - **A hand-priced invoice must say what it is for** (`description`).
+- **Every price is quoted VAT-inclusive** (2026-09-16). The invoice breaks the tax
+  *out* of the total (`subtotal + vat = total`, integer cents); nothing is added on
+  top. The rate and Vula's own `vat_reg_no` are office settings, stored per
+  invoice as raised, and an invoice raised before the split keeps its NULLs.
+- **Invoice numbers are a monotonic per-year sequence** (`VULA-2026-000001`) from
+  the `invoice_sequences` counter — never a date plus random digits.
 - Never invent an amount: a `custom`-priced client is invoiced only with an agreed
   figure the office supplied.
 
@@ -178,7 +186,7 @@ ambiguity alive. See `CONTEXT.md` §2a. The same rule applies to what clients
 | GET `/panels/licence/key`                    | office                          | as `/stores/licence/key`                                                                                                                                                                      |
 | POST `/panels/:id/health`                    | office                          | ping the panel's own `/api/internal/status`, record health + version                                                                                                                          |
 | POST `/panels/:id/licence`                   | office                          | re-issue and deliver the company licence to a panel                                                                                                                                           |
-| GET/POST `/billing/invoices`                 | office                          | invoices with their pricing evidence (`terminalCount` × `terminalPriceCents`, `setupFeeCents`) and a `description` of what is charged; `purpose: initial\|renewal\|manual\|onboarding`; **an unbilled once-off onboarding charge rides on whichever invoice is raised next** unless `includeOnboarding: false`; a hand-priced invoice without a description is 400 `invoice_description_required`; `onboarding` bills the once-off alone (409 `setup_fee_not_due` when none is due); an amountless invoice for a custom-priced client is 400 `custom_pricing_requires_amount` |
+| GET/POST `/billing/invoices`                 | office                          | invoices with their pricing evidence (`terminalCount` × `terminalPriceCents`, `setupFeeCents`), their tax split (`subtotalCents` + `vatCents` + `vatRate`; the total is VAT-inclusive) and a `description` of what is charged; numbers are a monotonic `VULA-<year>-<6 digits>` sequence; `purpose: initial\|renewal\|manual\|onboarding`; **an unbilled once-off onboarding charge rides on whichever invoice is raised next** unless `includeOnboarding: false`; a hand-priced invoice without a description is 400 `invoice_description_required`; `onboarding` bills the once-off alone (409 `setup_fee_not_due` when none is due); an amountless invoice for a custom-priced client is 400 `custom_pricing_requires_amount` |
 | POST `/billing/invoices/:id/pay` · `/cancel` | office                          | settlement (advances `paid_through`, marks the onboarding charge paid, re-pushes licences) / cancel                                                                                            |
 | GET `/billing/invoices/:id/pdf`              | office                          | the invoice as a downloadable A4 PDF — the same document the email attaches                                                                                                                   |
 | POST `/billing/renew-check`                  | office                          | renewal sweep: recurring-only invoices, explicit settlement, custom-priced clients skipped                                                                                                    |

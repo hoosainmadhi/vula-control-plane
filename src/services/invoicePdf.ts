@@ -79,7 +79,13 @@ export const buildInvoicePdf = ({ invoice, company, settings }: InvoicePdfInput)
       .font('Helvetica')
       .fillColor(GRAY)
       .text(
-        [settings.office_address, settings.office_phone, settings.office_email]
+        [
+          settings.office_address,
+          settings.office_phone,
+          settings.office_email,
+          // The vendor's own registration: it is what makes this a tax invoice.
+          settings.vat_reg_no ? `VAT Reg No ${settings.vat_reg_no}` : '',
+        ]
           .filter(Boolean)
           .join('   |   '),
       );
@@ -87,7 +93,11 @@ export const buildInvoicePdf = ({ invoice, company, settings }: InvoicePdfInput)
     doc.rect(48, doc.y, PAGE_RIGHT - 48, 2).fill(BRAND);
     doc.moveDown(1);
 
-    doc.fontSize(14).font('Helvetica-Bold').fillColor(INK).text('Subscription invoice');
+    doc
+      .fontSize(14)
+      .font('Helvetica-Bold')
+      .fillColor(INK)
+      .text(settings.vat_reg_no ? 'Tax invoice' : 'Subscription invoice');
     // The subject sits with the title, not in the amounts column: it is what the
     // invoice is about, and a line in the table with no amount reads as an
     // uncharged item.
@@ -174,8 +184,27 @@ export const buildInvoicePdf = ({ invoice, company, settings }: InvoicePdfInput)
     y += 12;
 
     // --- Total ---
+    // The split is stated above the total, because the prices are VAT-inclusive:
+    // the client pays `amount_cents`, of which `vat_cents` is the tax. Invoices
+    // raised before the split existed carry NULLs and show only the total — their
+    // documents were issued without a breakdown, and inventing one now would
+    // state tax figures that were never on them.
+    if (invoice.subtotal_cents !== null && invoice.vat_cents !== null) {
+      doc.font('Helvetica').fontSize(9).fillColor(GRAY);
+      const row = (label: string, value: string): void => {
+        doc.text(label, 300, y, { width: 130 });
+        doc.text(value, AMOUNT_LEFT, y, { width: AMOUNT_WIDTH, align: 'right', lineBreak: false });
+        y += 14;
+      };
+      row('Subtotal (excl. VAT)', formatCents(invoice.subtotal_cents));
+      row(`VAT at ${invoice.vat_rate ?? 0}%`, formatCents(invoice.vat_cents));
+      y += 2;
+    }
+
     doc.fontSize(11).font('Helvetica-Bold').fillColor(INK);
-    doc.text('Amount due', 300, y, { width: 130 });
+    doc.text(invoice.subtotal_cents !== null ? 'Total (incl. VAT)' : 'Amount due', 300, y, {
+      width: 130,
+    });
     doc.text(formatCents(invoice.amount_cents), AMOUNT_LEFT, y, {
       width: AMOUNT_WIDTH,
       align: 'right',

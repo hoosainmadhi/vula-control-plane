@@ -1,6 +1,43 @@
 # Findings
 
-## 2026-09-16 (seventh pass) — three docs described a product that no longer exists
+## 2026-09-16 (seventh pass) — a document that looks official and is not quite right
+
+- **Two defects of the same class, fixed together.** An invoice number that can
+  collide (`INV-<date>-<4 random digits>` in the same second) and a total that
+  states no tax are both ways for a document to look authoritative while being
+  wrong. They are invisible in the happy path — which is why they survived to the
+  point of going to a real client.
+- **VAT-inclusive pricing makes the arithmetic one-directional, and there is no
+  room for a float.** Prices incl. VAT means `subtotal = round(total × 100 /
+  (100 + rate))` and `vat = total − subtotal`, so the parts always add back to what
+  the client actually pays. The alternative (compute VAT and add it) puts the
+  rounding on the total, which changes the amount the client was quoted. The test
+  deliberately uses amounts that do not divide cleanly — 1c, 7c, 99c, R115 000,01 —
+  because those are where an implementation that rounds twice loses a cent.
+- **The rate and the split belong on the invoice, not in settings alone.** A rate
+  is a fact about today; an invoice is a fact about the day it was raised. Storing
+  `vat_rate` with the document is what makes "never restate an issued invoice"
+  true rather than aspirational — and it is why a rate change leaves the existing
+  rows untouched, which the test asserts by changing the rate between two invoices.
+- **Pre-split invoices keep NULLs.** Ten live invoices were issued without a tax
+  breakdown. Deriving one now would print figures that were never on the document
+  the client received — the same principle as not rewriting a number we already
+  issued.
+- **A monotonic counter must be seeded defensively.** A year's sequence starts from
+  the highest number already written for that year, not from zero: restoring a
+  backup, importing a fleet, or a database that issued numbers before a crash would
+  otherwise hand out a number that exists. The test writes `VULA-<year>-000042` by
+  hand and asserts the next invoice is `000043`.
+- **The number format is a contract with the reader.** `VULA-2026-000001` says the
+  vendor, the year and the position in that year's run. The old format said the
+  date and four random digits, from which nothing can be reconciled — which is what
+  "fix invoice numbering" was really about.
+- **A label that omits tax invites a wrong decision.** `R500,00 / terminal / month`
+  reads as ex-VAT to anyone who has quoted ex-VAT before; it now says "incl. VAT",
+  alongside the Settings field that explains the same rule. Pricing decisions are
+  made from labels, so the label is part of the pricing model.
+
+## 2026-09-16 (pre-commit sweep) — three docs described a product that no longer exists
 
 Pre-commit sweep of the markdown, prompted by the owner's "update all relevant md
 files". Three claims were false, all of them in files a newcomer reads first:

@@ -1,5 +1,49 @@
 # Progress
 
+## 2026-09-16 (seventh pass) — invoice numbering and VAT on inclusive prices
+
+Owner: *"fix invoice numbering"* + *"prices inc VAT"*. Both were on the
+what's-next list, and together they are the last two things standing between this
+panel and an invoice that can go to a real client.
+
+- **Numbers are now a monotonic per-year sequence: `VULA-2026-000001`.** They were
+  `INV-<date>-<4 random digits>`, which was neither sequential — no gap or
+  duplicate is readable from the number — nor collision-safe: two invoices raised
+  in the same second could draw the same digits and the UNIQUE index turned the
+  loser into a raw database error. The counter is an `invoice_sequences` row,
+  incremented in the statement that reads it, and a year's counter starts from the
+  highest number already written for that year, so a restored backup cannot
+  re-issue a number. Existing `INV-…` rows are left exactly as they are: they are
+  issued documents.
+- **Prices are quoted VAT-inclusive, and the invoice breaks the tax out.** The
+  split is `subtotal = round(total × 100 / (100 + rate))`, `vat = total −
+  subtotal` — integer cents that always add back to the total, so no invoice is a
+  cent out. `vat_reg_no` and `vat_rate` are Settings fields; with a registration
+  the document is headed **Tax invoice** and carries the number, and both the rate
+  and the split are stored **per invoice**, so changing a rate never restates an
+  invoice already issued.
+- **Sequencing and tax landed together on purpose**: an invoice number that can
+  skip or collide and a tax total that cannot be reconciled are the same class of
+  problem — the document looks official and is not quite right.
+- Invoices raised before the split keep NULLs and print the total alone. Back-
+  filling them would state tax figures that were never on the document, which is
+  the opposite of what the split is for.
+- UI: Settings gained the two VAT fields (with the inclusive-pricing rule spelled
+  out), the invoice detail states **Total (incl. VAT)** with the subtotal and VAT
+  beneath it, the line column reads "Amount (incl. VAT)", and the plan catalogue's
+  per-terminal label now says *incl. VAT* — otherwise the office reads a rate as
+  ex-VAT and the tax line is a surprise.
+- Tests added: the sequence is monotonic, unique, same-width, continues past an
+  existing number for the year and survives three raises in one second; the split
+  sums back to the total for amounts that do not divide cleanly (1, 7, 99, 1234,
+  49999, 1234567, R115 000,01); a rate change leaves issued invoices alone;
+  impossible rates are refused; and a pre-split invoice reports NULLs.
+
+Tests: CP **242 green (19 suites)**; backend typecheck, frontend `tsc -b` and the
+production build clean. Rendered and read against a scratch registry: a
+R13 500,00 inclusive invoice splits to R11 739,13 + R1 760,87 at 15%, headed "Tax
+invoice", with the once-off still leading the lines.
+
 ## 2026-09-16 (sixth pass) — the once-off leads the invoice, under one name
 
 Owner: *"alway have the Vula onboarding and deployment first line item when

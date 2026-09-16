@@ -269,6 +269,11 @@ export interface Invoice {
   setupFeeCents: number | null;
   /** What the charge is for — required on a hand-priced invoice. */
   description: string | null;
+  /** The VAT split of `amountCents`, which is VAT-inclusive. Null on invoices
+   *  raised before the split existed. */
+  subtotalCents: number | null;
+  vatCents: number | null;
+  vatRate: number | null;
   status: 'pending' | 'paid' | 'overdue' | 'cancelled';
   dueDate: string | null;
   paidDate: string | null;
@@ -288,6 +293,10 @@ export interface OfficeSettings {
   /** Payment terms applied to newly raised invoices. */
   invoiceDueDays: number;
   invoiceFooter: string;
+  /** The office's own VAT registration ('' = not registered). */
+  vatRegNo: string;
+  /** The rate its VAT-inclusive prices are quoted at. */
+  vatRate: number;
   smtpHost: string;
   smtpPort: number;
   smtpUser: string;

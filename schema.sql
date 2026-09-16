@@ -153,6 +153,12 @@ CREATE TABLE IF NOT EXISTS invoices (
   -- What the charge is for. Required on a hand-priced invoice, and derived from
   -- the subscription when the control plane computes the amount.
   description          TEXT,
+  -- The tax split of amount_cents, which is VAT-INCLUSIVE (prices are quoted
+  -- incl. VAT). Stored per invoice so a rate change never restates a document
+  -- already issued; NULL on invoices raised before the split existed.
+  subtotal_cents       INTEGER,
+  vat_cents            INTEGER,
+  vat_rate             INTEGER,
   status               TEXT    NOT NULL DEFAULT 'pending'
     CHECK (status IN ('pending', 'paid', 'overdue', 'cancelled')),
   due_date             TEXT,
@@ -190,6 +196,12 @@ CREATE TABLE IF NOT EXISTS billing_settings (
   updated_at        TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
+-- The monotonic per-year invoice counter (VULA-2026-000001).
+CREATE TABLE IF NOT EXISTS invoice_sequences (
+  year       INTEGER PRIMARY KEY,
+  last_value INTEGER NOT NULL
+);
+
 -- The control plane's OWN settings: the vendor's identity and the SMTP account
 -- it mails clients from. A true singleton (CHECK id = 1), seeded on first boot.
 -- Distinct from billing_settings above (per client) and from the tenant's
@@ -203,6 +215,10 @@ CREATE TABLE IF NOT EXISTS office_settings (
   invoice_due_days  INTEGER NOT NULL DEFAULT 14
     CHECK (invoice_due_days BETWEEN 1 AND 180),
   invoice_footer    TEXT    NOT NULL DEFAULT '',
+  -- The vendor's own registration and the rate its inclusive prices carry.
+  vat_reg_no        TEXT    NOT NULL DEFAULT '',
+  vat_rate          INTEGER NOT NULL DEFAULT 15
+    CHECK (vat_rate BETWEEN 0 AND 100),
   smtp_host         TEXT    NOT NULL DEFAULT '',
   smtp_port         INTEGER NOT NULL DEFAULT 587,
   smtp_user         TEXT    NOT NULL DEFAULT '',

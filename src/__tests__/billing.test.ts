@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { createApp } from '../app.js';
-import { listAuditLogs, resetRegistryDb } from '../config/registryDb.js';
+import { getRegistryDb, listAuditLogs, resetRegistryDb } from '../config/registryDb.js';
 import { jsonResponse, loginAsOffice, authHeader } from './helpers.js';
 
 const app = createApp();
@@ -136,7 +136,8 @@ describe('L3 Billing & Invoicing', () => {
     expect(res.body.amountCents).toBe(49900);
     expect(res.body.status).toBe('pending');
     expect(res.body.dueDate).toBe('2026-09-30');
-    expect(res.body.invoiceNumber).toMatch(/^INV-\d{8}-\d{4}$/);
+    // A monotonic per-year sequence, not a date plus random digits.
+    expect(res.body.invoiceNumber).toMatch(/^VULA-\d{4}-\d{6}$/);
 
     // 2. Fetch single invoice
     const getRes = await request(app)
@@ -991,5 +992,164 @@ describe('once-off charges', () => {
     expect(cancelled.body.setupFeeReleased).toBeUndefined();
     const detail = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
     expect(detail.body.subscription.setupFeeStatus).toBe('invoiced');
+  });
+});
+
+describe('invoice numbering', () => {
+  let seq = 0;
+  const makeInvoice = async (): Promise<string> => {
+    // A distinct client per invoice: the slug is unique, and each raise must be
+    // an ordinary invoice, not a repeat on one company.
+    const company = await makeCompany({ name: `Sequence Co ${++seq}`, slug: `sequence-co-${seq}` });
+    const res = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'renewal' })
+      .expect(201);
+    return res.body.invoiceNumber as string;
+  };
+
+  it('issues a monotonic per-year sequence, one number per invoice', async () => {
+    const year = new Date().getUTCFullYear();
+    const numbers: string[] = [];
+    for (let i = 0; i < 3; i++) numbers.push(await makeInvoice());
+
+    expect(numbers[0]).toBe(`VULA-${year}-000001`);
+    expect(numbers[1]).toBe(`VULA-${year}-000002`);
+    expect(numbers[2]).toBe(`VULA-${year}-000003`);
+    // Ascending, unique, and the same width — what an auditor reads off a list.
+    expect([...numbers].sort()).toEqual(numbers);
+    expect(new Set(numbers).size).toBe(numbers.length);
+  });
+
+  it('continues from the highest number already issued for the year', async () => {
+    const year = new Date().getUTCFullYear();
+    // A registry that has already written documents under this scheme (or a
+    // restored backup) must not hand the next invoice a number already used.
+    const company = await makeCompany({ name: 'Historic Co', slug: 'historic-co' });
+    getRegistryDb()
+      .prepare(
+        `INSERT INTO invoices (company_id, invoice_number, amount_cents, due_date, status)
+         VALUES (?, ?, 1000, '2026-01-01', 'pending')`,
+      )
+      .run(company.id, `VULA-${year}-000042`);
+
+    const next = await makeInvoice();
+    expect(next).toBe(`VULA-${year}-000043`);
+  });
+
+  it('does not reuse a number across separate raises in the same second', async () => {
+    // The old scheme was date + four random digits, so this was a real collision
+    // and the UNIQUE index turned it into a raw database error.
+    const batch = await Promise.all([makeInvoice(), makeInvoice(), makeInvoice()]);
+    expect(new Set(batch).size).toBe(3);
+  });
+});
+
+describe('VAT on a VAT-inclusive invoice', () => {
+  it('splits the inclusive total, and the parts add back to what is charged', async () => {
+    const company = await makeCompany();
+    const res = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({
+        companyId: company.id,
+        amountCents: 115000,
+        description: 'Installation',
+        includeOnboarding: false,
+      })
+      .expect(201);
+
+    // R1 150,00 inclusive at 15% → R1 000,00 + R150,00.
+    expect(res.body.amountCents).toBe(115000);
+    expect(res.body.subtotalCents).toBe(100000);
+    expect(res.body.vatCents).toBe(15000);
+    expect(res.body.vatRate).toBe(15);
+    expect(res.body.subtotalCents + res.body.vatCents).toBe(res.body.amountCents);
+  });
+
+  it('never drifts a cent, whatever the amount', async () => {
+    const company = await makeCompany();
+    // Amounts that do not divide cleanly by 1.15 are where a float implementation
+    // loses a cent; the split must always sum back exactly.
+    for (const amountCents of [1, 7, 99, 1234, 49999, 1234567, 115000_01]) {
+      const res = await request(app)
+        .post('/api/billing/invoices')
+        .set(auth())
+        .send({
+          companyId: company.id,
+          amountCents,
+          description: `Charge ${amountCents}`,
+          includeOnboarding: false,
+        })
+        .expect(201);
+      expect(res.body.subtotalCents + res.body.vatCents).toBe(amountCents);
+      expect(Number.isInteger(res.body.subtotalCents)).toBe(true);
+      expect(Number.isInteger(res.body.vatCents)).toBe(true);
+    }
+  });
+
+  it('uses the office rate, and stores it with the invoice', async () => {
+    await request(app).put('/api/settings').set(auth()).send({ vatRate: 0 }).expect(200);
+    const company = await makeCompany();
+    const zeroRated = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({
+        companyId: company.id,
+        amountCents: 50000,
+        description: 'Zero-rated export',
+        includeOnboarding: false,
+      })
+      .expect(201);
+    expect(zeroRated.body.vatCents).toBe(0);
+    expect(zeroRated.body.subtotalCents).toBe(50000);
+    expect(zeroRated.body.vatRate).toBe(0);
+
+    await request(app).put('/api/settings').set(auth()).send({ vatRate: 20 }).expect(200);
+    const raised = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({
+        companyId: company.id,
+        amountCents: 120000,
+        description: 'At 20%',
+        includeOnboarding: false,
+      })
+      .expect(201);
+    expect(raised.body.vatCents).toBe(20000);
+    // The earlier invoice keeps the rate it was issued at — a rate change never
+    // restates an issued document.
+    const earlier = await request(app)
+      .get(`/api/billing/invoices/${zeroRated.body.id}`)
+      .set(auth())
+      .expect(200);
+    expect(earlier.body.vatRate).toBe(0);
+    expect(earlier.body.subtotalCents).toBe(50000);
+  });
+
+  it('rejects an impossible rate', async () => {
+    await request(app).put('/api/settings').set(auth()).send({ vatRate: 101 }).expect(400);
+    await request(app).put('/api/settings').set(auth()).send({ vatRate: -1 }).expect(400);
+    await request(app).put('/api/settings').set(auth()).send({ vatRate: 15.5 }).expect(400);
+  });
+
+  it('leaves invoices raised before the split without one, rather than inventing it', async () => {
+    // A document already issued has no breakdown; back-filling one would state
+    // tax figures that were never on it.
+    const company = await makeCompany();
+    const legacy = getRegistryDb()
+      .prepare(
+        `INSERT INTO invoices (company_id, invoice_number, amount_cents, due_date, status)
+         VALUES (?, 'INV-20260915-1234', 100000, '2026-09-30', 'pending')`,
+      )
+      .run(company.id);
+    const res = await request(app)
+      .get(`/api/billing/invoices/${Number(legacy.lastInsertRowid)}`)
+      .set(auth())
+      .expect(200);
+    expect(res.body.subtotalCents).toBeNull();
+    expect(res.body.vatCents).toBeNull();
+    expect(res.body.vatRate).toBeNull();
   });
 });
