@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import { api } from '../api';
 import { StoreCard } from '../components/StoreCard';
 import { AdminPasswordModal, DiagnosticsModal, StoreFormModal, SupportModal } from '../components/storeModals';
+import { NoticeBanner } from '../components/storeUi';
 import { useStoreActions } from '../hooks/useStoreActions';
 import type { ClientDetailResponse, Company, Plan, SetupFeeStatus, Store, StoreFormValues } from '../types';
 import type { Notice } from '../lib/storeVocab';
@@ -1429,20 +1430,7 @@ export default function ClientDetailPage() {
         </div>
       )}
 
-      {notice && (
-        <div
-          className={`flex items-center justify-between rounded-lg px-4 py-2.5 text-sm ${
-            notice.kind === 'ok'
-              ? 'border border-green-200 bg-green-50 text-green-800'
-              : 'border border-red-200 bg-red-50 text-red-700'
-          }`}
-        >
-          <span>{notice.text}</span>
-          <button onClick={() => setNotice(null)} className="text-xs text-slate-400 hover:text-slate-600" aria-label="Dismiss">
-            ✕
-          </button>
-        </div>
-      )}
+      <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />
 
       {configureStore && (
         <StoreFormModal

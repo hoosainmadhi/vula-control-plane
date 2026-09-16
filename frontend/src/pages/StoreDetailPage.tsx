@@ -5,7 +5,7 @@ import { api, ApiError } from '../api';
 import ErrorBox from '../components/ErrorBox';
 import Spinner from '../components/Spinner';
 import StatusBadge, { REGISTER_STATE_COLORS, STORE_COLORS, VERTICAL_COLORS } from '../components/StatusBadge';
-import { TerminalRoster, ActionButton } from '../components/storeUi';
+import { NoticeBanner, TerminalRoster, ActionButton } from '../components/storeUi';
 import {
   AdminPasswordModal,
   DiagnosticsModal,
@@ -262,20 +262,7 @@ export default function StoreDetailPage() {
         </div>
       </div>
 
-      {notice && (
-        <div
-          className={`flex items-center justify-between rounded-lg px-4 py-2.5 text-sm ${
-            notice.kind === 'ok'
-              ? 'border border-green-200 bg-green-50 text-green-800'
-              : 'border border-red-200 bg-red-50 text-red-700'
-          }`}
-        >
-          <span>{notice.text}</span>
-          <button onClick={() => setNotice(null)} className="text-xs text-slate-400 hover:text-slate-600" aria-label="Dismiss">
-            ✕
-          </button>
-        </div>
-      )}
+      <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />
 
       {/* Overview sections (SPOG §24) */}
       <div className="grid gap-4 lg:grid-cols-3">

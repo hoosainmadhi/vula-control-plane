@@ -78,3 +78,43 @@ export function SummaryTile({
     </div>
   );
 }
+
+/**
+ * The outcome of a privileged action, shown as a fixed toast rather than inline.
+ *
+ * These messages used to render in the document flow at the foot of the page, which
+ * meant a refusal (e.g. removing an active store) appeared below every store card —
+ * on a 44-branch client that is several screens down, so the action read as though
+ * nothing had happened. Anchored to the viewport it cannot be scrolled away from.
+ */
+export function NoticeBanner({
+  notice,
+  onDismiss,
+}: {
+  notice: { kind: 'ok' | 'error'; text: string } | null;
+  onDismiss: () => void;
+}) {
+  if (!notice) return null;
+  return (
+    <div className="pointer-events-none fixed inset-x-0 top-3 z-[60] flex justify-center px-4">
+      <div
+        role="status"
+        aria-live="polite"
+        className={`pointer-events-auto flex max-w-2xl items-start gap-3 rounded-lg border px-4 py-2.5 text-sm shadow-lg ${
+          notice.kind === 'ok'
+            ? 'border-green-200 bg-green-50 text-green-800'
+            : 'border-red-200 bg-red-50 text-red-700'
+        }`}
+      >
+        <span>{notice.text}</span>
+        <button
+          onClick={onDismiss}
+          className="text-xs text-slate-400 hover:text-slate-600"
+          aria-label="Dismiss"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}

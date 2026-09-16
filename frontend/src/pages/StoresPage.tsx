@@ -4,7 +4,7 @@ import { api, ApiError } from '../api';
 import ErrorBox from '../components/ErrorBox';
 import Modal from '../components/Modal';
 import Spinner from '../components/Spinner';
-import { SummaryTile } from '../components/storeUi';
+import { NoticeBanner, SummaryTile } from '../components/storeUi';
 import {
   AdminPasswordModal,
   DiagnosticsModal,
@@ -286,24 +286,7 @@ export default function StoresPage() {
         </button>
       </div>
 
-      {notice && (
-        <div
-          className={`flex items-center justify-between rounded-lg px-4 py-2.5 text-sm ${
-            notice.kind === 'ok'
-              ? 'border border-green-200 bg-green-50 text-green-800'
-              : 'border border-red-200 bg-red-50 text-red-700'
-          }`}
-        >
-          <span>{notice.text}</span>
-          <button
-            onClick={() => setNotice(null)}
-            className="text-xs text-slate-400 hover:text-slate-600"
-            aria-label="Dismiss"
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />
 
       {stores.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
