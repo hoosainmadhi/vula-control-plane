@@ -477,6 +477,10 @@ const main = async (): Promise<void> => {
   for (const p of PANELS) {
     const companyId = companyIdBySlug.get(p.client);
     if (!companyId) throw new Error(`No client '${p.client}' for panel '${p.slug}'`);
+    // Pass the panel's own token, or the row we create holds a generated value
+    // that cannot authenticate to the deployment — the same two-sided mismatch
+    // the store tokens are read from their env files to avoid.
+    const panelToken = readEnv(envSlugForPanel(p.slug))?.token ?? '';
     const instance = ensureHoInstance(p);
     const panelId = existingPanels.get(p.slug);
     if (panelId !== undefined) {
@@ -484,7 +488,13 @@ const main = async (): Promise<void> => {
       console.log(`  · panel ${p.slug.padEnd(22)} updated (instance ${instance})`);
       continue;
     }
-    await api('POST', '/panels', { name: p.name, slug: p.slug, companyId, baseUrl: panelUrl(p) });
+    await api('POST', '/panels', {
+      name: p.name,
+      slug: p.slug,
+      companyId,
+      baseUrl: panelUrl(p),
+      ...(panelToken ? { controlPlaneToken: panelToken } : {}),
+    });
     console.log(`  ✓ panel ${p.slug.padEnd(22)} instance ${instance === 'created' ? 'created' : 'already present'}`);
   }
 
