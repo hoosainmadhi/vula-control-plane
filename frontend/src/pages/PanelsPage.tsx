@@ -104,7 +104,14 @@ export default function PanelsPage() {
   const pushLicence = (panel: Panel): Promise<void> =>
     run(panel, async () => {
       const res = await api<PanelPushOutcome>(`/panels/${panel.id}/licence`, { method: 'POST' });
-      setNotice(res.ok ? `Licence #${res.sequence} delivered to ${panel.name}` : `Push failed: ${res.error}`);
+      const caughtUp = res.reconciled
+        ? ` (the deployment already held #${res.reconciled.reported} — the control plane caught up)`
+        : '';
+      setNotice(
+        res.ok
+          ? `Licence #${res.sequence} delivered to ${panel.name}${caughtUp}`
+          : `Push failed: ${res.error}`,
+      );
     });
 
   const openCreate = (): void => {

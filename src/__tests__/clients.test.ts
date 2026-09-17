@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { createApp } from '../app.js';
-import { resetRegistryDb } from '../config/registryDb.js';
+import { createCompany, createStore, resetRegistryDb, setStoreCompany } from '../config/registryDb.js';
 import { jsonResponse, loginAsOffice, authHeader } from './helpers.js';
 
 const app = createApp();
@@ -286,6 +286,42 @@ describe('Client-Centric Management & Orchestration (§1, §5, §6, §7)', () =>
     // Verify detail reflects the updated name
     const detail = await request(app).get(`/api/clients/${clientId}`).set(auth()).expect(200);
     expect(detail.body.client.name).toBe('Kloof Auto Spares');
+  });
+});
+
+describe('client store order', () => {
+  it('lists a client stores by name, on the card and on the client detail', async () => {
+    // Created deliberately out of alphabetical order, so newest-first (which is how
+    // `listStores()` answers) and name order give visibly different answers.
+    const company = createCompany({ name: 'Order Test Group', slug: 'order-test' });
+    for (const [name, slug] of [
+      ['Zebra Crossing', 'order-zebra'],
+      ['Alpha Foods', 'order-alpha'],
+      ['Middle Market', 'order-middle'],
+    ] as const) {
+      const store = createStore(
+        { name, slug, terminalCount: 1, baseUrl: `http://${slug}.localhost:3245` },
+        'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      );
+      setStoreCompany(store.id, company.id);
+    }
+
+    const list = await request(app).get('/api/clients').set(auth()).expect(200);
+    const card = (list.body as Array<{ id: number; stores: Array<{ name: string }> }>).find(
+      (c) => c.id === company.id,
+    );
+    expect(card?.stores.map((s) => s.name)).toEqual([
+      'Alpha Foods',
+      'Middle Market',
+      'Zebra Crossing',
+    ]);
+
+    const detail = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+    expect((detail.body as { stores: Array<{ name: string }> }).stores.map((s) => s.name)).toEqual([
+      'Alpha Foods',
+      'Middle Market',
+      'Zebra Crossing',
+    ]);
   });
 });
 

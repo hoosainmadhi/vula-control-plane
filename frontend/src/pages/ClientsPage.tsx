@@ -28,7 +28,8 @@ function WizardQuote({
   storeBreakdown?: Array<{ label: string; licensed: number }>;
 }) {
   if (!plan) return null;
-  const recurring = plan.pricingMode === 'per_terminal' ? plan.terminalPriceCents * licensedTerminals : null;
+  const recurring =
+    plan.pricingMode === 'per_terminal' ? plan.terminalPriceCents * licensedTerminals : null;
 
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs">
@@ -61,7 +62,8 @@ function WizardQuote({
               Recurring ({licensedTerminals} × {rand(plan.terminalPriceCents)})
             </span>
             <span className="font-mono font-black text-slate-900">
-              {rand(recurring)} {plan.billingPeriod === 'once-off' ? '' : PERIOD_LABEL[plan.billingPeriod]}
+              {rand(recurring)}{' '}
+              {plan.billingPeriod === 'once-off' ? '' : PERIOD_LABEL[plan.billingPeriod]}
             </span>
           </div>
         )}
@@ -99,7 +101,9 @@ export default function ClientsPage() {
   const [billingEmail, setBillingEmail] = useState('');
   const [planId, setPlanId] = useState<string>('');
   const [vertical, setVertical] = useState<StoreVertical>('general');
-  const [deploymentType, setDeploymentType] = useState<'single_store' | 'multi_store'>('single_store');
+  const [deploymentType, setDeploymentType] = useState<'single_store' | 'multi_store'>(
+    'single_store',
+  );
 
   // Single store inputs
   const [singleStoreName, setSingleStoreName] = useState('');
@@ -111,9 +115,9 @@ export default function ClientsPage() {
   const [hoName, setHoName] = useState('');
   const [hoUrl, setHoUrl] = useState('');
   const [hoAdminEmail, setHoAdminEmail] = useState('');
-  const [multiStores, setMultiStores] = useState<Array<{ name: string; slug: string; baseUrl: string; terminalCount: number }>>([
-    { name: '', slug: '', baseUrl: '', terminalCount: 2 },
-  ]);
+  const [multiStores, setMultiStores] = useState<
+    Array<{ name: string; slug: string; baseUrl: string; terminalCount: number }>
+  >([{ name: '', slug: '', baseUrl: '', terminalCount: 2 }]);
 
   const [deploying, setDeploying] = useState(false);
 
@@ -278,19 +282,25 @@ export default function ClientsPage() {
       {/* Overview Cards */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-2xs">
-          <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Total Clients</div>
+          <div className="text-xs font-bold uppercase tracking-wider text-slate-400">
+            Total Clients
+          </div>
           <div className="mt-2 text-2xl font-black text-slate-900">{clients.length}</div>
           <div className="mt-1 text-xs text-slate-500">
             {singleStoreCount} Single · {multiStoreCount} Multi-Store
           </div>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-2xs">
-          <div className="text-xs font-bold uppercase tracking-wider text-brand-600">Store Deployments</div>
+          <div className="text-xs font-bold uppercase tracking-wider text-brand-600">
+            Store Deployments
+          </div>
           <div className="mt-2 text-2xl font-black text-brand-600">{totalStores}</div>
           <div className="mt-1 text-xs text-slate-500">Active retail containers</div>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-2xs">
-          <div className="text-xs font-bold uppercase tracking-wider text-indigo-600">Head Offices</div>
+          <div className="text-xs font-bold uppercase tracking-wider text-indigo-600">
+            Head Offices
+          </div>
           <div className="mt-2 text-2xl font-black text-indigo-600">{multiStoreCount}</div>
           <div className="mt-1 text-xs text-slate-500">Client executive panels</div>
         </div>
@@ -309,7 +319,9 @@ export default function ClientsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h3 className="text-base font-bold text-slate-900">Clients & Topologies</h3>
-          <p className="text-xs text-slate-500">Manage client organizations, store fleets, and Head Offices</p>
+          <p className="text-xs text-slate-500">
+            Manage client organizations, store fleets, and Head Offices
+          </p>
         </div>
         <div className="flex items-center gap-2.5">
           <div className="relative">
@@ -365,68 +377,108 @@ export default function ClientsPage() {
           No clients matching "{searchQuery}".
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <div className="space-y-3">
           {filteredClients.map((c) => (
             <div
               key={c.id}
-              className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs transition hover:border-slate-300 hover:shadow-xs"
+              className="rounded-2xl border border-slate-200 bg-white p-5 shadow-2xs transition hover:border-slate-300 hover:shadow-xs"
             >
-              <div>
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h4 className="text-base font-black text-slate-900">{c.name}</h4>
-                    <p className="text-xs font-mono text-slate-400">{c.slug}</p>
+              {/* One client per row: identity, the four facts as labelled columns,
+                  then the actions — the horizontal shape the store cards use, so a
+                  fleet reads as a roster instead of half-width cards. The store
+                  chips keep a full-width row of their own underneath: a client with
+                  41 branches would otherwise be a column of chips. */}
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:gap-8">
+                {/* Identity */}
+                <div className="min-w-0 xl:w-72 xl:shrink-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Link
+                      to={`/clients/${c.id}`}
+                      title={`Open ${c.name}`}
+                      className="truncate text-base font-bold text-slate-900 hover:text-brand-700"
+                    >
+                      {c.name}
+                    </Link>
+                    <span
+                      className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide ${
+                        c.topology === 'multi_store'
+                          ? 'bg-purple-50 text-purple-700 ring-1 ring-purple-500/20'
+                          : 'bg-blue-50 text-blue-700 ring-1 ring-blue-500/20'
+                      }`}
+                    >
+                      {c.topology === 'multi_store' ? 'Multi-Store' : 'Single Store'}
+                    </span>
                   </div>
-                  <span
-                    className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wide ${
-                      c.topology === 'multi_store'
-                        ? 'bg-purple-50 text-purple-700 ring-1 ring-purple-500/20'
-                        : 'bg-blue-50 text-blue-700 ring-1 ring-blue-500/20'
-                    }`}
-                  >
-                    {c.topology === 'multi_store' ? 'Multi-Store' : 'Single Store'}
-                  </span>
+                  <p className="mt-1 truncate font-mono text-xs text-slate-400" title={c.slug}>
+                    {c.slug}
+                  </p>
                 </div>
 
-                <div className="mt-4 grid grid-cols-2 gap-3 border-y border-slate-100 py-3.5 text-xs">
-                  <div>
-                    <span className="text-[11px] font-semibold text-slate-400">Plan & Status:</span>
-                    <div className="font-bold text-slate-800">
+                {/* The facts, as labelled columns */}
+                <div className="grid flex-1 grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Plan &amp; Status
+                    </div>
+                    <div className="mt-0.5 truncate text-xs font-semibold text-slate-700">
                       {c.planName}{' '}
                       <span className="rounded bg-slate-100 px-1.5 py-0.2 text-[10px] font-bold text-slate-600">
                         {c.billingState}
                       </span>
                     </div>
                   </div>
-                  <div>
-                    <span className="text-[11px] font-semibold text-slate-400">Paid up to:</span>
-                    <div className="font-semibold text-slate-800">{c.paidThrough || '—'}</div>
-                  </div>
-                  <div>
-                    <span className="text-[11px] font-semibold text-slate-400">Store Fleet:</span>
-                    <div className="font-bold text-slate-800">
-                      {c.healthyStoresCount} / {c.storesCount} online ({c.licensedTerminalCount ?? 0} licensed
-                      · {c.totalTills} configured)
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Paid up to
+                    </div>
+                    <div className="mt-0.5 truncate text-xs font-semibold text-slate-700">
+                      {c.paidThrough || '—'}
                     </div>
                   </div>
-                  <div>
-                    <span className="text-[11px] font-semibold text-slate-400">Head Office:</span>
-                    <div className="font-semibold text-slate-800">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Store Fleet
+                    </div>
+                    <div className="mt-0.5 truncate text-xs font-semibold text-slate-700">
+                      {c.healthyStoresCount} / {c.storesCount} online
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      {c.licensedTerminalCount ?? 0} licensed · {c.totalTills} configured
+                    </div>
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Head Office
+                    </div>
+                    <div className="mt-0.5 truncate text-xs font-semibold text-slate-700">
                       {c.headOffice ? (
-                        <span className="text-emerald-700 font-bold">
+                        <span className="font-bold text-emerald-700">
                           ● {c.headOffice.health === 'up' ? 'Healthy' : 'Registered'}
                         </span>
                       ) : (
-                        <span className="text-slate-400 italic">None (Single Store)</span>
+                        <span className="italic text-slate-400">None (Single Store)</span>
                       )}
                     </div>
                   </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 xl:w-56 xl:flex-col xl:items-end">
+                  <Link
+                    to={`/clients/${c.id}`}
+                    className="rounded-lg bg-slate-100 px-3.5 py-1.5 text-xs font-bold text-slate-700 transition hover:bg-slate-200"
+                  >
+                    Manage Client →
+                  </Link>
+                  <span className="text-[11px] text-slate-400">
+                    Onboarded {c.createdAt.slice(0, 10)}
+                  </span>
                 </div>
               </div>
 
               {/* Stores are reached through the client card: each store links
                   straight into its SPOG detail; Manage opens the workflow. */}
-              <div className="mt-3 flex flex-wrap items-center gap-1.5">
+              <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-3">
                 <span className="text-[11px] font-semibold text-slate-400">Stores:</span>
                 {(c.stores ?? []).length === 0 ? (
                   <span className="text-[11px] italic text-slate-400">None yet</span>
@@ -449,18 +501,6 @@ export default function ClientsPage() {
                   ))
                 )}
               </div>
-
-              <div className="mt-4 flex items-center justify-between pt-2">
-                <span className="text-[11px] text-slate-400">
-                  Onboarded {c.createdAt.slice(0, 10)}
-                </span>
-                <Link
-                  to={`/clients/${c.id}`}
-                  className="rounded-lg bg-slate-100 px-3.5 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-200 transition"
-                >
-                  Manage Client →
-                </Link>
-              </div>
             </div>
           ))}
         </div>
@@ -473,7 +513,16 @@ export default function ClientsPage() {
             <div className="mb-4 border-b border-slate-100 pb-3 flex items-center justify-between">
               <div>
                 <h3 className="text-lg font-bold text-slate-900">New Client Onboarding</h3>
-                <p className="text-xs text-slate-500">Step {step} of 4: {step === 1 ? 'Client Information' : step === 2 ? 'Deployment Topology' : step === 3 ? 'Store & Office Setup' : 'Review & Deploy'}</p>
+                <p className="text-xs text-slate-500">
+                  Step {step} of 4:{' '}
+                  {step === 1
+                    ? 'Client Information'
+                    : step === 2
+                      ? 'Deployment Topology'
+                      : step === 3
+                        ? 'Store & Office Setup'
+                        : 'Review & Deploy'}
+                </p>
               </div>
               <button
                 onClick={() => setWizardOpen(false)}
@@ -487,7 +536,9 @@ export default function ClientsPage() {
             {step === 1 && (
               <div className="space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700">Client / Company Name *</label>
+                  <label className="block text-xs font-bold text-slate-700">
+                    Client / Company Name *
+                  </label>
                   <input
                     type="text"
                     required
@@ -519,25 +570,31 @@ export default function ClientsPage() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700">Subscription Plan *</label>
+                    <label className="block text-xs font-bold text-slate-700">
+                      Subscription Plan *
+                    </label>
                     <select
                       value={planId}
                       onChange={(e) => setPlanId(e.target.value)}
                       className="mt-1 w-full rounded-lg border border-slate-300 p-2.5 text-sm"
                     >
                       {/* Archived plans stay on existing clients but are not offered to new ones. */}
-                      {plans.filter((p) => p.isActive).map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                          {p.pricingMode === 'per_terminal'
-                            ? ` — ${perTerminalLabel(p.terminalPriceCents, p.billingPeriod)}`
-                            : ' — custom pricing'}
-                        </option>
-                      ))}
+                      {plans
+                        .filter((p) => p.isActive)
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                            {p.pricingMode === 'per_terminal'
+                              ? ` — ${perTerminalLabel(p.terminalPriceCents, p.billingPeriod)}`
+                              : ' — custom pricing'}
+                          </option>
+                        ))}
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-slate-700">POS Profile / Vertical</label>
+                    <label className="block text-xs font-bold text-slate-700">
+                      POS Profile / Vertical
+                    </label>
                     <select
                       value={vertical}
                       onChange={(e) => setVertical(e.target.value as StoreVertical)}
@@ -569,7 +626,9 @@ export default function ClientsPage() {
             {/* Step 2: Topology Choice */}
             {step === 2 && (
               <div className="space-y-4">
-                <p className="text-xs text-slate-600">How will this merchant operate their retail business?</p>
+                <p className="text-xs text-slate-600">
+                  How will this merchant operate their retail business?
+                </p>
                 <div className="grid grid-cols-2 gap-4">
                   <div
                     onClick={() => setDeploymentType('single_store')}
@@ -581,7 +640,8 @@ export default function ClientsPage() {
                   >
                     <div className="font-bold text-slate-900 text-sm">Single Store</div>
                     <p className="mt-1 text-xs text-slate-500">
-                      Standalone shop with local till registers. One store container with its own database.
+                      Standalone shop with local till registers. One store container with its own
+                      database.
                     </p>
                   </div>
 
@@ -634,7 +694,9 @@ export default function ClientsPage() {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700">Store FQDN / Base URL</label>
+                      <label className="block text-xs font-bold text-slate-700">
+                        Store FQDN / Base URL
+                      </label>
                       <input
                         type="text"
                         value={singleStoreUrl}
@@ -660,7 +722,9 @@ export default function ClientsPage() {
                         </p>
                       </div>
                       <div>
-                        <label className="block text-xs font-bold text-slate-700">Store Manager Email</label>
+                        <label className="block text-xs font-bold text-slate-700">
+                          Store Manager Email
+                        </label>
                         <input
                           type="email"
                           placeholder={billingEmail || 'admin@store.co.za'}
@@ -682,7 +746,9 @@ export default function ClientsPage() {
                         Head Office Portal Configuration
                       </div>
                       <div>
-                        <label className="block text-[11px] font-bold text-purple-800">HO Portal Name</label>
+                        <label className="block text-[11px] font-bold text-purple-800">
+                          HO Portal Name
+                        </label>
                         <input
                           type="text"
                           value={hoName}
@@ -691,7 +757,9 @@ export default function ClientsPage() {
                         />
                       </div>
                       <div>
-                        <label className="block text-[11px] font-bold text-purple-800">HO URL</label>
+                        <label className="block text-[11px] font-bold text-purple-800">
+                          HO URL
+                        </label>
                         <input
                           type="text"
                           value={hoUrl}
@@ -722,7 +790,10 @@ export default function ClientsPage() {
 
                       <div className="space-y-2">
                         {multiStores.map((ms, idx) => (
-                          <div key={idx} className="grid grid-cols-12 gap-2 items-center rounded-lg border border-slate-200 p-2">
+                          <div
+                            key={idx}
+                            className="grid grid-cols-12 gap-2 items-center rounded-lg border border-slate-200 p-2"
+                          >
                             <input
                               type="text"
                               placeholder="e.g. Durban Gateway"
@@ -746,7 +817,9 @@ export default function ClientsPage() {
                               className="col-span-4 rounded border border-slate-300 p-2 text-xs font-mono"
                             />
                             <div className="col-span-3 flex items-center justify-end gap-1.5">
-                              <span className="text-[10px] font-bold text-slate-500 uppercase shrink-0">Lic:</span>
+                              <span className="text-[10px] font-bold text-slate-500 uppercase shrink-0">
+                                Lic:
+                              </span>
                               <input
                                 type="number"
                                 min="1"
@@ -777,7 +850,10 @@ export default function ClientsPage() {
                     </div>
                     <WizardQuote
                       plan={selectedPlan}
-                      licensedTerminals={multiStores.reduce((n, s) => n + (s.terminalCount || 0), 0)}
+                      licensedTerminals={multiStores.reduce(
+                        (n, s) => n + (s.terminalCount || 0),
+                        0,
+                      )}
                       storeBreakdown={multiStores.map((s, i) => ({
                         label: s.name || `${clientName || 'Branch'} ${i + 1}`,
                         licensed: s.terminalCount || 0,
@@ -811,15 +887,21 @@ export default function ClientsPage() {
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2 text-xs">
                   <div className="flex justify-between">
                     <span className="text-slate-500 font-semibold">Client:</span>
-                    <span className="font-bold text-slate-900">{clientName} ({clientSlug})</span>
+                    <span className="font-bold text-slate-900">
+                      {clientName} ({clientSlug})
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-500 font-semibold">Deployment:</span>
-                    <span className="font-bold uppercase text-brand-700">{deploymentType.replace('_', ' ')}</span>
+                    <span className="font-bold uppercase text-brand-700">
+                      {deploymentType.replace('_', ' ')}
+                    </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-500 font-semibold">Plan:</span>
-                    <span className="font-bold text-slate-900">{plans.find((p) => String(p.id) === planId)?.name}</span>
+                    <span className="font-bold text-slate-900">
+                      {plans.find((p) => String(p.id) === planId)?.name}
+                    </span>
                   </div>
                   {deploymentType === 'multi_store' ? (
                     <>
@@ -829,7 +911,9 @@ export default function ClientsPage() {
                       </div>
                       <div className="flex justify-between">
                         <span className="text-slate-500 font-semibold">Stores to Deploy:</span>
-                        <span className="font-bold text-slate-900">{multiStores.length} branches</span>
+                        <span className="font-bold text-slate-900">
+                          {multiStores.length} branches
+                        </span>
                       </div>
                     </>
                   ) : (
@@ -858,7 +942,8 @@ export default function ClientsPage() {
                 />
 
                 <div className="rounded-lg bg-amber-50 p-3 text-[11px] text-amber-800 border border-amber-200">
-                  ⚡ Automatic orchestration will create client resources, configure initial terminals, issue signed trade licences, and verify fleet health.
+                  ⚡ Automatic orchestration will create client resources, configure initial
+                  terminals, issue signed trade licences, and verify fleet health.
                 </div>
 
                 <div className="flex justify-between pt-4">

@@ -15,6 +15,7 @@ import type {
   ClientDetailResponse,
   Company,
   CreateStoreResponse,
+  PanelPushOutcome,
   Plan,
   SetupFeeStatus,
   Store,
@@ -353,14 +354,19 @@ export default function ClientDetailPage() {
     if (!headOffice) return;
     setError(null);
     try {
-      const res = await api<{ ok: boolean; sequence?: number; error?: string }>(
-        `/panels/${headOffice.id}/licence`,
-        { method: 'POST' },
-      );
+      const res = await api<PanelPushOutcome>(`/panels/${headOffice.id}/licence`, {
+        method: 'POST',
+      });
+      // Say when the control plane had to catch its counter up: the licence number
+      // jumps for a reason nobody clicked for, and an unexplained jump is how a
+      // correct repair reads as a bug.
+      const caughtUp = res.reconciled
+        ? ` — the deployment already held v${res.reconciled.reported}, so the control plane caught up`
+        : '';
       notify(
         res.ok ? 'ok' : 'error',
         res.ok
-          ? `Licence v${res.sequence} pushed to ${headOffice.slug}`
+          ? `Licence v${res.sequence} pushed to ${headOffice.slug}${caughtUp}`
           : `Licence push failed: ${res.error}`,
       );
       await loadData();

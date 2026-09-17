@@ -19,6 +19,7 @@ import {
   recordAuditLog,
   type CompanyRecord,
   type SetupFeeStatus,
+  type StoreRecord,
 } from '../config/registryDb.js';
 import { requireOffice } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -126,13 +127,28 @@ export interface ClientListItem {
   createdAt: string;
 }
 
+/**
+ * The stores of one client, in **name order**.
+ *
+ * `listStores()` answers newest-first, which suits the fleet page — a running log
+ * of what was added — and is wrong under a client, where the stores are a set of
+ * places an operator looks up by name and a branch added yesterday would appear
+ * in the middle of the card. Sorted here rather than in the SPA so the client
+ * card's store chips and the client's Stores tab cannot drift apart; the locale
+ * is pinned so the order does not depend on the server's environment.
+ */
+const storesForCompany = (companyId: number): StoreRecord[] =>
+  listStores()
+    .filter((s) => s.company_id === companyId)
+    .sort((a, b) => a.name.localeCompare(b.name, 'en') || a.slug.localeCompare(b.slug, 'en'));
+
 export const buildClientListItem = (company: CompanyRecord): ClientListItem => {
   const ent = entitlementsFor(company);
   const quote = quoteForSubscription(company);
   const summary = summariseSubscription(company.id);
   const panels = listPanelsForCompany(company.id);
   const ho = panels[0] || null;
-  const companyStores = listStores().filter((s) => s.company_id === company.id);
+  const companyStores = storesForCompany(company.id);
   const healthyStoresCount = companyStores.filter((s) => s.last_health_status === 'up').length;
   const totalTills = companyStores.reduce((acc, s) => acc + (s.terminal_count || 1), 0);
   const jobs = listDeploymentJobsForCompany(company.id);
@@ -206,7 +222,7 @@ clientsRouter.get(
     const quote = quoteForSubscription(company);
     const sum = summariseSubscription(company.id);
     const panels = listPanelsForCompany(company.id);
-    const stores = listStores().filter((s) => s.company_id === company.id);
+    const stores = storesForCompany(company.id);
     const jobs = listDeploymentJobsForCompany(company.id);
     const latestJob = jobs[0] || null;
     const steps = latestJob ? listStepsForJob(latestJob.id) : [];
