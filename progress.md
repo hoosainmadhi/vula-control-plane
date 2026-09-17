@@ -1,11 +1,92 @@
 # Progress
 
+## 2026-09-17 — a client's stores, in name order
+
+Owner: *"CP - clients - put stores in alphabetical order."*
+
+- **Sorted at the source, not in the card.** The chips under each client (and the
+  client's Stores tab) come from two places in `routes/clients.ts` that both filtered
+  `listStores()`, which answers `created_at DESC, id DESC` — so the newest branch
+  appeared wherever it happened to land. One helper, `storesForCompany()`, now filters
+  and sorts by name, so the card and the detail cannot drift apart; the locale is
+  pinned (`'en'`) so the order does not depend on the server's environment.
+- **Name, not slug:** the operator reads the branch they see on screen. Mixed-case
+  names sort the way a person expects (AHK's `ALRODE`, `Atteridgeville`, `BLOEMFONTEIN`
+  on real data), with the unique slug breaking exact ties.
+- **Left alone deliberately:** the `/stores` fleet page keeps newest-first, which is
+  right for a running log of what was added — the owner asked about Clients.
+- Test (`clients.test.ts`) seeds three stores out of order and asserts both the card
+  and the client detail; it was confirmed to fail without the sort before being kept.
+  Tests CP **274 green (21 suites)**; backend typecheck and frontend `tsc -b` clean.
+- **Verified on real fleet data**, not just fixtures: a copy of the live registry
+  served by a scratch instance on `:3289` lists all five multi-store clients
+  alphabetically, including AHK Spares' 41 branches and mixed-case names.
+
+## 2026-09-16 (eleventh pass) — "Push Licence" that could not catch up, and one client per line
+
+Owner, from a live session: _"1. CP : Clients -> 1 Client per line / 2. Client
+Details-> Multiple Stores-> Push License : Store POST /api/internal/licence
+failed: Licence sequence 6 is older than the stored 10 — retry"_.
+
+**The licence failure was a counter that could never catch up.** Boss `panels.id=1`
+(`urban-threads-ho`, the Head Office of the client shown as _Multi-Store_) held
+**6**; the deployment behind it held **10**. The tenant refuses any licence below
+the sequence it holds (correctly — it blocks a stale replay), the CP never compared
+the two, and each retry incremented by one _before_ pushing, so the operator needed
+five blind clicks.
+
+- Verified against the live deployment, not reasoned about: `GET
+/api/internal/status` on `:3260` returned `licence.sequence: 10`, matching the
+  refusal exactly. The registry was rebuilt on 2026-09-14 by `reseed-fleet.ts`'s
+  documented recipe (move the DB aside, rebuild, reseed), which restarts every
+  counter at 0 while the deployments keep theirs — the same signature as the
+  "sequence 2 older than the stored 3" cluster that `error_events` has carried for
+  stores 2, 3, 4 and 9 since that day.
+- **`services/licenceDelivery.ts` is now the one place a licence is signed and
+  delivered.** Before allocating, it reads the sequence the deployment reports
+  (`subscription.sequence` on a store, `licence.sequence` on a Head Office — fields
+  the CP was already fetching on every health check and discarding) and raises the
+  counter to at least that value. It only ever raises, and it is best-effort: an
+  unreachable or older deployment behaves exactly as it did before, refusal
+  included.
+- **All six issuing paths now use it**, not just the two buttons: the stores route,
+  the panels route, the payment/plan-change re-push (`pushLicencesForCompany`), the
+  orchestrator's `issue_licences` step and provisioning. Recording a payment on that
+  same client would otherwise have kept failing after the button was fixed.
+- **The repair is announced**: audit `licence_sequence_reconciled` (actor
+  `control-plane`, before/after/reason — the trail's first non-operator actor) and
+  `reconciled: { from, to, reported }` on both licence routes, which the SPA renders
+  as "the deployment already held v10, so the control plane caught up".
+- **Stub parity closed while here**: it rejected an equal sequence (`<=`) where the
+  tenant accepts it (`<`), and reported no licence on `/status` so nothing local
+  could exercise the reconcile. Both fixed (`STUB_LICENCE_SEQUENCE` seeds it).
+- **Fleet reality, stated plainly:** this repairs the **2** rows actually refused on
+  sequence (store 4 `urban-threads-cpt`, panel 1). The other **51** failed licence
+  rows are different problems — 42 unreachable production hostnames and 9 wrong
+  token/missing public key on the local mockups — and are recorded in tidbits
+  rather than folded into this fix.
+
+**Clients: one client per line, as a wide roster row.**
+
+- The `lg:grid-cols-2` card grid became a single column of full-width rows in the
+  shape the store cards already use: identity (name linked to the client page, slug,
+  topology badge) · the four facts as labelled columns · the actions. The store chips
+  keep their own full-width row beneath, because a client with 41 branches (AHK
+  Spares) would otherwise be a column of chips. No information was dropped.
+
+Tests CP **272 green (21 suites)** — 13 of them new in `licenceSequence.test.ts`,
+which reproduces the live failure against a tenant mock that enforces the real
+refusal rule and pins both the repair and the cases where the number must not move.
+Backend typecheck, frontend `tsc -b` and the production build clean. Doctrine:
+CONTEXT §4.
+
 ## 2026-09-16 (tenth pass) — grandfathering, pro-rata, and print CSS
 
-Owner: *"pro-rata+gf then print css"* — the two commercial rules from the
+Owner: _"pro-rata+gf then print css"_ — the two commercial rules from the
 what's-next list, then the last Phase 3 item.
 
 **Grandfathering — a plan is a catalogue, not a live price.**
+
 - The agreed terms now live on the subscription (`pricing_mode`, `rate_cents`,
   `custom_amount_cents`, `setup_fee_cents`, `billing_period`, `priced_at`) and are
   stamped at exactly three moments: onboarding, moving a client to another plan,
@@ -23,6 +104,7 @@ what's-next list, then the last Phase 3 item.
   never agreed to. That fix was forced by this change, not bolted on.
 
 **Pro-rata — terminals bought mid-period.**
+
 - `proRataForIncrease` (in `services/pricing.ts`, the recurring calculator) charges
   `extra × agreed rate × daysRemaining / periodDays`, monthly = 30 days and
   annual = 365 by a stated convention. Only increases, only `per_terminal` deals,
@@ -59,8 +141,8 @@ pricing-source note and the action, and the invoice modal carries the print hook
 
 ## 2026-09-16 (ninth pass) — "Record payment", and voiding instead of cancelling
 
-Owner: *"Record Payment"* + *"remove the Stripe Paypal Card Terminal"* + *"I agree
-with Void instead of Cancel"* — the three naming decisions from the discussion
+Owner: _"Record Payment"_ + _"remove the Stripe Paypal Card Terminal"_ + _"I agree
+with Void instead of Cancel"_ — the three naming decisions from the discussion
 that followed the last pass.
 
 - **`Pay` → `Record Payment`** on the invoice row and the modal's submit button.
@@ -68,7 +150,7 @@ that followed the last pass.
   then advances `paid_through` and re-pushes licences. "Pay" promised an action the
   system does not perform — the same mislabelling as the invoice-email stub that
   used to report a send it never made. The modal heading keeps the side effect
-  visible (*Record Payment & Renew Licence*), and the row button carries a tooltip
+  visible (_Record Payment & Renew Licence_), and the row button carries a tooltip
   saying the control plane does not charge anyone.
 - **Stripe, PayPal and card-terminal methods removed** from the payment form. No
   gateway is integrated, so choosing one wrote a `method: 'stripe'` row for a
@@ -81,10 +163,10 @@ that followed the last pass.
 - **`Cancel` → `Void`** on the row, in the confirm text, in the status pill and in
   the status filter. "Cancel" sat next to "Record Payment" and read as "cancel the
   payment". The stored status stays `cancelled` (the DDL CHECK cannot be altered in
-  place and the wire value is unchanged) — the SPA maps it to *Voided* for display.
+  place and the wire value is unchanged) — the SPA maps it to _Voided_ for display.
 - **Voiding is now attributed**, like push/pause/licence/settings: an
   `invoice_voided` audit row records the status change and whether the once-off was
-  released. And the UI now *says* when a void released the onboarding charge,
+  released. And the UI now _says_ when a void released the onboarding charge,
   instead of leaving the operator to discover it on the next invoice.
 
 Tests: the void keeps the invoice on the record with status `cancelled`, reports
@@ -96,13 +178,13 @@ the modal offers only the two methods.
 
 ## 2026-09-16 (eighth pass) — the plan on the invoice
 
-Owner: *"we should [show] the plan in the invoice."*
+Owner: _"we should [show] the plan in the invoice."_
 
 - **The plan is now on the document, as a snapshot.** `invoices.plan_code` /
   `plan_name` are written when the invoice is raised and never read back from the
   catalogue: renaming a plan must not restate what an issued invoice says. That
   was already untrue in one place — the Billing detail view looked up the
-  *client's current* plan and printed it on old invoices — so the UI now reads the
+  _client's current_ plan and printed it on old invoices — so the UI now reads the
   invoice's own record.
 - **Where it shows**: the PDF's metadata block (`PLAN  Vula Network`), the
   subscription line's detail (`Vula Network · 7 × R 500,00`), the emailed invoice's
@@ -124,7 +206,7 @@ geometry clean (no out-of-margin text, no rule crossing text).
 
 ## 2026-09-16 (seventh pass) — invoice numbering and VAT on inclusive prices
 
-Owner: *"fix invoice numbering"* + *"prices inc VAT"*. Both were on the
+Owner: _"fix invoice numbering"_ + _"prices inc VAT"_. Both were on the
 what's-next list, and together they are the last two things standing between this
 panel and an invoice that can go to a real client.
 
@@ -139,7 +221,7 @@ panel and an invoice that can go to a real client.
   issued documents.
 - **Prices are quoted VAT-inclusive, and the invoice breaks the tax out.** The
   split is `subtotal = round(total × 100 / (100 + rate))`, `vat = total −
-  subtotal` — integer cents that always add back to the total, so no invoice is a
+subtotal` — integer cents that always add back to the total, so no invoice is a
   cent out. `vat_reg_no` and `vat_rate` are Settings fields; with a registration
   the document is headed **Tax invoice** and carries the number, and both the rate
   and the split are stored **per invoice**, so changing a rate never restates an
@@ -153,7 +235,7 @@ panel and an invoice that can go to a real client.
 - UI: Settings gained the two VAT fields (with the inclusive-pricing rule spelled
   out), the invoice detail states **Total (incl. VAT)** with the subtotal and VAT
   beneath it, the line column reads "Amount (incl. VAT)", and the plan catalogue's
-  per-terminal label now says *incl. VAT* — otherwise the office reads a rate as
+  per-terminal label now says _incl. VAT_ — otherwise the office reads a rate as
   ex-VAT and the tax line is a surprise.
 - Tests added: the sequence is monotonic, unique, same-width, continues past an
   existing number for the year and survives three raises in one second; the split
@@ -168,8 +250,8 @@ invoice", with the once-off still leading the lines.
 
 ## 2026-09-16 (sixth pass) — the once-off leads the invoice, under one name
 
-Owner: *"alway have the Vula onboarding and deployment first line item when
-applicable in invoice."*
+Owner: _"alway have the Vula onboarding and deployment first line item when
+applicable in invoice."_
 
 - **It is now the first line item, everywhere the charge is itemised**: the PDF,
   the emailed invoice, the Billing detail view and the Raise-an-Invoice preview.
@@ -202,25 +284,25 @@ production build clean. Nothing raised, nothing committed.
 
 ## 2026-09-16 (fifth pass) — the create-invoice modal said three things at once
 
-Owner: *"i dont see the once off when creating an invoice"* and *"this is
+Owner: _"i dont see the once off when creating an invoice"_ and _"this is
 confusing: What is this for? (optional) -> Left blank, the invoice describes the
-subscription it bills."*
+subscription it bills."_
 
 Both were the same fault: the modal explained the invoice in prose, in the wrong
 places, and the once-off was a footnote in small grey type.
 
 - **The modal now shows the invoice, not a description of it.** A "What this
   invoice will carry" panel lists the subscription line (`Subscription — Vula
-  Spares Network (7 × R 500,00) R3 500,00`), the once-off owed
+Spares Network (7 × R 500,00) R3 500,00`), the once-off owed
   (`Once-off onboarding · Never billed for this client — added to this invoice ·
-  R10 000,00`) and **the total** — so the arithmetic is not left to the reader.
+R10 000,00`) and **the total** — so the arithmetic is not left to the reader.
   The once-off line carries the tick that waves it off, and its own explanation
   ("Left off this invoice; it stays owed and the next invoice picks it up").
 - **The contradictory field label is gone.** "What is this for? (optional)" became
   required the moment an amount was typed, and its helper explained an internal
   rule ("the invoice describes the subscription it bills"). Now: the amount field
-  says *"— leave empty to bill the subscription"*, the description field appears
-  **only when an amount is typed**, and it asks *"What is this amount for?"* with
+  says _"— leave empty to bill the subscription"_, the description field appears
+  **only when an amount is typed**, and it asks _"What is this amount for?"_ with
   one line saying where it is read (client, PDF, email). With no amount, the modal
   states the sentence the invoice will carry instead.
 - **Before a client is chosen the panel has a placeholder** — "Choose a client to
@@ -239,8 +321,8 @@ frontend `tsc -b` and the build clean.
 
 ## 2026-09-16 (fourth pass) — the once-off is captured automatically; support is not a charge
 
-Owner: *"when creating an invoice: check if once-off has been payed. if not it
-invoice it"* and *"Allow to bill for support as well"*.
+Owner: _"when creating an invoice: check if once-off has been payed. if not it
+invoice it"_ and _"Allow to bill for support as well"_.
 
 - **The once-off now rides on whichever invoice is raised next.** It used to be
   charged only on an `initial` invoice, so a client whose first invoice went out
@@ -257,14 +339,14 @@ invoice it"* and *"Allow to bill for support as well"*.
     charge is already billed, it says which document carries it
     (`setupFeeRef`) instead of adding it twice.
 - **Support is deliberately not billed.** Asked how support should be charged, the
-  owner answered: *"ignore support charges. we charging per terminal which includes
-  support"*. So no support line, tier or charge type — and it is written into
+  owner answered: _"ignore support charges. we charging per terminal which includes
+  support"_. So no support line, tier or charge type — and it is written into
   CONTEXT §5e, the glossary, AGENTS.md ("Commercial rules locked with the owner")
   and tidbits, because "add a support fee" is an obvious-looking feature for a
   future session to invent.
 - **A field name had to change for §40.** Naming the carrying document
   `setupFeeInvoiceNumber` failed the privacy-boundary test, which walks field
-  *names* on the client and company endpoints and cannot tell a vendor document
+  _names_ on the client and company endpoints and cannot tell a vendor document
   number from a merchant's billing data. Renamed `setupFeeRef` — the same lesson
   as `salesBlocked` → `tradingBlocked` in 2026-09-11.
 
@@ -277,17 +359,17 @@ moment to capture the charge. Not committed (house rule).
 
 Owner follow-ups on the mailer, all about the invoice itself:
 
-1. *"in Email: Sent by the Vula control plane"* — "control plane" is internal
+1. _"in Email: Sent by the Vula control plane"_ — "control plane" is internal
    vendor vocabulary a merchant should never read on an invoice. Every mail now
    signs off with the office's own name (`Sent by {office name}`), the test email
    included, and a test asserts the phrase never appears in an invoice email.
-2. *"can we not have pdf invoice attached to email"* — **yes.** `services/invoicePdf.ts`
+2. _"can we not have pdf invoice attached to email"_ — **yes.** `services/invoicePdf.ts`
    renders an A4 invoice with pdfkit (the tenant's engine and conventions), the
    mailer attaches it, and `GET /api/billing/invoices/:id/pdf` serves the same
    document, so the download and the attachment cannot diverge. The Billing
    invoice modal gained "Download PDF" (fetched with the session token, then
    handed to the browser as a blob).
-3. *"What about charging once off payment? need somewhere to bill it"* — this was
+3. _"What about charging once off payment? need somewhere to bill it"_ — this was
    the real gap. Invoices carried an amount and nothing saying what it was for,
    so a once-off charge (installation, training, a migration) had nowhere to
    live, and the plan's onboarding fee was **visible but unbillable** for an
@@ -305,7 +387,7 @@ is now fixed and pinned by a test:
 
 - The amount was drawn as `R 14 500,0` / `0`: a 57pt money column is narrower
   than the string at 11pt bold (59.9pt). The column is 110pt and `lineBreak:
-  false`; `moneyColumnFits()` asserts the fit with pdfkit's own metrics.
+false`; `moneyColumnFits()` asserts the fit with pdfkit's own metrics.
 - A wrapped description advanced a fixed 16pt, so the total rule could cut
   through its second line; a long client name ran into the row beneath it. Both
   offsets are measured now.
@@ -339,7 +421,7 @@ untouched) and the scratch scripts now refuse to run unless `CP_DB_PATH` is unde
 
 ## 2026-09-16 (later) — Phase 2: the office's own settings, and a mailer that sends
 
-Owner: *"continue with phase 2"* — the CP settings singleton + Settings page +
+Owner: _"continue with phase 2"_ — the CP settings singleton + Settings page +
 real SMTP mailer. Also carried in this pass, from two owner reports on the same
 screen: the store credential had no repair path, and "unable to edit a store".
 
@@ -386,13 +468,13 @@ screen: the store credential had no repair path, and "unable to edit a store".
 
 ## 2026-09-16 — store Remove looked inert because its refusal was rendered off-screen
 
-Owner report: *"client : Client Details -> remove -> Confirm remove : store is not
-removed."* Not a broken handler — the pause-first guard was working exactly as
+Owner report: _"client : Client Details -> remove -> Confirm remove : store is not
+removed."_ Not a broken handler — the pause-first guard was working exactly as
 designed and saying so, into the wrong place.
 
 - **Diagnosis.** `DELETE /api/stores/:id` refuses an `active` store with **409
   `store_active`** ("Pause it first, then remove it"). Every seeded store is
-  active, so every Remove was refused. The refusal *was* reported:
+  active, so every Remove was refused. The refusal _was_ reported:
   `useStoreActions.removeStore` catches it and calls `notify('error', …)`. But the
   notice rendered **in document flow at the foot of the page** — below all 44
   store cards on the AHK client — so the click read as a no-op. `removeStore` also
@@ -405,7 +487,7 @@ designed and saying so, into the wrong place.
   (advanced/unlinked), `StoreDetailPage` — replacing three copies of the same
   inline block. `CompaniesPage`/`PanelsPage` still carry their own simpler
   string-only notice (no `kind`), left alone as they are advanced surfaces.
-- **Verified end-to-end** against the running CP with a throwaway *unassigned*
+- **Verified end-to-end** against the running CP with a throwaway _unassigned_
   store (so no client's allocations were touched): create → DELETE while active →
   **409 `store_active`** → Pause → DELETE → **200**, probe row gone, fleet back to
   64 stores. Backend **198 green (17 suites)**; backend typecheck, frontend
@@ -416,7 +498,7 @@ designed and saying so, into the wrong place.
   three stale `reseed-fleet` AHK rows (`ahk-spares-jhb/dbn/ct`) are all gone from
   the registry.
 - **Not covered by a test.** The refusal itself is covered
-  (`stores.test.ts` asserts 409 + "pause it first"); the *presentation* fix is not,
+  (`stores.test.ts` asserts 409 + "pause it first"); the _presentation_ fix is not,
   because this repo has no frontend test runner (no `test` script in
   `frontend/package.json`). Recorded in tidbits.md.
 
@@ -443,7 +525,6 @@ Also corrected here: this playbook opened by claiming the CP does not provision
 Coolify, which `services/coolify.ts` has done since the recent work; and its
 store env block omitted `BACKUP_DIR` and the licence public key.
 
-
 Dated log of the build.
 
 ## 2026-09-14 — production blockers closed (this repo's four)
@@ -467,23 +548,22 @@ left" together.
 The provisioning path has still only been exercised against its stub: verifying
 it against a real Coolify target is on the go-live checklist, not here.
 
-
 ## 2026-09-14 — Devices page: client sections above the stores (owner follow-up)
 
-Owner: *"we should group by client name / company name no?"* — yes, and the
+Owner: _"we should group by client name / company name no?"_ — yes, and the
 registry shows why that needs care rather than being a straight nesting.
 
 **The fleet is majority-unowned.** Of 16 stores and 65 tills, only 11 stores /
 28 tills belong to a client:
 
-| Client | Stores | Tills |
-| --- | --- | --- |
-| *(no client)* | 5 | **37** |
-| Urban Threads Retail Group | 3 | 9 |
-| Kloof Auto Spares | 3 | 8 |
-| Cresta Grocers | 2 | 5 |
-| AHK Spares | 2 | 4 |
-| myDiner | 1 | 2 |
+| Client                     | Stores | Tills  |
+| -------------------------- | ------ | ------ |
+| _(no client)_              | 5      | **37** |
+| Urban Threads Retail Group | 3      | 9      |
+| Kloof Auto Spares          | 3      | 8      |
+| Cresta Grocers             | 2      | 5      |
+| AHK Spares                 | 2      | 4      |
+| myDiner                    | 1      | 2      |
 
 So client becomes a **section band** (not a second collapse level — two nested
 disclosures would mean two clicks to reach any till), and the five unowned stores
@@ -494,7 +574,7 @@ would misstate the fleet; filing them under a client would invent ownership.
 
 - The client name moved off the store header onto the band, so it is stated once
   instead of on every store row.
-- **A data bug fell out of the exercise:** company *HM Spares* owns a Head Office
+- **A data bug fell out of the exercise:** company _HM Spares_ owns a Head Office
   panel but **zero stores**, while the `hm-spares` store (spares, 1 till) sits
   unassigned. That store belongs to that company — one `companyId` on the store
   edit fixes both halves. The other four unassigned demo stores
@@ -631,7 +711,7 @@ So this slice **exposes** rather than collects.
 Owner picked the deferred SPOG set; this lands its first slice after committing
 the subscription redesign.
 
-**Why this one first.** A store row keeps only the *latest* failure
+**Why this one first.** A store row keeps only the _latest_ failure
 (`last_health_error`, `last_config_error`), and the 2026-09-14 health-probe
 incident made the cost concrete: the panel showed a bare "Offline" badge with no
 reason, undiagnosable from the UI by construction. Grouping, frequency and
@@ -687,8 +767,8 @@ Owner feedback on the shipped Plans screen, two changes:
 - **Plan rows now carry an on/off switch** instead of a Deactivate button: the
   archive/re-activate action is the switch itself (label and tooltip removed at the
   owner's request; the accessible name survives). Edit stays a pencil icon.
-- **`custom` plans may hold a monthly charge.** Owner: *"so that the custom plans
-  hold a monthly charge"*. New additive column `plans.custom_amount_cents` (integer
+- **`custom` plans may hold a monthly charge.** Owner: _"so that the custom plans
+  hold a monthly charge"_. New additive column `plans.custom_amount_cents` (integer
   cents, per `billing_period`) with `migratePlanCustomAmount` in the ensure-columns
   block and the column added to `PLAN_COLUMNS`/the plan-restructure source select.
   Semantics: a stated agreed amount bills **flat** each period (no terminal
@@ -714,7 +794,7 @@ price per terminal, plus a once-off onboarding fee** — and a plan may instead 
 `custom` (negotiated), which the control plane never prices on the client's behalf.
 
 **The working tree already held a half-finished, divergent pricing implementation**
-(9 modified files, 404 insertions, frontend not typechecking: it billed *configured*
+(9 modified files, 404 insertions, frontend not typechecking: it billed _configured_
 tills — expressly forbidden by the brief — kept the bundled `included_terminals`
 model the brief removes, and referenced fields that existed nowhere). It was saved
 to `/tmp/cp-per-term-pricing-wip.patch` and reverted, then rebuilt to the brief.
@@ -760,7 +840,7 @@ to `/tmp/cp-per-term-pricing-wip.patch` and reverted, then rebuilt to the brief.
   optional machine-readable `code`, surfaced by the error handler.
 - **Tenant (za-pos)**: `maxTerminals` mirrored in the claims interface (store +
   panel); `claimDevice` refuses a NEW claim beyond the allowance (402
-  `terminal_limit_reached`) while a device *moving* keeps its claim and existing
+  `terminal_limit_reached`) while a device _moving_ keeps its claim and existing
   claims are never revoked; `configure` refuses a count above the allowance;
   `/api/runtime-config` publishes `subscription.maxTerminals`; the register's types
   carry it. **325 tenant tests green (32 suites)**; typecheck + build clean.
@@ -959,7 +1039,7 @@ instructed).
   a retry re-triggers deploy instead of duplicating the application.
 - **Real Head Office deployment**: `createHeadOfficeDeployment()` in
   `services/coolify.ts` (name `vula-ho-<slug>`, `dockerfile_location:
-  head-office/Dockerfile`, env `HO_DB_PATH`/`HO_JWT_SECRET` + lease keys); the
+head-office/Dockerfile`, env `HO_DB_PATH`/`HO_JWT_SECRET` + lease keys); the
   new `head-office/Dockerfile` in za-pos builds and starts the actual HO app
   (build verified locally with docker). `panels` gained
   `deploy_status`/`coolify_uuid`/`volume_name`.
@@ -1595,6 +1675,7 @@ supermarket`); UI labels it "Store type"; default `general` (matches the
   restarted onto the rebuilt tenant bundle. Fleet = general (everyday-retail
   :3245), clothing (urban-threads :3246), spares (brake-bolt-spares :3247),
   hardware (builders-hardware :3248).
+
 ## 2026-09-14 — demo registry rebuilt: 10 clients, 9 stores, nothing unassigned
 
 Owner: "remove all plans and stores and reseed with new data, use same Company
@@ -1608,7 +1689,7 @@ env file (`PORT`, `CONTROL_PLANE_TOKEN`) and its own database (`store_name`,
 `vertical`, till count from `terminals`) and recreates the registry through the
 control plane's API — so nothing is invented, and the panel and the store cannot
 disagree. It refuses a non-empty registry unless `--force`, and it validates that
-every store's tills fit its client's plan ceiling *before* writing anything (that
+every store's tills fit its client's plan ceiling _before_ writing anything (that
 check caught the real ceilings: the freshly seeded tiers cap at 2 / 10 / 10 / 99).
 
 Adopting the env's existing token is the point: a minted one would 401 every push
@@ -1695,7 +1776,7 @@ at the house default.
   untouched, so every company's plan reference survives — and only when the
   target is absent, so a reseeded registry is left alone.
 - **Two neighbouring migrations had to be corrected**, because they refer to the
-  codes of their own era and run *before* the rename: `restructurePlans` keys on
+  codes of their own era and run _before_ the rename: `restructurePlans` keys on
   `enterprise` to keep that tier custom, and `renameRetailPlanToBusiness` maps
   the historical `retail` onto `business` so the new step can carry it on to
   `vula-grow`.
@@ -1757,7 +1838,7 @@ Two things the token work exposed:
   `head_office_enabled = 1`) before registering, which is the control plane's job
   in this design anyway.
 - **`PUT /panels/:id` needs the numeric id, not the slug** (`400 Invalid store
-  id` otherwise) — caught on the first live run, after the stores had registered.
+id` otherwise) — caught on the first live run, after the stores had registered.
 
 Result, verified by reading each panel's `branch_stores` and comparing every
 token against the branch's own settings: **13 branches across 5 panels, all

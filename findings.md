@@ -1,9 +1,153 @@
 # Findings
 
+## 2026-09-17 — a dev server that had been serving yesterday's code for ten hours
+
+- **The `touch` remedy stopped working, and that changes the diagnosis.** Asked to
+  make a client's stores alphabetical, I edited `src/routes/clients.ts` and checked the
+  live API — which still answered in the old order. The `tsx watch` child on `:3240`
+  had started at **19:17 the previous evening** and never reloaded; `touch`ing the
+  edited file (this repo's own recorded remedy, from the 2026-09-16 stale-Vite entry)
+  did not shake it either. The watcher process is alive — it just stopped noticing
+  writes. Two conclusions worth keeping: when live behaviour disagrees with a change,
+  **check the process start time before doubting the code**; and "wait for the
+  watcher" is not a verification step, because the watcher can fail silently and does
+  not announce it. The live check was therefore re-done properly — a copy of the live
+  registry, served by a scratch instance on a spare port — which is the pattern the
+  scratch-DB guard already recommends.
+- **Sorting a list at the source beats sorting it in each view, and only because
+  there were two views.** The client's stores reach the screen twice: as chips on the
+  client card and as the shared store cards on the client's own page. Two filters over
+  `listStores()` were producing one order that neither surface owned, so the fix is one
+  function both call. Worth noting what made this cheap: the two call sites were
+  already the same expression, which is what a duplicated filter looks like right
+  before it becomes two different answers.
+- **A sort needs a collation and a tie-break, or it is environment-dependent.**
+  `localeCompare` without a locale follows the host's default, so the same fleet could
+  order differently on a different machine; `'en'` pins it. ICU's primary-level
+  comparison also gives what a person means by alphabetical for mixed-case names —
+  `ALRODE`, `Atteridgeville`, `Bloemfontein` — where a byte sort would put every
+  capital first. The unique slug breaks exact ties, so the list cannot flicker between
+  two equal names.
+- **The check that would have fooled me:** my first pass compared the API's order to
+  Python's `sorted()`, which is byte-wise, and reported AHK's 41 branches as "NOT
+  alphabetical". The app was right and the checker was wrong. Worth remembering before
+  reporting a defect in a collation-sensitive list: match the comparison to the
+  collation being tested, or you are testing your checker.
+
+## 2026-09-16 (eleventh pass) — a counter that had to stay ahead of something it could not see
+
+- **A local number that has to beat a remote number is not a counter, it is a
+  mirror.** `stores.licence_sequence` was incremented locally and never compared
+  with anything, while the tenant refuses any licence below the sequence it already
+  holds. So the number could only be right by luck. It was luck that depended on the
+  registry never being rebuilt — and the repo's own documented re-seed recipe
+  (`scripts/reseed-fleet.ts`) moves the database aside and rebuilds from scratch,
+  which starts every row at 0 while the deployments keep counting. That is exactly
+  what happened on 2026-09-14, and the evidence is still in `error_events`: a cluster
+  of "sequence 2 older than the stored 3" rows the same day, for stores 2, 3, 4 and 9.
+- **The reported failure was four clicks deep, and unfixable by clicking.**
+  `urban-threads-ho` (the Head Office of the client the UI labels _Multi-Store_) held
+  **10**; the registry row held **6**. Each retry incremented by one _before_ pushing,
+  so the operator needed five blind clicks to get past it — and had no way to know
+  that. "Push Licence failed" was a correct refusal with an impossible recovery.
+- **Verified against the live deployment rather than reasoned about.** Reading
+  `GET /api/internal/status` on `:3260` returned `licence.sequence: 10` — the exact
+  number in the refusal — while `panels.id=1` held 6. The same probe showed store 4
+  ahead by 1 and two unlicensed Head Offices reporting `sequence: 0`. That turned
+  "probably a stale counter" into a known quantity, and it is also how the fix's
+  input was chosen: the field was already on the wire, and the CP was already calling
+  that endpoint on every health check and **throwing the field away**.
+- **The answer was to ask the authority, not to trust the memory.** Every
+  registry-rebuilding path resets the CP; nothing resets the deployment. So
+  `licenceDelivery.ts` reads the sequence the deployment holds before allocating, and
+  raises the counter to at least that value. Two properties matter more than the
+  mechanism: it **only ever raises** (an unlicensed Head Office reports 0, and a
+  deployment behind us is left alone), and it is **best-effort** (an unreachable or
+  older deployment behaves exactly as before, including surfacing the refusal rather
+  than hiding it — the honest limit, pinned by a test).
+- **Six copies of the same four lines was the reason the bug could exist.**
+  Issuing a licence meant allocate → sign → push, copied into the stores route, the
+  panels route, the payment/plan-change re-push, the orchestrator's `issue_licences`
+  step and provisioning. Any invariant added to one of them silently missed the
+  others — and recording a payment on the same client would have kept failing after
+  the button was fixed. `deliverStoreLicence` / `deliverPanelLicence` now own it.
+  Worth noting what made the consolidation safe: the six bodies were checked to be
+  functionally identical first (`entitlementsForStore` already derives `maxTerminals`
+  from `terminalAllowance`), so it is a move, not a behaviour change.
+- **A repair nobody is told about is the defect this repo already named once.**
+  The counter jumps 6 → 11 for a reason no operator chose, so it is reported twice:
+  an audit row (`licence_sequence_reconciled`, before/after/reason) and a
+  `reconciled: { from, to, reported }` field the SPA turns into _"the deployment
+  already held v10, so the control plane caught up"_. The same reasoning as
+  `setupFeeReleased` in the ninth pass.
+- **The audit trail gains its first non-operator actor.** `actor` is free TEXT and
+  all 76 existing rows say `office`. Recording this as `office` would claim the
+  operator chose a renumbering they never saw, so it is `control-plane`. A new
+  convention, deliberately: the trail can now distinguish a machine repair from a
+  human decision.
+- **Two things the dev stub was lying about, both fixed here.** It rejected an
+  _equal_ sequence (`<=`) while the tenant accepts it (`<`, an idempotent
+  re-delivery) — a stub stricter than its own contract would have hidden a real
+  off-by-one. And its `/api/internal/status` reported no licence at all, so nothing
+  local could exercise the reconcile; it now reports `subscription.sequence` and
+  `STUB_LICENCE_SEQUENCE` can seed it. Dev-stub parity is a claim, and this is the
+  drift it is supposed to prevent.
+- **Floor, not ceiling — and the fleet reality is worth stating.** This repair fixes
+  the **2** rows currently refused for a stale sequence (store 4 and panel 1). The
+  other **51** failed licence rows are unrelated: 42 unreachable (production
+  hostnames that do not resolve from the CP's host, so the CP has no evidence they
+  are down and none that they are up) and 9 with a wrong token or a missing public
+  key on the local mockups. Reconciling a sequence does nothing for those, and
+  saying so is more useful than implying the fleet went green.
+- **Rejected, and why.** Making the read _reactive_ (reconcile only after a 409)
+  would cost nothing in the happy path, but it depends on interpreting a refusal and
+  adds a re-sign-and-retry path; asking before issuing is one rule with one place to
+  look. Also rejected: a manual "set the sequence" action — an operator being asked
+  to type a number the system can read for itself is not a repair, it is a trap.
+  Left alone: `nextLicenceSequence` still consumes a number when a push fails
+  (harmless, and changing it would introduce a concurrency question nothing needs).
+- **Verification, because a green suite is not a repaired fleet.** Both live cases
+  were pushed for real and both repaired: panel 1 `6 → 11` (deployment held 10) and
+  store 4 `5 → 7` (held 6), each returning `reconciled` and each ending `ok` with the
+  deployment then reporting the new number. A store already in sync (`mydiner`,
+  registry 6 = deployment 6) issued 7 with **no** `reconciled` field — the floor was
+  a no-op, which is the case that would have caught an over-eager repair. The
+  historical failure rows are still in the feed, as intended: history survives
+  recovery. The whole loop was also exercised against the dev stub on a scratch
+  registry (`CP_DB_PATH=/tmp/…`) with the stub seeded at 5 so the reconcile had to
+  fire: the CP raised its counter `0 → 5` and the stub accepted **6**, then 7.
+  Nothing was written to the live registry except the two intended repairs.
+- **The committed tree is not prettier-clean, and `npm run format` proves it.**
+  Running the repo's own formatter rewrote ~50 files — including 36 this change never
+  touched (README, the deploy runbook, unrelated pages and services). `npx prettier
+  --check` flags committed files, with prettier **3.9.6** installed against a
+  `^3.4.2` range, so the drift is a version/config question rather than anyone's
+  sloppiness. Those 36 files were restored and the substantive edits were re-applied
+  by hand in the files that mattered (`stores.ts`, `stores.test.ts`, `AGENTS.md`,
+  `CONTEXT.md`, `task_plan.md`, `PanelsPage.tsx`, `storeProvisioning.ts`), cutting the
+  diff from ~1180 changed lines to ~700 — a fix that arrives buried in reformatting is
+  a fix nobody reviews. Worth deciding deliberately: pin prettier, or reformat the
+  repo once as its own commit. Either way, the next `npm run format` will rewrite those
+  50 files again, so the decision should come before someone runs it mid-feature.
+  **Also noted, not mine:** `src/routes/companies.ts` carries an uncommitted change
+  (plan edit → auto-push licences to every subscribed company) that appeared during
+  this session; it was left exactly as found.
+
+- **A pre-existing trap found while verifying, noticed not fixed:** `npm run smoke`
+  cannot pass as documented. The script's header says to run `npm run stub`, "token
+  below", but `npm run stub` starts the stub with its own default token
+  (`smoke-token-1`), which the CP rightly refuses — a supplied token must be 64
+  lowercase hex — so `STUB_TOKEN` and `CONTROL_PLANE_TOKEN` have to be set to the
+  same 64-hex value by hand. Also worth knowing before anyone runs it in anger: the
+  smoke script creates `smoke-*` rows and deliberately never deletes them, so running
+  it against the live registry leaves cruft that later reads as a defect (the
+  2026-09-16 reseed leftovers were exactly that). Run it against a scratch
+  `CP_DB_PATH`.
+
 ## 2026-09-16 (tenth pass) — a price is a deal, and a plan is a catalogue
 
 - **The bug was in the direction of the read, not the arithmetic.** Nothing was
-  wrong with `licensed × rate`; what was wrong was *where the rate came from* —
+  wrong with `licensed × rate`; what was wrong was _where the rate came from_ —
   the plan, read live at invoice time. Eleven clients across four tiers meant one
   plan edit moved every client's bill with no decision and no record. The fix
   copies the terms onto the client and never reads the plan again for money
@@ -16,7 +160,7 @@
   therefore part of the feature, not an extra: audited, one client at a time, with
   the client page saying which state they are in.
 - **The change broke the sweep, and the sweep was already fragile.** The renewal
-  sweep read the *plan* to decide whether a client had a billable figure, so once
+  sweep read the _plan_ to decide whether a client had a billable figure, so once
   prices moved to the agreement it tried to invoice a client that had agreed
   nothing — and because `createInvoiceForCompany` was not isolated per client, that
   one client aborted the whole sweep (the route returned 400 and nobody else was
@@ -32,7 +176,7 @@
   charge. A rule that can be applied twice is not a rule.
 - **A whole period remaining is still chargeable.** The first guard refused to
   pro-rate when the days left equalled the period length, on the reasoning that the
-  next invoice would cover it — but the next invoice is for the *next* period. The
+  next invoice would cover it — but the next invoice is for the _next_ period. The
   client had paid for this one, so the extra terminals are uncovered for all of it.
   The test now pins the 30-of-30 case.
 - **An invoice line with no line.** A hand-priced or custom-priced invoice showed
@@ -50,6 +194,7 @@
   invoice.
 
 ## 2026-09-16 (ninth pass) — labels that promise what the system does not do
+
 ## 2026-09-16 (ninth pass) — labels that promise what the system does not do
 
 - **"Pay" was a claim about money movement.** The button recorded a settlement that
@@ -63,12 +208,12 @@
   gateway behind any of them, so a manual EFT could be recorded as `stripe` — and
   the payments table would then say a card network was involved. Removing them was
   the smallest honest fix; the deeper fix is the gateway itself (still on the
-  backlog), at which point a gateway method becomes a *new action* rather than a
+  backlog), at which point a gateway method becomes a _new action_ rather than a
   relabelling of "Record payment".
 - **A word can be right for a status and wrong for an action.** The invoice status
   is `cancelled` in the schema and the CHECK cannot be altered in place; the
   operator nonetheless voids an issued document. Rather than migrate an enum for a
-  word, the SPA maps the stored value to *Voided* — the same shape as the register
+  word, the SPA maps the stored value to _Voided_ — the same shape as the register
   and licence label maps, and it keeps the wire contract still.
 - **A side effect nobody is told about is a bug waiting to be reported.** Voiding
   the last invoice carrying the once-off releases that charge; the API has said
@@ -82,10 +227,11 @@
   which is exactly the question an invoice dispute starts with.
 
 ## 2026-09-16 (eighth pass) — an invoice that changed its story when a plan was renamed
+
 ## 2026-09-16 (eighth pass) — an invoice that changed its story when a plan was renamed
 
 - **One screen was reading history through today's catalogue.** The Billing detail
-  view printed the plan by looking up the *client's* plan at render time, so
+  view printed the plan by looking up the _client's_ plan at render time, so
   renaming a tier rewrote what every past invoice appeared to say — and a client
   moved to a different plan would "have been" on the new one all along. Everything
   else on the invoice was already a snapshot (`terminal_count`,
@@ -106,6 +252,7 @@
   invoice still reads the old name while a newly raised one reads the new name.
 
 ## 2026-09-16 (seventh pass) — a document that looks official and is not quite right
+
 ## 2026-09-16 (seventh pass) — a document that looks official and is not quite right
 
 - **Two defects of the same class, fixed together.** An invoice number that can
@@ -115,7 +262,7 @@
   point of going to a real client.
 - **VAT-inclusive pricing makes the arithmetic one-directional, and there is no
   room for a float.** Prices incl. VAT means `subtotal = round(total × 100 /
-  (100 + rate))` and `vat = total − subtotal`, so the parts always add back to what
+(100 + rate))` and `vat = total − subtotal`, so the parts always add back to what
   the client actually pays. The alternative (compute VAT and add it) puts the
   rounding on the total, which changes the amount the client was quoted. The test
   deliberately uses amounts that do not divide cleanly — 1c, 7c, 99c, R115 000,01 —
@@ -148,7 +295,7 @@
 Pre-commit sweep of the markdown, prompted by the owner's "update all relevant md
 files". Three claims were false, all of them in files a newcomer reads first:
 
-- **`README.md` said billing was not built** — "Billing *recording*
+- **`README.md` said billing was not built** — "Billing _recording_
   (invoices/payments) is not built — `paid_through` is set by hand today". False
   since 2026-09-11, and doubly false after this session (invoices, payments,
   renewals, the mailer and the PDF all exist). The scope list also stopped at
@@ -163,12 +310,12 @@ files". Three claims were false, all of them in files a newcomer reads first:
   "if it was lost, delete and recreate the store row; v1 has no token-rotation
   UI". That is precisely the path this session replaced, and following it throws
   away a store's history, licence allocation and deployment jobs. It now points at
-  Configure → *Control-plane token*.
+  Configure → _Control-plane token_.
 - Added while there, because the deploy story changed: mail is configured on
   **Settings**, not in env; no env var and no headless browser is needed for
   invoice PDFs (pdfkit is pure JS — a fact that matters for a small Coolify
   image); and the troubleshooting list gained the two honest mail refusals.
-- **The pattern worth naming:** every one of these was a *true* statement at the
+- **The pattern worth naming:** every one of these was a _true_ statement at the
   time it was written. Docs do not fail when the code changes — nothing tests
   them — so the only defence is reading them against the code before shipping a
   change, which is what this pass did.
@@ -180,7 +327,7 @@ files". Three claims were false, all of them in files a newcomer reads first:
   view, which is where the owner read it) and "Onboarding" (the client page's
   button). The owner asked for the line under the name they had seen, which is the
   honest way to settle it: the label now lives in one constant on each side of the
-  build and the *documents* use it. Worth noting how the ambiguity arose — each
+  build and the _documents_ use it. Worth noting how the ambiguity arose — each
   surface was written at a different time and none of them owned the vocabulary.
 - **A description drawn as a table row is a line item without an amount.** The PDF
   printed `invoice.description` as the first row of the amounts table, so the
@@ -214,7 +361,7 @@ files". Three claims were false, all of them in files a newcomer reads first:
 - **A label that changes from optional to required is a contradiction, not a
   nuance.** "What is this for? (optional)" became mandatory as soon as an amount
   was typed, and the reason — the server refuses a hand-priced invoice with no
-  description — is a *server* rule the operator should never have to infer from
+  description — is a _server_ rule the operator should never have to infer from
   helper text. The field is now simply absent until it is needed, and asked for by
   name when it is.
 - **Explaining a rule in the field's help text is a smell.** "Left blank, the
@@ -230,7 +377,7 @@ files". Three claims were false, all of them in files a newcomer reads first:
   verification pattern `/What this invoice will carry/` failed against a panel
   whose heading is uppercased by CSS, so `innerText` returns it in caps — briefly
   making it look like the panel was not rendering. Worth remembering when
-  asserting on rendered text: match the *rendered* case, not the source's.
+  asserting on rendered text: match the _rendered_ case, not the source's.
 
 ## 2026-09-16 (fourth pass) — the once-off needed capturing, not a support charge
 
@@ -248,7 +395,7 @@ files". Three claims were false, all of them in files a newcomer reads first:
   opt-out), and counted in the renewal sweep's summary. The alternative — silent
   automatic billing — is how a vendor earns a support call.
 - **Asked about support, the owner answered with a pricing rule, not a feature.**
-  *"ignore support charges. we charging per terminal which includes support."*
+  _"ignore support charges. we charging per terminal which includes support."_
   Worth recording as a commercial decision rather than a backlog item, since
   "bill for support" looks like an obvious gap and is in fact a settled question.
   It is now in CONTEXT §5e, the glossary, AGENTS.md's locked-rules section and
@@ -276,8 +423,8 @@ invoice for it, and **overwrote the office identity settings** — name, email,
 phone, address and the invoice footer — with the test values.
 
 **Why.** ESM hoists imports above the module body. `env.dbPath` is read when
-`src/config/registryDb.ts` is first evaluated, which happens *while the import
-statements run*, i.e. before the assignment on line 1 of my script ever executes.
+`src/config/registryDb.ts` is first evaluated, which happens _while the import
+statements run_, i.e. before the assignment on line 1 of my script ever executes.
 Assigning `process.env` in the file is therefore not a configuration step at all
 when the consumer reads env at import time — it is a no-op with a misleading look.
 
@@ -300,7 +447,7 @@ the shell — `CP_DB_PATH=/tmp/x.db npx tsx script.ts` — and (b) refuse to run
 all unless it starts with `/tmp/`. Both matter: the shell assignment happens
 before the process starts, and the guard makes the mistake impossible rather than
 merely unlikely. This is the same lesson as the 2026-09-10 `tsx watch`
-corruption, one layer out: a tool that *looks* pointed at a scratch file is not
+corruption, one layer out: a tool that _looks_ pointed at a scratch file is not
 evidence that it is.
 
 ## 2026-09-16 (third pass) — the invoice PDF: three bugs a text dump reveals
@@ -338,7 +485,7 @@ evidence that it is.
   `PAGE_RIGHT = 547`, so nothing can drift off the margin unnoticed.
 - **Nine clients owe onboarding nobody could bill.** Across the live registry,
   every client except the two mockup ones is `not_invoiced` with a R10 000
-  once-off charge. The panel *showed* it ("Not invoiced yet") and had no action to
+  once-off charge. The panel _showed_ it ("Not invoiced yet") and had no action to
   raise it — an accounting entry that existed as a label. That is the concrete
   face of "need somewhere to bill it".
 - **Cancelling an invoice left the charge it carried marked as billed.** Watching
@@ -347,7 +494,7 @@ evidence that it is.
   subscription stayed `invoiced` with nothing due — so the charge could never be
   raised again, while the invoice that would have collected it no longer existed.
   A cancelled invoice must release the one-off charge it was the last to carry.
-  Two lessons: a *state* derived from a cancelled document has to be unwound when
+  Two lessons: a _state_ derived from a cancelled document has to be unwound when
   that document is voided, and the fastest way to find these is to watch a real
   person drive the feature rather than to re-read your own tests (all 228 were
   green while the charge was stranded).
@@ -358,15 +505,15 @@ evidence that it is.
   the CP had no way to fix its side.** The store at `http://ahk-spares-ct.localhost:3278`
   holds its own `CONTROL_PLANE_TOKEN`; creating the registry row without pasting
   that value makes the CP generate a different one, so the first push 401s. The
-  API's own advice (in the reveal-once modal) was *"delete this store record and
-  add it again pasting that token instead"* — which throws away the row's history,
+  API's own advice (in the reveal-once modal) was _"delete this store record and
+  add it again pasting that token instead"_ — which throws away the row's history,
   its licence allocation and its deployment-job references to fix a typo. Repaired
   in place now (see progress); verified by creating a probe, watching it fail, and
   watching the same row push successfully after the credential was replaced.
 - **Reproduced before diagnosing, on a throwaway store.** Creating the probe
   against the real deployment produced the exact string the owner saw
   (`lastConfigError: "Store POST /api/internal/configure failed: Invalid control
-  plane token"`), which is what turned "probably the token" into a known path.
+plane token"`), which is what turned "probably the token" into a known path.
   An unassigned store allocates nothing, so this is safe to do against the live
   fleet (findings, 2026-09-16 earlier entry).
 - **The owner's `:3278` store cannot be added under AHK Spares as the fleet
@@ -423,7 +570,7 @@ evidence that it is.
   pause-first rule on store teardown (`409 store_active`) fired correctly and the
   UI surfaced it correctly — into a banner rendered in document flow at the bottom
   of the page. On a 44-card client that is several screens below the card the
-  operator just clicked. The refusal was never missing; its *position* was. Worth
+  operator just clicked. The refusal was never missing; its _position_ was. Worth
   checking first on any "nothing happens" report: is the feedback rendered, or just
   rendered off-screen?
 - **Collapsing the confirm UI on failure removes the last evidence of the click.**
@@ -456,7 +603,7 @@ evidence that it is.
   `vite` process had picked up an earlier edit but missed the later writes, so its
   module graph kept the superseded transform. A `touch` on the edited files fixed
   it. The check that settles it in one command: `curl -s
-  http://localhost:3241/src/pages/<Page>.tsx | grep -c NoticeBanner`. Beware the
+http://localhost:3241/src/pages/<Page>.tsx | grep -c NoticeBanner`. Beware the
   trap in grepping transformed output — it emits double quotes, so a search for
   `notice.kind === 'ok'` finds nothing even when the old code is what is being
   served; absence of the new symbol is the reliable signal.
@@ -545,7 +692,7 @@ evidence that it is.
   `environment` column and no terminal/session/telemetry columns at all, so an
   office device carries nulls and `claimed: true` (it is the app itself) — the
   alternative was inventing values to fill the spec's columns.
-- **The spec's device *actions* are blocked, not deferred.** Rename / rotate
+- **The spec's device _actions_ are blocked, not deferred.** Rename / rotate
   token / revoke / force logout / run diagnostics all need the tenant to expose
   a per-device command API; the CP holds a store-level token and nothing
   per-device. Shipped the page read-only rather than the buttons.
@@ -557,7 +704,7 @@ evidence that it is.
   per store, hence the new `error_events` table), **Devices** (per-till
   `deviceId`/`claimed`/`sessionOpen`/`lastSeenAt` are already in
   `stores.last_telemetry_json` — `telemetrySummary` reduces them to counts, so
-  it needs *exposing*, not collecting), **Versions** (`app_version` /
+  it needs _exposing_, not collecting), **Versions** (`app_version` /
   `schema_version` / `last_heartbeat_at` from telemetry, `panels.app_version`),
   and a **read-only Deployments** page (`deployment_jobs`/`_steps` are durable
   but exposed only per-client). Blocked: **Sync dashboard/inspector**
@@ -574,7 +721,7 @@ evidence that it is.
   the reason into the feed.
 - **`MAX(message)` is not the latest message.** SQLite has no "last value"
   aggregate, so the grouped feed joins each group to the row `ORDER BY last_seen
-  DESC, id DESC LIMIT 1`. Getting this wrong would have shown the *first*
+DESC, id DESC LIMIT 1`. Getting this wrong would have shown the _first_
   occurrence's text, which is exactly the stale reading the page is meant to
   avoid.
 - **A nullable column cannot be part of the grouping key.** `stores` and `panels`
@@ -593,7 +740,7 @@ evidence that it is.
 - **Privacy holds by construction.** The feed stores only strings the CP already
   produced and already persisted in `stores.last_health_error` /
   `last_config_error`; no tenant payload or raw response body enters it. The
-  failure text a store returns *is* a `{ error }` validation message (§40 line
+  failure text a store returns _is_ a `{ error }` validation message (§40 line
   already documented for the store surface).
 - **Stale doc, noticed not fixed:** `CONTEXT.md` §7 still lists "audit trail,
   DELETE store, automated health sweep" as out of scope, though all three shipped
@@ -606,7 +753,7 @@ evidence that it is.
   contradicted the brief.** 9 modified files (registryDb, billing service/route,
   companies, stores, clientOrchestrator, PlansPage, BillingPage, types) added
   `pricing_model: flat|per_terminal`, billed `plan.price_cents × SUM(stores.
-  terminal_count)` — i.e. **configured** tills, which the brief's §12 explicitly
+terminal_count)` — i.e. **configured** tills, which the brief's §12 explicitly
   forbids — kept the bundled `included_terminals`/`extra_terminal_price_cents`
   fields the brief removes (§5), and left the frontend not typechecking (`Plan`
   declared two fields the API never sent while using four it did). Verified before
@@ -641,13 +788,13 @@ evidence that it is.
   (`/revenue|sales|profit|margin|payment|invoice|cost|transaction|…/`) is walked over
   `/api/plans` and `/api/companies` too, so `terminalPriceCents`,
   `recurringAmountCents`, `setupFeeCents` and `licensedTerminalCount` were chosen to
-  clear it. (Earlier lesson, still true: a field merely *named* `salesBlocked` fails
+  clear it. (Earlier lesson, still true: a field merely _named_ `salesBlocked` fails
   it.)
 - **The tenant enforced no terminal cap at all.** `claimDevice` validated only that
   the till existed and was unique; `configure` accepted any 1–99. The licence
   carried `maxTerminalsPerStore` since 2026-09-10 but nothing read it. Now the store
   gates NEW claims on the licence's `maxTerminals` — claimed terminals against the
-  signed entitlement, never devices online — keeps a device's *move* working, and
+  signed entitlement, never devices online — keeps a device's _move_ working, and
   never revokes existing claims when a subscription shrinks (a reduction must not
   strand a till mid-shift).
 - **`createPayment` wrote status `processing` and never advanced it**, while the

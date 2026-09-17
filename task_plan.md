@@ -16,7 +16,40 @@ CONTEXT.md "Internal API contract").
 
 ## Current Phase
 
-**Phase 3 complete — pro-rata, grandfathering and print CSS (2026-09-16).**
+**A client's stores in name order (2026-09-17).** Owner: *"CP - clients - put stores
+in alphabetical order."* One helper in `routes/clients.ts` (`storesForCompany`) now
+filters *and* sorts by name with the locale pinned, used by both places that build a
+client's store list — the card's chips and the client's Stores tab — so the two cannot
+disagree. Name rather than slug (the operator reads the branch they see), slug breaks
+exact ties, and the `/stores` fleet page keeps its newest-first order because it is a
+log rather than a lookup. Verified on a copy of the live registry: all five multi-store
+clients alphabetical, AHK's 41 branches and mixed-case names included. Tests CP
+**274 green (21 suites)**.
+
+**Two owner reports fixed (2026-09-16, eleventh pass).** Owner: *"CP : Clients -> 1
+Client per line"* + *"Client Details-> Multiple Stores-> Push License : Store POST
+/api/internal/licence failed: Licence sequence 6 is older than the stored 10 retry"*.
+
+- **The licence counter is a mirror of what the deployment holds, and now asks it.**
+  `panels.id=1` (`urban-threads-ho`, the *Multi-Store* client's Head Office) held 6
+  while the deployment held 10, so every push was refused and every retry moved the
+  number one step. `services/licenceDelivery.ts` is now the single place a licence is
+  signed and delivered (used by all six issuing paths, not just the two buttons); it
+  reads the sequence the deployment reports before allocating and raises the counter
+  to at least that value — never lowering it, best-effort when the deployment cannot
+  be reached. The correction is audited (`licence_sequence_reconciled`, actor
+  `control-plane`) and returned to the SPA as `reconciled: {from,to,reported}`.
+  Verified on the live fleet: panel 1 `6 → 11` and store 4 `5 → 7`, both now `ok`.
+- **Clients: one client per line** as a wide roster row (identity · four labelled
+  columns · actions), with the store chips on their own full-width row.
+- **Scope, stated:** this repairs the 2 rows actually refused on sequence. The other
+  51 failed licence rows are unreachable production URLs (42) or wrong credentials
+  (9) — different problems, in tidbits.md.
+
+Tests CP **273 green (21 suites)**; backend typecheck, frontend `tsc -b` and the
+production build clean. Doctrine: CONTEXT §4.
+
+Previous — **Phase 3 complete — pro-rata, grandfathering and print CSS (2026-09-16).**
 Owner: *"pro-rata+gf then print css"*.
 
 - **Grandfathering**: the agreed price terms live on the subscription and are

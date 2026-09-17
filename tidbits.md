@@ -7,8 +7,41 @@
 - **Support is not billed separately.** The per-terminal rate includes support
   (owner, 2026-09-16). No support line, tier, charge type or toggle — if it comes
   up again, the answer is in CONTEXT §5e and AGENTS.md's locked-rules section.
-  Related ideas that are consequently *not* backlog: support retainers, per-branch
+  Related ideas that are consequently _not_ backlog: support retainers, per-branch
   support fees, support call-out charges.
+
+## Deferred from the licence-counter pass (2026-09-16)
+
+- **Decide what to do about prettier drift.** The committed tree is not clean under
+  the installed prettier (3.9.6, against a `^3.4.2` range): `npm run format` rewrites
+  ~50 files, 36 of them unrelated to whatever feature is in flight. Either pin the
+  version the repo was last formatted with, or run one deliberate reformat as its own
+  commit — but settle it before it lands inside someone's feature diff.
+- **`npm run smoke` does not work as documented** (see findings, eleventh pass): the
+  stub's default token is not the script's, so `STUB_TOKEN` and `CONTROL_PLANE_TOKEN`
+  must be set to the same 64-hex value by hand; and the script leaves `smoke-*` rows
+  behind, so it wants a scratch `CP_DB_PATH` rather than the live registry.
+- **51 licence rows fail for reasons the counter fix does not touch** (it repairs the
+  2 that were refused on a stale sequence). Two distinct problems:
+  - **42 unreachable** — the `ahk-*` stores and `ahk-spares-ho` sit behind
+    `*.ultraposai.compubyte.co.za`, which does not resolve from the control plane's
+    host. Their `last_health_status` is a stale `up` from deploy time, so the CP has
+    no real evidence either way and the recorded errors are "unreachable/timed out".
+    Needs a DNS or network answer, not code.
+  - **9 with credentials** — stores 10–15 and panels 2–4 (local mockups) fail with
+    `Invalid control plane token` / `No control-plane public key configured`. The
+    repair path exists (Configure → _Control-plane token_); those deployments need the
+    matching value, or their admin needs the verification key installed.
+- **A licence number is consumed even when the push fails.** `nextLicenceSequence`
+  increments before delivery, so a refused or unreachable push burns a number. It is
+  harmless (only the CP issues, always higher) and keeps allocation atomic — changing
+  it would raise a concurrency question nothing needs. Noted so the next reader does
+  not read it as a leak.
+- **No "re-push licences to the whole fleet" action.** A client-wide re-push exists
+  (`pushLicencesForCompany`, reached by recording a payment or changing a plan) and
+  the health sweep refreshes per store, but there is no fleet button. Worth having
+  once the unreachable/credential rows above are addressed — until then it would
+  mostly re-report the same 51 failures.
 
 ## Deferred from the invoice-document pass (2026-09-16)
 
@@ -45,7 +78,7 @@
   and downloadable from Billing); what remains is numbering, VAT and print CSS.
 - **`billing_settings.email_invoice` / `auto_renew` gate nothing.** They are
   settable over the API and read by nothing — there is no automatic send and
-  the sweep only *creates* renewal invoices. Either give them a behaviour
+  the sweep only _creates_ renewal invoices. Either give them a behaviour
   (auto-email a raised invoice; auto-renew on the sweep) or drop them before an
   operator believes they are configured.
 - **The SMTP password is stored in plaintext.** Same posture as the tenant's
@@ -71,7 +104,7 @@ From the review behind `za-pos/prompts/deploy-production-vula-app.md` §10.
 - ~~**This image does not build in a clean context.**~~ **Fixed 2026-09-14** (was: `frontend/tsconfig.node.json`
   asks for `types: ["node"]`, but `@types/node` is not declared in
   `frontend/package.json` — locally the root install hoists it, so `npm run
-  build` passes and the failure only appears in Coolify's build:
+build` passes and the failure only appears in Coolify's build:
   `error TS2688: Cannot find type definition file for 'node'`. One-line fix
   (declare the dependency in the frontend, refresh its lockfile), verified to
   make the image build. **Blocks deploying this app at all.**
@@ -165,7 +198,7 @@ Order is buildable-first; each is its own increment.
   `completed`, the sweep never fabricates one, and the UI offers only manual EFT
   and bank transfer since 2026-09-16). A provider webhook is the next step; nothing
   in the invoice model blocks it. When it lands, "charge the card" is a **new
-  action** beside *Record payment* — not a relabelling of it — and the gateway
+  action** beside _Record payment_ — not a relabelling of it — and the gateway
   method values the API still accepts gain their real meaning.
 - **Register display of the allowance** — `/api/runtime-config` publishes
   `subscription.maxTerminals` and the register's type carries it; the "N of M
@@ -264,12 +297,12 @@ into that plan.
 
 - **No frontend test runner.** `frontend/package.json` has no `test` script, so
   UI-level regressions cannot be covered — e.g. the 2026-09-16 fix that moved
-  action notices into a fixed toast (the backend refusal it surfaces *is* covered,
+  action notices into a fixed toast (the backend refusal it surfaces _is_ covered,
   in `stores.test.ts`). Adding vitest + testing-library is the prerequisite before
   any further UI-behaviour fixes claim test coverage.
 - **Remove-then-pause ergonomics on the store card.** Remove still refuses an
   active store by design (pause-first teardown, CONTEXT §2a); the 2026-09-16 fix
-  only made that refusal visible. A future pass could put the Pause action *inside*
+  only made that refusal visible. A future pass could put the Pause action _inside_
   the remove confirmation, or disable Remove on an active card with the reason
   shown, so the two steps read as one workflow.
 - **Two notice idioms.** `ClientDetailPage`/`StoresPage`/`StoreDetailPage` use the
