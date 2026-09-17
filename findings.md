@@ -1,5 +1,38 @@
 # Findings
 
+## 2026-09-17 — a fleet page that reported history, and the number that proved it
+
+- **Sixty-four of sixty-four green lights, forty-nine of them wrong.** The registry
+  said every store was `up`; a real sweep of the same fleet minutes later found 15 up
+  and 49 down. Both statements came from the same code against the same data — the
+  difference is that the `up` values were written when each store was deployed, and
+  nothing had ever re-probed them. This is the repo's recurring defect in its purest
+  form: not a wrong calculation but a *displayed state that was never true*, and one
+  the operator would act on (the fleet looked healthy enough to leave alone).
+- **The fix was already written and simply never called.** `services/healthSweep.ts`
+  has probed the whole fleet since 2026-09-11 and `POST /api/stores/health-sweep`
+  exposes it — but nothing scheduled it, and the only polling in the SPA is a 4-second
+  refresh while a store is provisioning. So the capability existed for weeks with
+  nobody's hand on the trigger. Worth checking for a caller before building a
+  scheduler for something that already works.
+- **Two guards matter more than the timer itself.** Skipping a tick while a sweep is
+  in flight keeps one probe in flight rather than a growing queue of them against a
+  partly-unreachable fleet; and starting one interval after boot rather than at boot
+  means a restart loop (which this repo has hit — five duplicate `tsx watch`
+  processes in the 2026-09-10 incident) cannot turn into a fleet-wide hammering. Both
+  are pinned by tests, and the in-flight one was verified by removing the guard and
+  watching the test report three concurrent sweeps.
+- **Measuring the cost before choosing the interval.** Fifty-one failures across 64
+  stores and 6 panels complete in well under a minute because an unreachable host
+  fails fast rather than at the 5-second timeout — worth knowing, because the
+  opposite assumption ("42 unreachable stores × 5 s = a stalled sweep") would have
+  argued for a much longer interval than the fleet needs.
+- **Verification that did not touch the thing being fixed.** The sweep was run against
+  a *copy* of the live registry on a spare port, which is what makes the before/after
+  claim (64 up → 15 up, 49 down) a real observation rather than a prediction. The live
+  registry was left reading 64/64 `up`, and that stale snapshot is itself the
+  evidence: the truth was measurable only because the copy was swept.
+
 ## 2026-09-17 — a dev server that had been serving yesterday's code for ten hours
 
 - **The `touch` remedy stopped working, and that changes the diagnosis.** Asked to

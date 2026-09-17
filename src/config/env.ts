@@ -67,6 +67,12 @@ export interface Env {
   licenceOfflineDays: number;
   licenceGraceDays: number;
   licenceKeyFile: string | null;
+  /**
+   * Minutes between automatic health sweeps, or 0 to disable the schedule (the
+   * manual route stays available either way). Without it the panel reports health,
+   * version and latency from the last time somebody looked.
+   */
+  healthSweepMinutes: number;
 }
 
 export const env: Env = {
@@ -87,6 +93,9 @@ export const env: Env = {
   licenceOfflineDays: Number(process.env.LICENCE_OFFLINE_DAYS || 14),
   licenceGraceDays: Number(process.env.LICENCE_GRACE_DAYS || 3),
   licenceKeyFile: process.env.LEASE_KEY_FILE?.trim() || null,
+  // `|| 10` rather than `?? 10` so an empty variable means "the default", not
+  // "zero", which would silently switch the schedule off.
+  healthSweepMinutes: Number(process.env.HEALTH_SWEEP_INTERVAL_MINUTES || 10),
 };
 
 export { logger };

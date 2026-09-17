@@ -1,5 +1,33 @@
 # Progress
 
+## 2026-09-17 — the health sweep runs on a timer
+
+Owner: *"ok go ahead"* after the recommendation list — the first item (land the tree)
+is committed, and this is the first piece of item three: making the panel stop
+answering "is the fleet okay" from an old probe.
+
+- **The measurement that justified it:** the live registry said **64 of 64 stores
+  `up`** — statuses recorded when each was deployed. A real sweep of that same fleet
+  immediately afterwards found **15 up and 49 down**. The panel was not reporting the
+  fleet, it was reporting history. Every store in the registry showed a green light
+  while two thirds of them are unreachable.
+- **`services/sweepScheduler.ts`** runs `healthSweep` every
+  `HEALTH_SWEEP_INTERVAL_MINUTES` (default 10, `0` = manual only), started from
+  `server.ts` next to `listen`. The manual `POST /api/stores/health-sweep` stays.
+- **Two guards, both tested:** a tick is *skipped, not queued*, while a sweep is
+  still in flight (verified by removing the guard — the test then shows three
+  overlapping sweeps); and the first sweep is one interval after boot rather than at
+  boot, so a restart loop cannot hammer the fleet. A sweep that throws logs and the
+  next tick is the retry.
+- **Measured cost:** a full sweep of the real fleet (64 stores + 6 panels, most
+  unreachable) completes in well under a minute, so a ten-minute interval is
+  comfortable.
+- Verified by booting against a copy of the live registry: the log line appears, the
+  sweep completes with `19 up, 51 down across 64 stores & 6 panels` (15 stores + 4
+  panels up), latency is recorded for the reachable ones, and the **live registry was
+  untouched** — it still reads 64/64 `up`, which is precisely the lie this fixes.
+- Tests CP **280 green (22 suites)**. Doctrine: CONTEXT §3.
+
 ## 2026-09-17 — a client's stores, in name order
 
 Owner: *"CP - clients - put stores in alphabetical order."*

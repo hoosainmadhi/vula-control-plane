@@ -80,6 +80,7 @@ za-pos-control-plane/
 │   │                      # invoicePdf (pdfkit; the invoice document),
 │   │                      # storeClient, features, coolify, storeProvisioning,
 │   │                      # clientOrchestrator, healthSweep,
+│   │                      # sweepScheduler (runs healthSweep on a timer),
 │   │                      # fleetView (derived health/config state + devices)
 │   ├── utils/             # logger, asyncHandler, validate, errors (HttpError),
 │   │                      # money (cents → ZAR, for server-rendered mail),
@@ -233,5 +234,6 @@ env-setup.ts` sets `CP_DB_PATH=':memory:'` + office env; `beforeEach`
   `fix(platform)`, `docs`, `chore`).
 - Deploy: Coolify build pack "Dockerfile", `PORT` injected by Coolify,
   `CP_DB_PATH=/data/control-plane.db` (persistent volume), `OFFICE_ADMIN_*`,
-  `JWT_SECRET` (≥32 chars). Full playbook in `prompts/`.
+  `JWT_SECRET` (≥32 chars), `HEALTH_SWEEP_INTERVAL_MINUTES` (default 10; 0 =
+  manual sweeps only). Full playbook in `prompts/`.
 - Seeded/dev credentials are demo-only; change before going live.

@@ -16,15 +16,27 @@ CONTEXT.md "Internal API contract").
 
 ## Current Phase
 
-**A client's stores in name order (2026-09-17).** Owner: *"CP - clients - put stores
-in alphabetical order."* One helper in `routes/clients.ts` (`storesForCompany`) now
-filters *and* sorts by name with the locale pinned, used by both places that build a
-client's store list — the card's chips and the client's Stores tab — so the two cannot
-disagree. Name rather than slug (the operator reads the branch they see), slug breaks
-exact ties, and the `/stores` fleet page keeps its newest-first order because it is a
-log rather than a lookup. Verified on a copy of the live registry: all five multi-store
-clients alphabetical, AHK's 41 branches and mixed-case names included. Tests CP
-**274 green (21 suites)**.
+**The health sweep runs on a timer (2026-09-17).** Owner: *"ok go ahead"* on the
+recommendation list. The tree is committed (three commits: the licence-counter
+repair, the client roster row + store ordering, the session docs), and the first
+piece of the "make the panel tell the truth" item is done: `server.ts` now starts
+`services/sweepScheduler.ts`, which runs `healthSweep` every
+`HEALTH_SWEEP_INTERVAL_MINUTES` (default 10, `0` = manual only). The measurement
+that justified it: the registry claimed **64 of 64 stores up** while a real sweep of
+the same fleet found **15 up, 49 down** — every green light on the fleet page was a
+record of deploy time, not of the fleet. A tick is skipped rather than queued while a
+sweep is in flight, and the first sweep is one interval after boot. Tests CP **280
+green (22 suites)**. Doctrine: CONTEXT §3.
+
+**Still outstanding from the recommendation list:** item 2 (record the agreed price
+for the ten clients whose terms are unset, and bill the onboarding charge for the
+eight that have never carried it) is an operator task — it changes what live clients
+are billed, so it needs the owner's figures; item 3's remaining half is the 51 red
+licence badges (42 unreachable hostnames, 9 credentials); item 4 (secrets at rest,
+auth hardening) is the gate before the CP is internet-facing; item 5 is F2
+auto-provisioning, blocked on DNS; item 6 is integration tests for the money and
+entitlement paths. The prettier reformat is deliberately untouched while another
+session is editing this tree.
 
 **Two owner reports fixed (2026-09-16, eleventh pass).** Owner: *"CP : Clients -> 1
 Client per line"* + *"Client Details-> Multiple Stores-> Push License : Store POST

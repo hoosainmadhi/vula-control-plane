@@ -279,6 +279,21 @@ server; slug = the store's registry slug) and the control plane panel sits at
 `https://cp.vula-app.co.za`. The store's `base_url` in the registry is the
 `https://<slug>.vula-app.co.za` form.
 
+**Health, version and latency are refreshed on a timer (2026-09-17).**
+`services/healthSweep.ts` probes every active store (`GET /api/internal/status`,
+plus `telemetry` for version, schema, heartbeat and per-till claim state) and
+every active panel (`/health`), recording up/down, latency and the reported
+build. `POST /api/stores/health-sweep` runs it by hand, and since 2026-09-17
+`server.ts` also runs it every `HEALTH_SWEEP_INTERVAL_MINUTES` (default 10,
+`0` = manual only) through `services/sweepScheduler.ts`. The schedule exists
+because without it the panel answered "is the fleet okay?" from whenever someone
+last clicked: on 2026-09-17 the registry claimed 64 of 64 stores `up` while a
+real sweep of the same fleet found 15 up and 49 down. Two guards worth keeping —
+a tick is **skipped, not queued**, while a sweep is still in flight (an
+unreachable store costs a timeout, and stacking sweeps would turn a slow fleet
+into a growing queue of network calls), and the first sweep is **one interval
+after boot**, never at boot, so a restart loop cannot hammer the fleet.
+
 ## 4. Internal API contract (CP-authored)
 
 This section is the authoritative wire contract. The tenant side shipped
