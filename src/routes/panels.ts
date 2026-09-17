@@ -8,7 +8,6 @@ import {
   getPanelBySlug,
   listPanels,
   recordAuditLog,
-  nextPanelLicenceSequence,
   recordPanelHealth,
   recordPanelLicencePush,
   updatePanel,
@@ -17,14 +16,19 @@ import {
 import { requireOffice } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HttpError } from '../utils/errors.js';
-import { ValidationError, optionalString, parseIdParam, requireSlug, requireString } from '../utils/validate.js';
 import {
-  pingPanel,
-  probeAppKind,
-  pushLicenceToPanel,
-  StoreClientError,
-} from '../services/storeClient.js';
-import { issueLicence, isEphemeralKey, licenceKeyId, licencePublicKey } from '../services/licenceSigner.js';
+  ValidationError,
+  optionalString,
+  parseIdParam,
+  requireSlug,
+  requireString,
+} from '../utils/validate.js';
+import { pingPanel, probeAppKind, StoreClientError } from '../services/storeClient.js';
+import {
+  deliverPanelLicence,
+  type LicenceSequenceReconciliation,
+} from '../services/licenceDelivery.js';
+import { isEphemeralKey, licenceKeyId, licencePublicKey } from '../services/licenceSigner.js';
 import { entitlementsFor } from '../services/subscriptions.js';
 
 export const panelsRouter = Router();
@@ -96,31 +100,16 @@ const panelFromParams = (raw: string): PanelRecord => {
 /** Sign and deliver the company licence to a panel. Failure records, never throws. */
 const attemptPanelLicencePush = async (
   panel: PanelRecord,
-): Promise<{ ok: boolean; error?: string; sequence?: number }> => {
+): Promise<{
+  ok: boolean;
+  error?: string;
+  sequence?: number;
+  reconciled?: LicenceSequenceReconciliation;
+}> => {
   try {
-    const company = getCompanyById(panel.company_id);
-    const ent = entitlementsFor(company);
-    const sequence = nextPanelLicenceSequence(panel.id);
-    const signed = issueLicence({
-      sequence,
-      storeSlug: panel.slug,
-      storeName: panel.name,
-      companyId: ent.companyId,
-      companyName: ent.companyName,
-      planCode: ent.planCode,
-      planName: ent.planName,
-      features: ent.features,
-      maxStores: ent.maxStores,
-      maxTerminalsPerStore: ent.maxTerminalsPerStore,
-      paidThrough: ent.paidThrough,
-      billingState: ent.billingState,
-    });
-    await pushLicenceToPanel(
-      { base_url: panel.base_url, control_plane_token: panel.control_plane_token },
-      signed.token,
-    );
+    const { sequence, reconciled } = await deliverPanelLicence(panel);
     recordPanelLicencePush(panel.id, 'ok');
-    return { ok: true, sequence };
+    return { ok: true, sequence, ...(reconciled ? { reconciled } : {}) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     recordPanelLicencePush(panel.id, 'failed', message);
@@ -185,7 +174,9 @@ panelsRouter.post(
     } else if (supplied.length === 64 && /^[0-9a-f]+$/.test(supplied)) {
       controlPlaneToken = supplied;
     } else {
-      throw new ValidationError('controlPlaneToken must be 64 lowercase hex characters when supplied');
+      throw new ValidationError(
+        'controlPlaneToken must be 64 lowercase hex characters when supplied',
+      );
     }
 
     const panel = createPanel({
@@ -306,6 +297,11 @@ panelsRouter.post(
       res.status(502).json({ ok: false, panel: panelToOut(updated), error: outcome.error });
       return;
     }
-    res.json({ ok: true, sequence: outcome.sequence, panel: panelToOut(updated) });
+    res.json({
+      ok: true,
+      sequence: outcome.sequence,
+      ...(outcome.reconciled ? { reconciled: outcome.reconciled } : {}),
+      panel: panelToOut(updated),
+    });
   }),
 );

@@ -29,6 +29,32 @@ export const resolveBase = (baseUrl: string): string => baseUrl.replace(/\/+$/, 
 export const terminalNames = (count: number): Array<{ till: number; name: string }> =>
   Array.from({ length: count }, (_, i) => ({ till: i + 1, name: `Till ${i + 1}` }));
 
+/** Which side of the fleet a licence is being delivered to. */
+export type LicenceHolderKind = 'store' | 'panel';
+
+/**
+ * The licence sequence a deployment says it holds, read out of its own
+ * `GET /api/internal/status` body: stores report it under `subscription.sequence`,
+ * Head Offices under `licence.sequence`.
+ *
+ * This is the licence's anti-replay number, echoed back — not merchant business
+ * data (§40) — and it is the only thing the CP reads out of a status payload
+ * besides liveness. It is the authority on how high the CP's own counter must be:
+ * a store refuses a licence below the one it holds, so the counter has to stay
+ * ahead of this value rather than ahead of whatever the registry remembers.
+ *
+ * Returns null when the field is absent or not a number: an older build that does
+ * not report it is left alone rather than guessed at.
+ */
+export const reportedLicenceSequence = (kind: LicenceHolderKind, body: unknown): number | null => {
+  if (body === null || typeof body !== 'object') return null;
+  const block = (body as Record<string, unknown>)[kind === 'store' ? 'subscription' : 'licence'];
+  if (block === null || typeof block !== 'object') return null;
+  const value = (block as Record<string, unknown>).sequence;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return null;
+  return value;
+};
+
 interface StoreResponse {
   ok: boolean;
   status: number;
@@ -201,8 +227,10 @@ export const fetchTelemetry = async (
 
 /**
  * Pings a Company Control Panel's own token-guarded status endpoint. The panel
- * exposes operational metadata only (version, health) — the control plane never
- * reads inside it.
+ * exposes operational metadata only (version, health) — the control plane reads
+ * nothing inside it but liveness and the licence sequence the panel already
+ * holds (`reportedLicenceSequence`), both of which are licence-technical rather
+ * than merchant business data (§40).
  */
 export const pingPanel = async (
   panel: Pick<StoreRecord, 'base_url' | 'control_plane_token'>,

@@ -19,8 +19,6 @@ import {
   updateDeploymentStep,
   listStepsForJob,
   recordAuditLog,
-  nextLicenceSequence,
-  nextPanelLicenceSequence,
   type CompanyRecord,
   type DeploymentJobRecord,
   type DeploymentJobStepRecord,
@@ -33,13 +31,12 @@ import {
 } from './coolify.js';
 import {
   pushTerminals,
-  pushLicence,
-  pushLicenceToPanel,
   ping,
   registerBranchWithPanel,
   bootstrapHeadOfficeAdmin,
 } from './storeClient.js';
-import { issueLicence, licencePublicKey } from './licenceSigner.js';
+import { deliverPanelLicence, deliverStoreLicence } from './licenceDelivery.js';
+import { licencePublicKey } from './licenceSigner.js';
 import { entitlementsFor } from './subscriptions.js';
 import { allocateTerminals, checkAllocation, terminalAllowance } from './terminalLicences.js';
 import { bootstrapStoreAdmin, generateAdminPassword } from './storeProvisioning.js';
@@ -93,11 +90,14 @@ export async function orchestrateClientDeployment(
     throw new Error(`Company ${input.companyId} not found`);
   }
 
-  const jobType = input.deploymentType === 'multi_store' ? 'new_multi_store_client' : 'new_single_store_client';
+  const jobType =
+    input.deploymentType === 'multi_store' ? 'new_multi_store_client' : 'new_single_store_client';
   const job = createDeploymentJob(company.id, jobType);
 
   // 1. Register planned steps
-  createDeploymentStep(job.id, 'company_verify', 'company', company.id, { companyName: company.name });
+  createDeploymentStep(job.id, 'company_verify', 'company', company.id, {
+    companyName: company.name,
+  });
 
   if (input.deploymentType === 'multi_store' && input.headOffice) {
     createDeploymentStep(job.id, 'head_office_deploy', 'head_office', null, {
@@ -288,7 +288,11 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
         // (container likely still building). Random credential, never persisted.
         if (meta.adminEmail) {
           try {
-            const adminOk = await bootstrapStoreAdmin(store, meta.adminEmail, generateAdminPassword());
+            const adminOk = await bootstrapStoreAdmin(
+              store,
+              meta.adminEmail,
+              generateAdminPassword(),
+            );
             if (!adminOk) {
               const msg = `Store admin init pending for ${store.slug}: store not accepting yet`;
               warnings.push(msg);
@@ -323,7 +327,9 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
         const panels = listPanelsForCompany(company.id);
         const ho = panels[0];
         if (!ho) {
-          throw new Error('Topology wiring requires a Head Office panel; none exists for this company');
+          throw new Error(
+            'Topology wiring requires a Head Office panel; none exists for this company',
+          );
         }
 
         const stores = listStores().filter((s) => s.company_id === company.id);
@@ -345,28 +351,10 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
       }
 
       if (step.step_key === 'issue_licences') {
-        const ent = entitlementsFor(company);
         const stores = listStores().filter((s) => s.company_id === company.id);
         for (const store of stores) {
           try {
-            const seq = nextLicenceSequence(store.id);
-            const signed = issueLicence({
-              sequence: seq,
-              storeSlug: store.slug,
-              storeName: store.name,
-              companyId: ent.companyId,
-              companyName: ent.companyName,
-              planCode: ent.planCode,
-              planName: ent.planName,
-              features: ent.features,
-              maxStores: ent.maxStores,
-              maxTerminalsPerStore: ent.maxTerminalsPerStore,
-              // The store's own allocation: what the register may bind devices to.
-              maxTerminals: terminalAllowance(store).count,
-              paidThrough: ent.paidThrough,
-              billingState: ent.billingState,
-            });
-            await pushLicence(store, signed.token);
+            await deliverStoreLicence(store);
           } catch (lErr) {
             const msg = `Initial licence push pending for store ${store.slug}: ${String(lErr)}`;
             warnings.push(msg);
@@ -377,25 +365,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
         const panels = listPanelsForCompany(company.id);
         for (const panel of panels) {
           try {
-            const seq = nextPanelLicenceSequence(panel.id);
-            const signed = issueLicence({
-              sequence: seq,
-              storeSlug: panel.slug,
-              storeName: panel.name,
-              companyId: ent.companyId,
-              companyName: ent.companyName,
-              planCode: ent.planCode,
-              planName: ent.planName,
-              features: ent.features,
-              maxStores: ent.maxStores,
-              maxTerminalsPerStore: ent.maxTerminalsPerStore,
-              paidThrough: ent.paidThrough,
-              billingState: ent.billingState,
-            });
-            await pushLicenceToPanel(
-              { base_url: panel.base_url, control_plane_token: panel.control_plane_token },
-              signed.token,
-            );
+            await deliverPanelLicence(panel);
           } catch (lpErr) {
             const msg = `Initial licence push pending for panel ${panel.slug}: ${String(lpErr)}`;
             warnings.push(msg);

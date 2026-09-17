@@ -3,8 +3,6 @@ import {
   getPlanById,
   listStores,
   listPanelsForCompany,
-  nextLicenceSequence,
-  nextPanelLicenceSequence,
   recordLicencePush,
   recordPanelLicencePush,
   createInvoice as dbCreateInvoice,
@@ -25,9 +23,7 @@ import {
   type InvoiceRecord,
   type PaymentRecord,
 } from '../config/registryDb.js';
-import { issueLicence } from './licenceSigner.js';
-import { pushLicence, pushLicenceToPanel } from './storeClient.js';
-import { entitlementsFor, entitlementsForStore } from './subscriptions.js';
+import { deliverPanelLicence, deliverStoreLicence } from './licenceDelivery.js';
 import {
   proRataForIncrease,
   quoteForSubscription,
@@ -167,7 +163,6 @@ export async function pushLicencesForCompany(companyId: number): Promise<{
     return { storesUpdated: 0, panelsUpdated: 0, errors: [`Company ${companyId} not found`] };
   }
 
-  const ent = entitlementsFor(company);
   const errors: string[] = [];
   let storesUpdated = 0;
   let panelsUpdated = 0;
@@ -178,24 +173,7 @@ export async function pushLicencesForCompany(companyId: number): Promise<{
   const stores = listStores().filter((s) => s.company_id === companyId);
   for (const store of stores) {
     try {
-      const storeEnt = entitlementsForStore(store);
-      const sequence = nextLicenceSequence(store.id);
-      const signed = issueLicence({
-        sequence,
-        storeSlug: store.slug,
-        storeName: store.name,
-        companyId: storeEnt.companyId,
-        companyName: storeEnt.companyName,
-        planCode: storeEnt.planCode,
-        planName: storeEnt.planName,
-        features: storeEnt.features,
-        maxStores: storeEnt.maxStores,
-        maxTerminalsPerStore: storeEnt.maxTerminalsPerStore,
-        maxTerminals: storeEnt.maxTerminals ?? store.terminal_count,
-        paidThrough: storeEnt.paidThrough,
-        billingState: storeEnt.billingState,
-      });
-      await pushLicence(store, signed.token);
+      await deliverStoreLicence(store);
       recordLicencePush(store.id, 'ok');
       storesUpdated++;
     } catch (err) {
@@ -212,25 +190,7 @@ export async function pushLicencesForCompany(companyId: number): Promise<{
   const panels = listPanelsForCompany(companyId);
   for (const panel of panels) {
     try {
-      const sequence = nextPanelLicenceSequence(panel.id);
-      const signed = issueLicence({
-        sequence,
-        storeSlug: panel.slug,
-        storeName: panel.name,
-        companyId: ent.companyId,
-        companyName: ent.companyName,
-        planCode: ent.planCode,
-        planName: ent.planName,
-        features: ent.features,
-        maxStores: ent.maxStores,
-        maxTerminalsPerStore: ent.maxTerminalsPerStore,
-        paidThrough: ent.paidThrough,
-        billingState: ent.billingState,
-      });
-      await pushLicenceToPanel(
-        { base_url: panel.base_url, control_plane_token: panel.control_plane_token },
-        signed.token,
-      );
+      await deliverPanelLicence(panel);
       recordPanelLicencePush(panel.id, 'ok');
       panelsUpdated++;
     } catch (err) {

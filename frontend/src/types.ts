@@ -123,9 +123,23 @@ export interface Panel {
   createdAt: string;
 }
 
+/**
+ * Present only when the control plane had to raise its own licence counter to
+ * match what the deployment already held, so the number it was about to issue
+ * would have been refused as stale. Rare, automatic — and an operator watching a
+ * licence jump several versions deserves to know why.
+ */
+export interface LicenceSequenceReconciliation {
+  from: number;
+  to: number;
+  reported: number;
+}
+
+/** Outcome of POST /panels/:id/licence (and /stores/:id/licence). */
 export interface PanelPushOutcome {
   ok: boolean;
   sequence?: number;
+  reconciled?: LicenceSequenceReconciliation;
   error?: string;
 }
 

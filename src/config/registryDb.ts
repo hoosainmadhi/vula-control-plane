@@ -1360,6 +1360,25 @@ export const nextLicenceSequence = (id: number): number => {
   return getStoreById(id)?.licence_sequence ?? 1;
 };
 
+/**
+ * Raise a store's licence counter to at least `floor` — NEVER lower it.
+ *
+ * This column is not a counter, it is a mirror of what the deployment holds, and
+ * only the deployment knows that number. A registry rebuilt or restored from an
+ * older database starts every row at 0 while the deployments keep counting, so
+ * without a floor the CP issues stale licences for ever (the store refuses each
+ * one, and each retry only moves the number one step closer).
+ */
+export const raiseLicenceSequenceFloor = (id: number, floor: number): number => {
+  getRegistryDb()
+    .prepare(
+      `UPDATE stores SET licence_sequence = MAX(licence_sequence, ?), updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+    .run(floor, id);
+  return getStoreById(id)?.licence_sequence ?? floor;
+};
+
 export const recordLicencePush = (
   id: number,
   status: ConfigStatus,
@@ -2069,6 +2088,17 @@ export const nextPanelLicenceSequence = (id: number): number => {
     )
     .run(id);
   return getPanelById(id)?.licence_sequence ?? 1;
+};
+
+/** As `raiseLicenceSequenceFloor`, for a Head Office panel. Never lowers. */
+export const raisePanelLicenceSequenceFloor = (id: number, floor: number): number => {
+  getRegistryDb()
+    .prepare(
+      `UPDATE panels SET licence_sequence = MAX(licence_sequence, ?), updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+    .run(floor, id);
+  return getPanelById(id)?.licence_sequence ?? floor;
 };
 
 export const recordPanelLicencePush = (

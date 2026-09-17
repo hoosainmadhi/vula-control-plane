@@ -10,11 +10,9 @@ import {
   triggerDeploy,
   CoolifyError,
 } from './coolify.js';
-import { pushTerminals, pushLicence } from './storeClient.js';
-import { issueLicence } from './licenceSigner.js';
-import { entitlementsFor } from './subscriptions.js';
-import { terminalAllowance } from './terminalLicences.js';
-import { getCompanyById, nextLicenceSequence, recordLicencePush, recordConfigResult } from '../config/registryDb.js';
+import { pushTerminals } from './storeClient.js';
+import { deliverStoreLicence } from './licenceDelivery.js';
+import { getCompanyById, recordLicencePush, recordConfigResult } from '../config/registryDb.js';
 
 /** The host directory a deployment belongs under: its client's slug, or its own. */
 const clientSlugFor = (companyId: number | null, fallback: string): string =>
@@ -159,27 +157,7 @@ export async function runStoreProvisioning(
     }
 
     try {
-      const company = store.company_id ? getCompanyById(store.company_id) : null;
-      const ent = entitlementsFor(company);
-      const seq = nextLicenceSequence(store.id);
-      const signed = issueLicence({
-        sequence: seq,
-        storeSlug: store.slug,
-        storeName: store.name,
-        companyId: ent.companyId,
-        companyName: ent.companyName,
-        planCode: ent.planCode,
-        planName: ent.planName,
-        features: ent.features,
-        maxStores: ent.maxStores,
-        maxTerminalsPerStore: ent.maxTerminalsPerStore,
-        // The store's own licence allowance (its allocation, or what it is
-        // already configured for before a subscription exists).
-        maxTerminals: terminalAllowance(store).count,
-        paidThrough: ent.paidThrough,
-        billingState: ent.billingState,
-      });
-      await pushLicence(store, signed.token);
+      await deliverStoreLicence(store);
       recordLicencePush(store.id, 'ok');
     } catch (e) {
       logger.warn(`Initial licence push for ${store.slug} pending: ${e}`);

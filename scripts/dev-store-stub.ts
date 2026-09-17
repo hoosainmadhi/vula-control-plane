@@ -48,6 +48,11 @@ app.get('/api/internal/status', requireToken, (_req, res) => {
     version: '0.0.0-stub',
     terminalCount: configuredTerminals.length,
     terminals: configuredTerminals,
+    // The tenant reports the licence it holds here; the control plane reads it to
+    // keep its own issuing counter ahead of this deployment (a store refuses a
+    // licence below what it already has). Stub mirrors the shape so local dev and
+    // the smoke test exercise the same repair path.
+    subscription: { sequence: licenceSequence },
   });
 });
 
@@ -109,8 +114,12 @@ app.post('/api/internal/admin/reset', requireToken, (_req, res) => {
  * against LEASE_PUBLIC_KEY and refuses a sequence older than the one it holds;
  * the stub has no key, so it tracks the monotonic sequence and records the
  * claims' billing state — enough to demo L4 propagation end to end.
+ *
+ * `STUB_LICENCE_SEQUENCE` seeds the counter so the stale-sequence repair can be
+ * exercised locally: seed it above the CP's own counter and the next push must
+ * reconcile rather than be refused.
  */
-let licenceSequence = 0;
+let licenceSequence = Number.parseInt(process.env.STUB_LICENCE_SEQUENCE ?? '', 10) || 0;
 
 app.post('/api/internal/licence', requireToken, (req, res) => {
   const body = req.body as { token?: unknown };
@@ -126,8 +135,14 @@ app.post('/api/internal/licence', requireToken, (req, res) => {
     return;
   }
   const sequence = typeof claims.sequence === 'number' ? claims.sequence : 0;
-  if (sequence <= licenceSequence) {
-    res.status(409).json({ error: 'Stale licence sequence' });
+  // Strictly older, matching the tenant: re-delivering the sequence the stub
+  // already holds is an idempotent overwrite there, not a stale replay. The stub
+  // used to reject equal sequences as well, which was stricter than the contract
+  // and would have hidden a real off-by-one.
+  if (sequence < licenceSequence) {
+    res
+      .status(409)
+      .json({ error: `Licence sequence ${sequence} is older than the stored ${licenceSequence}` });
     return;
   }
   licenceSequence = sequence;

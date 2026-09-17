@@ -298,7 +298,7 @@ advertise the surface.
 | Endpoint                         | CP client fn    | Request                                                                                                                                                                           | Response (2xx)                                                                                                                               |
 | -------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `POST /api/internal/configure`   | `pushTerminals` | `{ terminalCount: N, vertical: "general"\|"clothing"\|"spares"\|"hardware"\|"pharmacy"\|"restaurant"\|"custom", terminals: [{ till: 1, name: "Till 1" }, …, { till: N, name: "Till N" }] }` | `{ ok: true, applied: { terminalCount: N, terminals: [...] } }` — full body is stored as the config snapshot                                 |
-| `GET /api/internal/status`       | `ping`          | —                                                                                                                                                                                 | any JSON describing the store, e.g. `{ ok, storeName, vertical, version, terminalCount, terminals }` — **no `vatRegNo` since 2026-09-12**: merchant tax data never leaves the merchant plane (§40) |
+| `GET /api/internal/status`       | `ping`          | —                                                                                                                                                                                 | any JSON describing the app, e.g. `{ ok, storeName, vertical, version, terminalCount, terminals }` — **no `vatRegNo` since 2026-09-12**: merchant tax data never leaves the merchant plane (§40). **Two licence-technical fields are read by the CP since 2026-09-16** (neither is merchant data): a store reports the licence it holds as `subscription: { sequence, … }`, a Head Office as `licence: { sequence, … }`. Nothing else in this payload is parsed |
 
 `POST /api/internal/configure` also accepts an optional `headOffice` block:
 `{ enabled: true, url: "<ho-base-url>", token: "<per-branch HEAD_OFFICE_TOKEN>" }`.
@@ -310,7 +310,7 @@ domains stay separate; see za-pos §14/§14a). The store-side
 when the operator sets `ALLOW_CONTROL_PLANE_TOKEN_FALLBACK=true` — a
 migration-only opt-in, default off since 2026-09-12.
 | `POST /api/internal/admin/reset` | `resetAdmin`    | —                                                                                                                                                                                 | `{ ok: true, tempPassword: "<one-time>" }` — the **store generates** the temp password; the CP only proxies it (shown once, never persisted) |
-| `POST /api/internal/licence`     | `pushLicence`   | `{ token: "<signed licence>" }`                                                                                                                                                  | `{ ok: true }` on a verified, newer-sequence licence; **409** on a stale sequence. Claims as issued by `services/licenceSigner.ts`: `licenceId, keyId, sequence, companyId, companyName, storeSlug, storeName, planCode, planName, features[], maxStores, maxTerminalsPerStore, maxTerminals?, paidThrough, billingState, issuedAt, maxOfflineUntil`. `maxTerminals` is the store's own allowance (2026-09-13) and is **absent on a Head Office licence** — the claim is additive, so a verifier that does not know it keeps working |
+| `POST /api/internal/licence`     | `pushLicence`   | `{ token: "<signed licence>" }`                                                                                                                                                  | `{ ok: true }` on a verified, newer-or-equal-sequence licence; **409** on a stale sequence (the store keeps the sequence it last accepted and refuses anything strictly lower — re-delivering the same sequence is an idempotent overwrite, not a replay). Claims as issued by `services/licenceSigner.ts`: `licenceId, keyId, sequence, companyId, companyName, storeSlug, storeName, planCode, planName, features[], maxStores, maxTerminalsPerStore, maxTerminals?, paidThrough, billingState, issuedAt, maxOfflineUntil`. `maxTerminals` is the store's own allowance (2026-09-13) and is **absent on a Head Office licence** — the claim is additive, so a verifier that does not know it keeps working |
 | `GET /api/internal/telemetry`    | `fetchTelemetry` | —                                                                                                                                                                                | **v0.4.0 (2026-09-12)**: `{ ok, app: 'vula', version, environment, schemaVersion, generatedAt, sync: { lastSyncAt, pendingEvents, failedEvents }, terminals: [{ till, name, claimed, deviceId, sessionOpen, lastSeenAt }] }` — technical metadata only (§40). `pendingEvents`/`failedEvents`/`lastSeenAt` are `null` until the tenant ships device heartbeats; the fields are reserved so the shape will not change. Stub mirrors it |
 
 Every CP push includes `vertical` (CP-owned). The store validates it (400
@@ -324,6 +324,26 @@ exceeds the licence's `maxTerminals` (**402 `terminal_limit_reached`**) — defe
 in depth behind the claim gate, so terminal slots and the licence cannot drift.
 Configured count ≤ licensed count is enforced at BOTH ends; the CP refuses the
 push first (§2a).
+
+**The CP's licence counter is a mirror, not an independent number (2026-09-16).**
+`stores.licence_sequence` / `panels.licence_sequence` has one job: to stay at or
+above the sequence the deployment holds, because the deployment refuses anything
+lower. It is therefore not ours to increment in isolation, and the deployment is
+the only authority on its value. Every registry-rebuilding path — restoring a
+backup, re-seeding, moving the database aside — restarts it at 0 while the
+deployments keep their counters, which is how a fleet ends up permanently refusing
+its own licences: each retry moves the number one step and fails again. So
+`services/licenceDelivery.ts` — the single place any licence is signed and
+delivered — reads the deployment's own sequence from `GET /api/internal/status`
+*before* allocating (best-effort, 2 s timeout), and raises the counter to at least
+that value. **It never lowers it**: a Head Office reporting `sequence: 0` holds no
+licence, and a deployment behind us catches up on its own. The correction is
+recorded as an audit row (`licence_sequence_reconciled`, actor `control-plane` —
+the trail's only non-operator actor, because nobody chose the renumbering) and
+reported to the SPA as `reconciled: { from, to, reported }` on
+`POST /stores/:id/licence` and `POST /panels/:id/licence`. When the deployment
+cannot be reached the read is skipped and issuance behaves exactly as before —
+including surfacing the refusal, rather than hiding it.
 
 Error handling: non-2xx → CP throws `StoreClientError` (502) with the store's
 `error` message when present; network failure/timeout (5 s) also 502. Health

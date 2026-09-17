@@ -38,9 +38,18 @@ const fetchTo = (path: string): [string, FetchInit | undefined] => {
   return [match![0] as string, match![1] as FetchInit | undefined];
 };
 
-/** Mocked store configure endpoint that echoes back the pushed terminalCount. */
-const mockConfigureOk = (): void => {
-  fetchMock.mockImplementation(async (_url, init) => {
+/**
+ * The store endpoints the CP drives, as a real store answers them: `/configure`
+ * echoes the pushed terminal count, and `/status` reports the licence the store
+ * holds — the licence pre-flight reads that before issuing. A mock that only knew
+ * about `/configure` would answer the status call with a parse error and quietly
+ * test the no-reconcile path.
+ */
+const mockConfigureOk = (licenceSequence = 0): void => {
+  fetchMock.mockImplementation(async (url, init) => {
+    if (String(url).endsWith('/api/internal/status')) {
+      return jsonResponse(200, { ...STATUS_OK, subscription: { sequence: licenceSequence } });
+    }
     const body = JSON.parse((init as FetchInit).body as string) as { terminalCount: number };
     return jsonResponse(200, { ok: true, applied: { terminalCount: body.terminalCount } });
   });

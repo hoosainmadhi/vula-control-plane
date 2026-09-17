@@ -17,7 +17,6 @@ import {
   getStoreBySlug,
   getCompanyById,
   listStores,
-  nextLicenceSequence,
   setStoreCompany,
   recordConfigResult,
   recordHealthResult,
@@ -30,7 +29,6 @@ import {
 import {
   resetAdmin,
   pushTerminals,
-  pushLicence,
   ping,
   fetchTelemetry,
   probeAppKind,
@@ -41,11 +39,10 @@ import { setStoreDeployStatus, listAuditLogs, recordAuditLog } from '../config/r
 import { runHealthSweep } from '../services/healthSweep.js';
 import { wireStoreToHeadOffice } from '../services/topology.js';
 import {
-  issueLicence,
-  isEphemeralKey,
-  licenceKeyId,
-  licencePublicKey,
-} from '../services/licenceSigner.js';
+  deliverStoreLicence,
+  type LicenceSequenceReconciliation,
+} from '../services/licenceDelivery.js';
+import { isEphemeralKey, licenceKeyId, licencePublicKey } from '../services/licenceSigner.js';
 import {
   canAddStore,
   deriveBillingState,
@@ -318,29 +315,22 @@ const attemptPush = async (store: StoreRecord): Promise<PushOutcome> => {
  */
 const attemptLicencePush = async (
   store: StoreRecord,
-): Promise<{ ok: boolean; licencePushStatus: ConfigStatus; error?: string; sequence?: number }> => {
+): Promise<{
+  ok: boolean;
+  licencePushStatus: ConfigStatus;
+  error?: string;
+  sequence?: number;
+  reconciled?: LicenceSequenceReconciliation;
+}> => {
   try {
-    const sequence = nextLicenceSequence(store.id);
-    const ent = entitlementsForStore(store);
-    const signed = issueLicence({
-      sequence,
-      storeSlug: store.slug,
-      storeName: store.name,
-      companyId: ent.companyId,
-      companyName: ent.companyName,
-      planCode: ent.planCode,
-      planName: ent.planName,
-      features: ent.features,
-      maxStores: ent.maxStores,
-      maxTerminalsPerStore: ent.maxTerminalsPerStore,
-      // This store's own allowance — the register gates new device claims on it.
-      maxTerminals: ent.maxTerminals ?? store.terminal_count,
-      paidThrough: ent.paidThrough,
-      billingState: ent.billingState,
-    });
-    await pushLicence(store, signed.token);
+    const { sequence, reconciled } = await deliverStoreLicence(store);
     recordLicencePush(store.id, 'ok');
-    return { ok: true, licencePushStatus: 'ok', sequence };
+    return {
+      ok: true,
+      licencePushStatus: 'ok',
+      sequence,
+      ...(reconciled ? { reconciled } : {}),
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     recordLicencePush(store.id, 'failed', message);
@@ -774,7 +764,12 @@ storesRouter.post(
       res.status(502).json({ ok: false, store: storeToOut(updated), error: outcome.error });
       return;
     }
-    res.json({ ok: true, sequence: outcome.sequence, store: storeToOut(updated) });
+    res.json({
+      ok: true,
+      sequence: outcome.sequence,
+      ...(outcome.reconciled ? { reconciled: outcome.reconciled } : {}),
+      store: storeToOut(updated),
+    });
   }),
 );
 
