@@ -16,7 +16,24 @@ CONTEXT.md "Internal API contract").
 
 ## Current Phase
 
-**The health sweep runs on a timer (2026-09-17).** Owner: *"ok go ahead"* on the
+**Pass 1 of the production review — settlement → entitlement (2026-09-25).**
+Owner: *"see attached and advise"* on `review-23Sep2026.md`, verified claim by
+claim, then *"continue with Phase 1"* (fleet is dev-only, so strictness is safe).
+Shipped: `purpose` persisted on invoices and returned by GET; settlement
+extends `paid_through` only for `initial`/`renewal`; the recorded amount must
+equal the invoice total; the financial writes are one transaction with the licence
+push outside; an expired trial and a never-paid client derive **suspended** (the
+old `active` fallback is gone — 8 of 11 dev clients now read suspended, honestly);
+the sweep re-delivers licences on failed push or past half the offline window;
+production boot refuses `BILLING_SIMULATE_RENEWAL_SETTLEMENT=true`. Verified on a
+copy of the live registry: onboarding settlement leaves a client suspended, an
+initial settlement activates one and delivers its licence. Tests CP **302 green (24 suites)**. Doctrine: CONTEXT §2b, §5e. **Remaining from the review:** Pass 2
+(URL validation/SSRF, proxy-aware limiter, login dev-hint), Pass 3 (company-delete
+financial blocker, COALESCE null-clearing, atomic client edits, panel teardown),
+Pass 4 (overdue tick, nested validation, frontend tests, registryDb split), plus
+the unowned `companies.ts` change and the prettier decision.
+
+Previous — **The health sweep runs on a timer (2026-09-17).** Owner: *"ok go ahead"* on the
 recommendation list. The tree is committed (three commits: the licence-counter
 repair, the client roster row + store ordering, the session docs), and the first
 piece of the "make the panel tell the truth" item is done: `server.ts` now starts

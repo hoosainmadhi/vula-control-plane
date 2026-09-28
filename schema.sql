@@ -163,6 +163,10 @@ CREATE TABLE IF NOT EXISTS invoices (
   -- What the charge is for. Required on a hand-priced invoice, and derived from
   -- the subscription when the control plane computes the amount.
   description          TEXT,
+  -- What the invoice was raised for. Settlement extends the paid period only for
+  -- `initial`/`renewal` (2026-09-25); legacy rows default to `initial`, with what
+  -- the stored columns can prove backfilled at migration.
+  purpose              TEXT NOT NULL DEFAULT 'initial',
   -- The plan at the time of issue (a snapshot): renaming a plan must not restate
   -- what an issued invoice says.
   plan_code            TEXT,

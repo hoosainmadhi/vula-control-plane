@@ -57,6 +57,10 @@ const makeCompany = async (over: Record<string, unknown> = {}) => {
       name: 'Urban Threads Retail Group',
       slug: 'urban-threads',
       planId,
+      // A client fixture is a paying client: since the 2026-09-25 state machine
+      // fix, a company that has never paid derives 'suspended' and cannot take
+      // stores. Tests that need another state pass paidThrough explicitly.
+      paidThrough: '2030-01-01',
       // What the client purchased. A client with no licensed terminals cannot
       // take stores, so every fixture states the quantity up front.
       licensedTerminalCount: 25,

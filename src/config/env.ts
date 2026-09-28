@@ -29,6 +29,20 @@ if (isProduction && process.env.OFFICE_ADMIN_PASSWORD === OFFICE_PASSWORD_PLACEH
 }
 
 /**
+ * The renewal sweep can simulate settlements so a demo fleet shows the whole
+ * billing flow — which must be impossible where real money is involved: a
+ * simulated settlement records a payment nobody made and extends a real
+ * customer's subscription (the exact fabrication the 2026-09-12 review removed
+ * from the sweep itself). Refusing at boot, like every other insecure default.
+ */
+if (isProduction && process.env.BILLING_SIMULATE_RENEWAL_SETTLEMENT === 'true') {
+  logger.error(
+    'FATAL: BILLING_SIMULATE_RENEWAL_SETTLEMENT must not be enabled in production — the sweep would record settlements that never happened',
+  );
+  process.exit(1);
+}
+
+/**
  * The licence signing key is checked at boot, not only on first use. `loadKeys()`
  * refuses too, but it refuses lazily: a control plane could start, pass its
  * healthcheck and look healthy, then die the moment it issues its first licence —

@@ -685,7 +685,9 @@ describe('Head Office wiring on create', () => {
     const company = await request(app)
       .post('/api/companies')
       .set(auth())
-      .send({ name: 'Urban Threads Retail Group', slug: 'urban-threads' });
+      // A paying client: adding a branch to a client that has never paid is
+      // refused (subscription_suspended) since the 2026-09-25 state machine fix.
+      .send({ name: 'Urban Threads Retail Group', slug: 'urban-threads', paidThrough: '2030-01-01' });
     expect(company.status).toBe(201);
     const companyId = (company.body as { id: number }).id;
 

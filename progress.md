@@ -1,5 +1,48 @@
 # Progress
 
+## 2026-09-25 — Pass 1 of the production review: settlement → entitlement
+
+Owner: *"see attached and advise"* on `review-23Sep2026.md`, then *"continue with
+Phase 1"* after "we are only on dev at the moment so testing". Every P0 claim in
+the review was verified against the code first; all checked out.
+
+- **Settlement is purpose-gated.** Only `initial`/`renewal` advance
+  `paid_through`; `onboarding`, `manual` and `pro_rata` settle their own debt.
+  `purpose` is now a persisted column (backfilled where derivable, `initial`
+  otherwise) and returned by GET — previously it vanished after creation even
+  though AGENTS.md documented it.
+- **Amount honesty:** the recorded amount must equal the invoice total
+  (`payment_amount_mismatch` otherwise); zero/negative refused. An omitted amount
+  still means the full invoice.
+- **Transactional settlement:** payment + invoice + setup-fee state + paid period
+  in one `db.transaction`, audited `invoice_settled`; the licence push stays
+  outside, failures recorded for the sweep.
+- **Strict state machine:** `deriveBillingState` order is now manual suspension →
+  paid period (active/grace/suspended) → trial (running) → suspended. An expired
+  trial and a never-paid client derive **suspended**; the old `active` fallback
+  is gone. On a copy of the live registry this flips 8 of 11 clients to
+  `suspended` — the honest answer, and safe because the fleet is dev-only.
+- **Licence recovery in the sweep:** re-delivers when the last push failed or the
+  licence is past half its offline window; never pushes to a store that did not
+  answer; panels recovered the same way. Makes CONTEXT's "the next sweep retries"
+  true for the first time.
+- **Production gate:** boot refuses `BILLING_SIMULATE_RENEWAL_SETTLEMENT=true`
+  when `NODE_ENV=production` (verified: exit 1 with a FATAL line).
+- **Custom-client renewals** are now explicit: the create modal asks whether a
+  hand-priced charge bills the period (default: no). This was the flow that would
+  have silently broken had the gate shipped without it.
+
+Tests CP **302 green (24 suites)** — new `settlement.test.ts` (17) and
+`healthSweep.test.ts` (5), plus fixture updates whose companies are now paying
+clients by default. Backend typecheck, frontend `tsc -b` and the production build
+clean. Verified on a copy of the live registry: settling Urban Threads'
+onboarding invoice leaves `paid_through` NULL and the client suspended; settling
+Brake & Bolt's initial invoice advances to 2026-10-28, activates the client and
+delivers 1 licence with 0 errors. The live registry itself was untouched.
+
+Doctrine: CONTEXT §2b (register states) and §5e (settling).
+
+## 2026-09-17 — the health sweep runs on a timer
 ## 2026-09-17 — the health sweep runs on a timer
 
 Owner: *"ok go ahead"* after the recommendation list — the first item (land the tree)

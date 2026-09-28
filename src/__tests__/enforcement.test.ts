@@ -327,16 +327,18 @@ describe('register states surfaced to the office', () => {
     });
   });
 
-  it('passes trial companies through and keeps a no-plan company trading', async () => {
+  it('passes running trials through and suspends a company that has never paid', async () => {
     expect(await stateFor({ trialEndsAt: daysFromToday(10), planId: null })).toEqual({
       registerState: 'trial',
       tradingBlocked: false,
     });
-    // L2 doctrine: a company without a plan or paid-through date derives active
-    // (Starter caps fallback) — so the register keeps trading, features empty.
+    // Changed with the 2026-09-25 state machine fix (production review,
+    // 2026-09-23): never-paid used to derive 'active' under the old L2 doctrine,
+    // which let a client who had paid nothing trade indefinitely. The register
+    // now refuses sales until the first invoice is settled.
     expect(await stateFor({ planId: null })).toEqual({
-      registerState: 'ok',
-      tradingBlocked: false,
+      registerState: 'suspended',
+      tradingBlocked: true,
     });
   });
 

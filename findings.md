@@ -1,5 +1,61 @@
 # Findings
 
+## 2026-09-25 — settling the review's billing findings, and what "paying" actually buys
+
+The production review (`review-23Sep2026.md`) was verified claim by claim against
+the code before anything was believed — the same rule as the 2026-09-12 review.
+Every P0 checked out. This pass covers its first bundle: settlement → entitlement.
+
+- **The deepest finding was one the reviewer only brushed: `purpose` was never
+  stored.** AGENTS.md documented `purpose` on POST and GET, the create routes
+  accepted it, the pro-rata and onboarding flows depended on it — and the invoices
+  table had no such column. It shaped the amounts at creation and vanished, so
+  settlement *could not* ask what a document was for. Fixing the settlement gate
+  meant persisting it first; the doc/code mismatch was real in both directions.
+- **Legacy rows cannot all be told apart, and the migration says so.** The
+  backfill labels what the stored shapes prove (`pro_rata` from its period stamp;
+  `onboarding` where the amount is exactly the setup fee and no recurring line
+  exists) and leaves the rest at `initial` — which advances, as those rows always
+  did. Guessing further would have fabricated history; the alternative was
+  labelling an unknowable renewal as a one-off and breaking its settlement. The
+  order lesson came free: the backfill needs columns that `migrateInvoiceLines`
+  adds later in boot, so it runs after that step — the legacy fixture caught the
+  first placement immediately.
+- **"Paying" and "extending" are now different facts.** Settlement marks the
+  document paid and records the payment; `paid_through` moves only for
+  `initial`/`renewal`. The response carries `periodAdvanced` and the UI's toast
+  says which happened — the old message announced "Subscription advanced" for a
+  settlement that had done no such thing.
+- **The amount recorded must be the amount invoiced.** The old code took whatever
+  figure was typed and marked the invoice paid in full. Partial settlements are a
+  ledger feature that does not exist, so a short payment is refused
+  (`payment_amount_mismatch`) rather than silently converting into a full one.
+- **One transaction for the financial writes, network outside it.** Payment,
+  document, setup-fee state and paid period commit or fail together; the licence
+  push stays outside because a delivery failure must never roll back money that
+  actually moved. Every settlement is audited (`invoice_settled`) with its
+  purpose — symmetric with `invoice_voided`, which was audited while settlement
+  was not.
+- **The strict state machine was an owner decision, not just a review finding.**
+  Never-paid-without-trial deriving 'active' was a recorded L2 doctrine decision
+  from 2026-09-11 ("keeps trading"). The review called it a hole; with the fleet
+  still dev-only the owner chose strictness, and the enforcement test that pinned
+  the old doctrine now pins the new one with the reasoning. On the live copy the
+  change is visible immediately: eight of eleven clients read `suspended`, which
+  is the honest answer to "is this customer entitled to trade".
+- **The sweep became the recovery mechanism the docs promised.** `licenceNeedsDelivery`
+  fires on a failed push or past half the offline window (`maxOfflineUntil` is
+  stamped at signing, so a paid-up store could drift into expiry with nothing
+  re-issuing), and deliberately never pushes to a store that did not answer. The
+  scheduler shipped on 2026-09-17 was the missing half: the review found the doc
+  promise and the scheduler found the mechanism to keep it.
+- **The custom-client renewal flow changed shape and needed saying.** A
+  hand-priced invoice used to double as a custom client's renewal by accident of
+  the old settlement rule. Now the create modal asks whether the charge bills the
+  period; choosing renewal is how a custom client's `paid_through` moves. Without
+  that select, fixing the gate would have silently broken custom renewals — the
+  kind of regression a green suite would not have explained.
+
 ## 2026-09-17 — a fleet page that reported history, and the number that proved it
 
 - **Sixty-four of sixty-four green lights, forty-nine of them wrong.** The registry

@@ -236,9 +236,19 @@ grace from env `LICENCE_GRACE_DAYS`).
 | `ok`         | Paid up, more than 7 days to run                           | trading normally              |
 | `warn`       | Paid up, subscription ends within 7 days                   | trading, renewal banner       |
 | `grace`      | Past paid-through, inside the grace window                 | trading, grace banner         |
-| `suspended`  | Grace over, or operator suspension                         | **new sales refused**         |
+| `suspended`  | Grace over, operator suspension, or never paid (no trial)  | **new sales refused**         |
 | `trial`      | Inside the trial window                                    | trading, trial banner         |
 | `unlicensed` | No company/plan behind the licence (informational licence) | trading, no entitlement gates |
+
+**Never-paid is `suspended`, not `active` (2026-09-25).** The derivation order in
+`deriveBillingState`: manual suspension → derive from `paid_through` (active →
+grace → suspended) → trial (running) → suspended. A client that has never paid
+anything and holds no trial used to fall through to `active` — so an expired
+trial, and a client that had never paid at all, traded free (production review,
+2026-09-23). The office activates a client by settling its initial invoice, which
+writes the first `paid_through`; the entitlements note says exactly that. This is
+a deliberate behaviour change from the L2 doctrine, made on the owner's call with
+the fleet still dev-only.
 
 **Tenant side — shipped 2026-09-12** (za-pos `CONTEXT.md` §14a): `requireFeature`
 middleware (402) gates the debtors/lay-bys routes, credit fields on customers,
@@ -777,6 +787,27 @@ Screens read it as *Voided*. A void keeps the invoice on the record and simply
 stops it being payable, releases the once-off onboarding charge if this was the
 last invoice carrying it (the response says `setupFeeReleased: true`, and the UI
 says so out loud), and is attributed in the audit trail as `invoice_voided`.
+
+**Settlement is purpose-gated (2026-09-25, from the production review of
+2026-09-23).** Paying an invoice advances `paid_through` only when the invoice is
+a subscription one — `initial` or `renewal`. Settling a standalone onboarding
+charge, a pro-rata increase or a hand-priced one-off records the payment and marks
+the document paid, and stops there: an invoice for R10 000 of onboarding used to
+buy a month of subscription, and R1 recorded against R5 000 marked it paid in
+full. Three things followed:
+
+- **The purpose is persisted on the invoice.** It used to be a creation-time
+  input that shaped the amounts and vanished, so settlement could not ask what a
+  document was for; it is now a column, backfilled where the stored shapes prove
+  it (`pro_rata` from its period stamp, `onboarding` from an amount that is
+  exactly the setup fee), and returned by GET.
+- **A hand-priced invoice says whether it bills the period.** The create modal
+  asks; this is how a custom-priced client renews, since the sweep cannot price
+  their deal. Default is a one-off charge that does not extend anything.
+- **The financial writes are one transaction**, and the licence push sits
+  outside it: a delivery failure is recorded on the registry rows and retried by
+  the sweep, never rolled back. Every settlement is audited (`invoice_settled`)
+  with its purpose and what it advanced.
 
 ### Charging once off (2026-09-16)
 

@@ -53,6 +53,9 @@ export interface InvoiceOut {
   setupFeeCents: number | null;
   /** What the charge is for — required on a hand-priced invoice. */
   description: string | null;
+  /** What the invoice was raised for. Settlement extends the paid period only
+   *  for `initial`/`renewal`. */
+  purpose: 'initial' | 'renewal' | 'manual' | 'onboarding' | 'pro_rata';
   /** The plan at the time of issue — a snapshot, not today's catalogue entry. */
   planCode: string | null;
   planName: string | null;
@@ -94,6 +97,7 @@ const invoiceToOut = (inv: InvoiceRecord): InvoiceOut => {
     terminalPriceCents: inv.terminal_price_cents ?? null,
     setupFeeCents: inv.setup_fee_cents ?? null,
     description: inv.description,
+    purpose: inv.purpose,
     planCode: inv.plan_code,
     planName: inv.plan_name,
     subtotalCents: inv.subtotal_cents,
@@ -241,6 +245,7 @@ billingRouter.post(
       invoice: invoiceToOut(result.invoice),
       payment: paymentToOut(result.payment),
       newPaidThrough: result.newPaidThrough,
+      periodAdvanced: result.periodAdvanced,
       licencePush: result.licencePush,
     });
   }),

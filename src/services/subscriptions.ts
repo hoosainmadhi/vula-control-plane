@@ -73,25 +73,40 @@ const dayString = (d: Date): string => d.toISOString().slice(0, 10);
 
 /**
  * Billing state from the paid-through date plus the configured grace window.
- * Order matters: a manual suspension outranks an overdue date, and a trial
- * outranks both while it is still running.
+ *
+ * Order matters, and every fallback is a decision:
+ *  - a manual suspension outranks everything — cutting a customer off is an
+ *    operator act, distinct from a customer being late;
+ *  - a paid period derives from `paid_through`: active, then grace, then
+ *    suspended;
+ *  - a trial is a free period: running is 'trial', ended is 'suspended';
+ *  - never paid anything, with no trial, is **not** 'active'. It used to be,
+ *    which is how an expired trial — and a client that had never paid at all —
+ *    traded free (production review, 2026-09-23). The office activates a client
+ *    by settling its initial invoice, which is what writes the first
+ *    `paid_through`; until then the register refuses new sales.
  */
 export function deriveBillingState(company: CompanyRecord, now: Date = new Date()): BillingState {
   if (company.status === 'suspended') return 'suspended';
 
-  if (company.trial_ends_at) {
-    const trialEnd = new Date(`${company.trial_ends_at}T23:59:59.000Z`);
-    if (now.getTime() <= trialEnd.getTime() && !company.paid_through) return 'trial';
+  if (company.paid_through) {
+    const paid = new Date(`${company.paid_through}T23:59:59.000Z`);
+    if (now.getTime() <= paid.getTime()) return 'active';
+
+    const graceEnd = new Date(paid.getTime());
+    graceEnd.setUTCDate(graceEnd.getUTCDate() + env.licenceGraceDays);
+    return now.getTime() <= graceEnd.getTime() ? 'past_due' : 'suspended';
   }
 
-  if (!company.paid_through) return 'active';
+  if (company.trial_ends_at) {
+    const trialEnd = new Date(`${company.trial_ends_at}T23:59:59.000Z`);
+    return now.getTime() <= trialEnd.getTime() ? 'trial' : 'suspended';
+  }
 
-  const paid = new Date(`${company.paid_through}T23:59:59.000Z`);
-  if (now.getTime() <= paid.getTime()) return 'active';
-
-  const graceEnd = new Date(paid.getTime());
-  graceEnd.setUTCDate(graceEnd.getUTCDate() + env.licenceGraceDays);
-  return now.getTime() <= graceEnd.getTime() ? 'past_due' : 'suspended';
+  // Never paid anything, and no trial was granted. This used to fall through to
+  // 'active', which defeated the licensing model for exactly the clients who had
+  // paid the least.
+  return 'suspended';
 }
 
 /** Resolve a company's plan into a full entitlement set. */
@@ -114,9 +129,21 @@ export function entitlementsFor(
       `Subscription is past due (paid to ${company.paid_through}) — inside the ${env.licenceGraceDays}-day grace window.`,
     );
   } else if (billingState === 'suspended') {
-    notes.push(
-      `Subscription lapsed on ${company.paid_through ?? 'an unpaid invoice'} and grace has ended — new sales are refused on this company's stores.`,
-    );
+    // 'suspended' covers three different stories; the note has to say which one
+    // the operator is looking at, because the recovery is different for each.
+    if (company.paid_through) {
+      notes.push(
+        `Subscription lapsed on ${company.paid_through} and grace has ended — new sales are refused on this company's stores.`,
+      );
+    } else if (company.trial_ends_at) {
+      notes.push(
+        `Trial ended ${company.trial_ends_at} with no payment — record the first invoice payment to activate this client.`,
+      );
+    } else {
+      notes.push(
+        'No payment recorded — raise the initial invoice and record its payment to activate this client.',
+      );
+    }
   } else if (billingState === 'trial') {
     notes.push(`Trial ends ${company.trial_ends_at}.`);
   }

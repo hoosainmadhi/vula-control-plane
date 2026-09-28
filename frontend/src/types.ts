@@ -283,6 +283,9 @@ export interface Invoice {
   setupFeeCents: number | null;
   /** What the charge is for — required on a hand-priced invoice. */
   description: string | null;
+  /** What the invoice was raised for. Settlement extends the paid period only
+   *  for `initial`/`renewal`. */
+  purpose: 'initial' | 'renewal' | 'manual' | 'onboarding' | 'pro_rata';
   /** The plan at the time of issue — a snapshot, not today's catalogue entry. */
   planCode: string | null;
   planName: string | null;

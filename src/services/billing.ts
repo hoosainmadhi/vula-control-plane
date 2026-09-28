@@ -1,8 +1,10 @@
 import {
   getCompanyById,
   getPlanById,
+  getRegistryDb,
   listStores,
   listPanelsForCompany,
+  recordAuditLog,
   recordLicencePush,
   recordPanelLicencePush,
   createInvoice as dbCreateInvoice,
@@ -18,6 +20,7 @@ import {
   updateCompany,
   type CompanyRecord,
   type InvoiceLines,
+  type InvoicePurpose,
   type PlanPeriod,
   type PlanRecord,
   type InvoiceRecord,
@@ -53,7 +56,13 @@ export const setupFeeInvoiceFor = (companyId: number): InvoiceRecord | undefined
 export interface RenewalResult {
   invoice: InvoiceRecord;
   payment: PaymentRecord;
-  newPaidThrough: string;
+  /**
+   * The paid period after settlement. Unchanged — and possibly null — when the
+   * invoice was not a subscription one; `periodAdvanced` says which happened.
+   */
+  newPaidThrough: string | null;
+  /** Whether this settlement extended the paid period. */
+  periodAdvanced: boolean;
   licencePush: {
     storesUpdated: number;
     panelsUpdated: number;
@@ -81,8 +90,12 @@ export interface AutomatedRenewalSummary {
  * has already been invoiced for a period (billing `initial` again would charge
  * the recurring line a second time); `renewal` is the sweep's recurring-only
  * invoice; `manual` carries an amount the office agreed.
+ *
+ * The union lives with the schema since 2026-09-25, when purpose became a stored
+ * column rather than a creation-time input that vanished before settlement could
+ * ask what the invoice was for.
  */
-export type InvoicePurpose = 'initial' | 'renewal' | 'manual' | 'onboarding' | 'pro_rata';
+export type { InvoicePurpose };
 
 export interface CreateInvoiceOptions {
   amountCents?: number;
@@ -454,6 +467,7 @@ export function createInvoiceForCompany(
   // already gone out.
   const linesWithTax = {
     ...lines,
+    purpose,
     subtotalCents: exclusiveCents(amountCents, settings.vat_rate),
     vatCents: vatPortionCents(amountCents, settings.vat_rate),
     vatRate: settings.vat_rate,
@@ -476,6 +490,43 @@ export function createInvoiceForCompany(
 /**
  * Process a payment against an invoice and advance subscription paid_through date.
  */
+export interface RenewalResult {
+  invoice: InvoiceRecord;
+  payment: PaymentRecord;
+  /**
+   * The paid period after settlement. Unchanged (and possibly null) when the
+   * invoice was not a subscription one — `periodAdvanced` says which happened.
+   */
+  newPaidThrough: string | null;
+  /** Whether this settlement extended the paid period. */
+  periodAdvanced: boolean;
+  licencePush: {
+    storesUpdated: number;
+    panelsUpdated: number;
+    errors: string[];
+  };
+}
+
+/**
+ * Settle an invoice: record the payment, mark the document paid, and — only when
+ * the invoice is a subscription one — advance the paid period.
+ *
+ * Purpose-gated (production review, 2026-09-23): settlement used to advance
+ * `paid_through` and set the company `active` regardless of what the invoice was
+ * for, so settling a standalone onboarding charge, a pro-rata increase or a
+ * hand-priced one-off bought a month of subscription. Only `initial` and
+ * `renewal` extend the period; `onboarding`, `manual` and `pro_rata` settle
+ * exactly what they describe and leave the subscription dates alone.
+ *
+ * The recorded amount must be the invoice total. The office records settlements
+ * that happened externally, and the old code marked an invoice paid for whatever
+ * figure was typed — R1 recorded against R5 000 extended the subscription.
+ *
+ * The financial writes are one transaction (payment, document, setup-fee state,
+ * paid period) so a crash cannot leave half a settlement behind. The licence
+ * push deliberately sits outside it: network failure must never roll back
+ * financial truth — it is recorded on the registry rows and the sweep retries.
+ */
 export async function processPaymentAndRenew(input: {
   invoiceId: number;
   amountCents?: number;
@@ -486,62 +537,96 @@ export async function processPaymentAndRenew(input: {
   const now = input.now ?? new Date();
   const invoice = getInvoiceById(input.invoiceId);
   if (!invoice) {
-    throw new Error(`Invoice ${input.invoiceId} not found`);
+    throw new HttpError(404, `Invoice ${input.invoiceId} not found`);
   }
   if (invoice.status === 'paid') {
-    throw new Error(`Invoice ${invoice.invoice_number} is already paid`);
+    throw new HttpError(409, `Invoice ${invoice.invoice_number} is already paid`);
   }
   if (invoice.status === 'cancelled') {
-    throw new Error(`Invoice ${invoice.invoice_number} is cancelled`);
+    throw new HttpError(409, `Invoice ${invoice.invoice_number} is cancelled`);
   }
 
   const company = getCompanyById(invoice.company_id);
   if (!company) {
-    throw new Error(`Company ${invoice.company_id} not found`);
+    throw new HttpError(404, `Company ${invoice.company_id} not found`);
   }
 
   const paymentAmount = input.amountCents ?? invoice.amount_cents;
-
-  // 1. Record completed payment
-  const payment = dbCreatePayment(
-    invoice.id,
-    company.id,
-    paymentAmount,
-    input.method,
-    input.transactionId,
-  );
-
-  // 2. Mark invoice paid
-  const updatedInvoice = dbUpdateInvoice(invoice.id, {
-    status: 'paid',
-    paidDate: now,
-  })!;
-
-  // The once-off onboarding charge is settled with the invoice that carried it.
-  if (
-    (invoice.setup_fee_cents ?? 0) > 0 &&
-    getSubscription(company.id)?.setup_fee_status === 'invoiced'
-  ) {
-    setSetupFeeStatus(company.id, 'paid');
+  if (!Number.isInteger(paymentAmount) || paymentAmount <= 0) {
+    throw new HttpError(
+      400,
+      'The recorded payment amount must be a positive whole number of cents.',
+      'payment_amount_invalid',
+    );
+  }
+  if (paymentAmount !== invoice.amount_cents) {
+    throw new HttpError(
+      400,
+      `The recorded amount (${formatCents2(paymentAmount)}) does not match the invoice total (${formatCents2(
+        invoice.amount_cents,
+      )}) for ${invoice.invoice_number}. Record the full settlement — partial payments are not supported — or void the invoice and raise it again with the agreed figure.`,
+      'payment_amount_mismatch',
+    );
   }
 
-  // 3. Compute and advance paid_through date
+  // Only a subscription invoice extends the paid period. `calculateRenewalDate`
+  // extends from an existing future paid_through, else from today.
+  const periodAdvanced = invoice.purpose === 'initial' || invoice.purpose === 'renewal';
   const plan = company.plan_id ? getPlanById(company.plan_id) : null;
   const billingPeriod = plan?.billing_period ?? 'monthly';
-  const newPaidThrough = calculateRenewalDate(company.paid_through, billingPeriod, now);
+  const newPaidThrough = periodAdvanced
+    ? calculateRenewalDate(company.paid_through, billingPeriod, now)
+    : company.paid_through;
 
-  updateCompany(company.id, {
-    paidThrough: newPaidThrough,
-    status: 'active',
+  // One transaction: a crash between these writes used to leave a payment
+  // recorded against an unpaid invoice, or the reverse.
+  const settle = getRegistryDb().transaction(() => {
+    const payment = dbCreatePayment(
+      invoice.id,
+      company.id,
+      paymentAmount,
+      input.method,
+      input.transactionId,
+    );
+
+    const updatedInvoice = dbUpdateInvoice(invoice.id, {
+      status: 'paid',
+      paidDate: now,
+    })!;
+
+    // The once-off onboarding charge is settled with the invoice that carried it.
+    if (
+      (invoice.setup_fee_cents ?? 0) > 0 &&
+      getSubscription(company.id)?.setup_fee_status === 'invoiced'
+    ) {
+      setSetupFeeStatus(company.id, 'paid');
+    }
+
+    if (periodAdvanced) {
+      updateCompany(company.id, {
+        paidThrough: newPaidThrough,
+        status: 'active',
+      });
+    }
+
+    recordAuditLog('office', 'invoice_settled', 'invoice', invoice.id, {
+      after: { amountCents: paymentAmount, purpose: invoice.purpose, periodAdvanced, newPaidThrough },
+      result: 'ok',
+    });
+
+    return { payment, updatedInvoice };
   });
+  const { payment, updatedInvoice } = settle();
 
-  // 4. Re-push licences to all company stores and Head Office panels
+  // Outside the transaction on purpose: a delivery failure is recorded on the
+  // registry rows and retried by the sweep — never rolled back.
   const licencePush = await pushLicencesForCompany(company.id);
 
   return {
     invoice: updatedInvoice,
     payment,
     newPaidThrough,
+    periodAdvanced,
     licencePush,
   };
 }

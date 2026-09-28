@@ -39,6 +39,12 @@ export default function BillingPage() {
   const [newDueDate, setNewDueDate] = useState<string>('');
   /** What the charge is for — required whenever an amount is entered. */
   const [newDescription, setNewDescription] = useState<string>('');
+  /**
+   * What a hand-priced invoice is for. Settlement extends the paid period only
+   * for a renewal — the office bills a custom-priced client's period by choosing
+   * it explicitly, and anything else settles without touching the subscription.
+   */
+  const [newPurpose, setNewPurpose] = useState<'manual' | 'renewal'>('manual');
   /** An unbilled once-off rides along unless the office waves it off. */
   const [includeOnboarding, setIncludeOnboarding] = useState(true);
   const [payMethod, setPayMethod] = useState<
@@ -114,6 +120,7 @@ export default function BillingPage() {
           amountCents,
           dueDate: newDueDate || undefined,
           description: newDescription.trim() || undefined,
+          purpose: amountCents !== undefined ? newPurpose : undefined,
           includeOnboarding,
         },
       });
@@ -123,6 +130,7 @@ export default function BillingPage() {
       setNewAmountRands('');
       setNewDueDate('');
       setNewDescription('');
+      setNewPurpose('manual');
       setIncludeOnboarding(true);
       loadData();
     } catch (err) {
@@ -168,7 +176,8 @@ export default function BillingPage() {
     try {
       const res = await api<{
         ok: boolean;
-        newPaidThrough: string;
+        newPaidThrough: string | null;
+        periodAdvanced: boolean;
         licencePush: { storesUpdated: number; panelsUpdated: number };
       }>(`/billing/invoices/${payModalInvoice.id}/pay`, {
         method: 'POST',
@@ -179,7 +188,11 @@ export default function BillingPage() {
       });
       setBanner({
         kind: 'ok',
-        message: `Payment confirmed! Subscription advanced to ${res.newPaidThrough}. Licences pushed to ${res.licencePush.storesUpdated} stores & ${res.licencePush.panelsUpdated} Head Office panels.`,
+        // The invoice states what it was for: only a subscription invoice moves
+        // paid-through, and the message has to match what actually happened.
+        message: res.periodAdvanced
+          ? `Payment confirmed! Subscription advanced to ${res.newPaidThrough}. Licences pushed to ${res.licencePush.storesUpdated} stores & ${res.licencePush.panelsUpdated} Head Office panels.`
+          : `Payment recorded. This invoice was not a subscription one, so paid-through is unchanged.`,
       });
       setPayModalInvoice(null);
       setPayTxId('');
@@ -732,6 +745,23 @@ export default function BillingPage() {
                   />
                   <p className="mt-1 text-[11px] text-slate-400">
                     This is the line the client reads on the invoice, the PDF and the email.
+                  </p>
+                  <label className="mt-3 block text-xs font-bold text-slate-700">
+                    Does settling it extend the subscription?
+                  </label>
+                  <select
+                    value={newPurpose}
+                    onChange={(e) => setNewPurpose(e.target.value as 'manual' | 'renewal')}
+                    className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm"
+                  >
+                    <option value="manual">No — a one-off charge (paid-through unchanged)</option>
+                    <option value="renewal">
+                      Yes — it bills the subscription period (extends paid-through)
+                    </option>
+                  </select>
+                  <p className="mt-1 text-[11px] text-slate-400">
+                    A custom-priced client's period is billed this way: pick “Yes” and record
+                    the payment to extend their paid-through date.
                   </p>
                 </div>
               ) : (

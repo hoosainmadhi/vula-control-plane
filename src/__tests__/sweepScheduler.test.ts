@@ -15,6 +15,8 @@ const summary: HealthSweepSummary = {
   panelsChecked: 0,
   upCount: 0,
   downCount: 0,
+  licencesRefreshed: 0,
+  licenceFailures: 0,
   errors: [],
 };
 

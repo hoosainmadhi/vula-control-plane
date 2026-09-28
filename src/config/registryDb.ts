@@ -138,6 +138,12 @@ const INVOICES_DDL = `
     terminal_price_cents INTEGER,
     setup_fee_cents      INTEGER,
     description          TEXT,
+    -- What the invoice was raised for. Persisted since 2026-09-25: settlement
+    -- extends the paid period only for 'initial'/'renewal', so the document has
+    -- to carry what it is for rather than the office remembering. Legacy rows
+    -- default to 'initial' (which advances, as they always did), and what the
+    -- stored columns can prove is backfilled at migration.
+    purpose              TEXT NOT NULL DEFAULT 'initial',
     -- The plan the subscription was on when the invoice was raised: a snapshot, so
     -- renaming a plan never restates what an issued invoice says.
     plan_code            TEXT,
@@ -690,6 +696,13 @@ export const getRegistryDb = (): Database.Database => {
   // What the charge is for — required on a manually-priced invoice, so a client
   // is never sent a bare "amount due".
   addInvoiceColumn('description', 'description TEXT');
+  // What the invoice was raised for. Persisted since 2026-09-25: settlement
+  // extends the paid period only for `initial`/`renewal` (production review,
+  // 2026-09-23 — settling a standalone onboarding charge used to buy a month of
+  // subscription). Legacy rows default to `initial`, which is what they did; the
+  // shapes the stored columns can prove are backfilled below, the rest is left
+  // alone rather than guessed at.
+  addInvoiceColumn('purpose', "purpose TEXT NOT NULL DEFAULT 'initial'");
   // The tax split. NULL on invoices raised before it existed: those documents
   // were issued without a split, and inventing one now would state a tax
   // breakdown that was never on them.
@@ -740,6 +753,17 @@ export const getRegistryDb = (): Database.Database => {
   seedPlans(db);
   refreshSeedPlanDefaults(db);
   migrateInvoiceLines(db);
+  // Purpose backfill — after `migrateInvoiceLines`, because legacy invoices only
+  // gain `terminal_count`/`setup_fee_cents` there, and the backfill derives
+  // purpose from exactly those columns. Both UPDATEs are idempotent no-ops once
+  // applied.
+  db.exec(`UPDATE invoices SET purpose = 'pro_rata' WHERE pro_rata_period IS NOT NULL`);
+  db.exec(
+    `UPDATE invoices SET purpose = 'onboarding'
+      WHERE terminal_count IS NULL AND terminal_price_cents IS NULL
+        AND setup_fee_cents IS NOT NULL AND amount_cents = setup_fee_cents
+        AND pro_rata_period IS NULL`,
+  );
   migrateSubscriptions(db);
   migrateBillingSettingsToPerCompany(db);
   return registry;
@@ -1669,6 +1693,9 @@ export interface InvoiceRecord {
   setup_fee_cents: number | null;
   /** What the charge is for. Required on a manually-priced invoice. */
   description: string | null;
+  /** What the invoice was raised for — a snapshot at issue. Settlement extends
+   *  the paid period only for `initial`/`renewal` (2026-09-25). */
+  purpose: InvoicePurpose;
   /** The plan at the time of issue (a snapshot); null on a hand-priced invoice. */
   plan_code: string | null;
   plan_name: string | null;
@@ -2192,7 +2219,13 @@ export const getInvoiceByNumber = (invoiceNumber: string): InvoiceRecord | null 
   return row ? (row as InvoiceRecord) : null;
 };
 
+/** What an invoice was raised for. Settlement extends the paid period only for
+ *  `initial`/`renewal`; the rest settle their own debt and stop there. */
+export type InvoicePurpose = 'initial' | 'renewal' | 'manual' | 'onboarding' | 'pro_rata';
+
 export interface InvoiceLines {
+  /** What the invoice was raised for; settlement gates the paid period on it. */
+  purpose?: InvoicePurpose;
   terminalCount?: number | null;
   terminalPriceCents?: number | null;
   setupFeeCents?: number | null;
@@ -2266,9 +2299,9 @@ export const createInvoice = (
     .prepare(
       `INSERT INTO invoices (company_id, invoice_number, amount_cents, due_date, status,
                              terminal_count, terminal_price_cents, setup_fee_cents, description,
-                             plan_code, plan_name, pro_rata_period,
+                             purpose, plan_code, plan_name, pro_rata_period,
                              subtotal_cents, vat_cents, vat_rate)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       companyId,
@@ -2281,6 +2314,7 @@ export const createInvoice = (
       lines?.terminalPriceCents ?? null,
       lines?.setupFeeCents ?? null,
       lines?.description ?? null,
+      lines?.purpose ?? 'initial',
       lines?.planCode ?? null,
       lines?.planName ?? null,
       lines?.proRataPeriod ?? null,

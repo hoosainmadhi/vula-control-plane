@@ -177,6 +177,10 @@ describe('L3 Billing & Invoicing', () => {
         companyId: company.id,
         amountCents: 75000,
         description: 'Agreed amount',
+        // A hand-priced invoice bills a custom client's period only when the
+        // office says so: without a purpose it is a one-off charge, and settling
+        // it leaves paid-through alone (2026-09-25).
+        purpose: 'renewal',
         includeOnboarding: false,
       })
       .expect(201);
