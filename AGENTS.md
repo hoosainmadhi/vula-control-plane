@@ -34,7 +34,9 @@ npm run dev          # concurrently: API on :3240 (tsx watch) + Vite on :3241
 npm run dev:api      # API only
 npm run dev:ui       # frontend only
 npm run stub         # dev store stub (tenant internal API) on :3299
-npm test             # jest+supertest (in-memory registry, mocked fetch)
+npm test             # backend: jest+supertest (in-memory registry, mocked fetch)
+npm run test:ui      # frontend: jsdom + Testing Library (frontend/jest.config.cjs)
+npm run test:all     # both suites — the full gate
 npm run typecheck    # backend tsc --noEmit
 npm run build        # backend tsc + frontend production build
 npm start            # run compiled dist/server.js (production)
@@ -219,6 +221,17 @@ ambiguity alive. See `CONTEXT.md` §2a. The same rule applies to what clients
 
 ## Testing conventions
 
+- **Two suites, explicitly.** `npm test` is the backend (jest + ts-jest +
+  supertest, `src/__tests__/**/*.test.ts`); `npm run test:ui` is the frontend
+  (`frontend/jest.config.cjs`, jsdom, `frontend/src/**/*.test.tsx?`); `npm run
+  test:all` runs both. Three constraints worth knowing before adding a frontend
+  test, all discovered the hard way: React is pinned to the app's copies in the
+  config (the root install has its own, and two copies fail every render with
+  "Invalid hook call"); jsdom has **no `fetch` and no `Response`**, so a network
+  test assigns a mock and uses a minimal response stand-in; and a *page* under
+  test cannot use `import.meta.env` (LoginPage does) unless it stops being
+  compiled as CommonJS. Test files are excluded from `frontend/tsconfig.app.json`
+  so the production build never needs Jest's types.
 - jest + ts-jest + supertest against `:memory:` SQLite. `src/__tests__/
 env-setup.ts` sets `CP_DB_PATH=':memory:'` + office env; `beforeEach`
   calls `resetRegistryDb()`; login helper in `helpers.ts`.

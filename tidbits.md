@@ -12,12 +12,13 @@
 
 ## Deferred from the operations pass (2026-09-25)
 
-- **Frontend tests (review §27).** Still none: the suite is backend-only. Setting
-  them up needs a tooling decision — Vitest (native to the Vite app, new deps) or
-  a second Jest project with jsdom (reuses the root toolchain, fewer deps) — and
-  the highest-value first targets are the surfaces this review touched: the
-  invoice-create modal's purpose/amount rules, the Record-payment outcome copy,
-  and the destructive confirmations.
+- **Frontend tests (review §27) — started 2026-09-25.** The harness exists
+  (Jest + jsdom via `frontend/jest.config.cjs`, `npm run test:ui`) with three
+  suites: the money formatter, the `api` wrapper's header/error contract, and the
+  store form's emitted payload. **Still uncovered, and the next targets:** the
+  invoice-create modal's purpose/amount rules, the Record-payment outcome copy
+  (`periodAdvanced`), the destructive confirmations (void, remove, pause), and
+  JWT expiry/logout — the first three are the surfaces this review changed.
 - **`registryDb.ts` split (review §26).** A 3,000-line file holding DDL,
   migrations, CRUD and the invoice-number sequence. Deferred to the next schema
   change, when the migration machinery has to be touched anyway; splitting it now

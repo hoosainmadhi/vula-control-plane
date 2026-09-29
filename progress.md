@@ -1,5 +1,33 @@
 # Progress
 
+## 2026-09-25 — Pass 4 (continued): the frontend suite exists
+
+Owner: *"go ahead with next task"*. The review's §27 — frontend coverage was
+effectively zero.
+
+- **Harness:** `frontend/jest.config.cjs` on jsdom, through the repo's existing
+  Jest rather than a second toolchain (two new dev dependencies:
+  `jest-environment-jsdom`, `@testing-library/react`). `npm test` stays the
+  backend suite; `npm run test:ui` is the frontend; `npm run test:all` is both
+  (365 tests). Test files are excluded from `frontend/tsconfig.app.json` so the
+  production build never needs Jest's types.
+- **Three suites, 22 tests:** the money formatter (`rand`'s em-dash for a missing
+  amount, `toCents` never returning a float, and the price label that says
+  *incl. VAT*); the `api` wrapper (bearer header from the token store, body
+  serialisation, `ApiError` carrying the server's own message); and
+  `StoreFormModal` (edit prefill, the credential field that starts empty and
+  never echoes a stored token, the payload it emits — untouched fields included —
+  and the disabled-while-saving guard).
+- Two things the harness had to solve, both recorded in AGENTS.md: React is
+  pinned to the app's copies (the root install has its own, and two copies fail
+  every render with "Invalid hook call"), and jsdom provides no `fetch`/`Response`,
+  so a network test assigns a mock and a minimal stand-in rather than spying.
+- Deliberately deferred (tidbits): page-level behaviour tests — the
+  invoice-create modal's purpose rules, the Record-payment outcome copy, the
+  destructive confirmations — because a page test also needs `import.meta.env`
+  handled, and those pages are monolithic.
+
+## 2026-09-25 — Pass 4: the daily billing tick, and nested onboarding payloads
 ## 2026-09-25 — Pass 4: the daily billing tick, and nested onboarding payloads
 
 Owner: *"go ahead with next task"*. The review's §19 and §22.

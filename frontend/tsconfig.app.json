@@ -15,5 +15,8 @@
     "skipLibCheck": true,
     "types": ["vite/client"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  // Tests are compiled by ts-jest with its own jest types (see frontend/jest.config.cjs);
+  // the app build must not type-check them or `npm run build` would need @types/jest.
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

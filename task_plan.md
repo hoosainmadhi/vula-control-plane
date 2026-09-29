@@ -26,8 +26,12 @@ and the wizard's nested `stores[]`/`headOffice` plus the upgrade route's
 `headOffice` are validated through the same helpers as the registry routes —
 closing a hole where a nested `baseUrl` bypassed the Pass 2 trust boundary, and
 a non-array `stores` produced a 500. Tests CP **343 green (26 suites)**.
-**Still open from the review:** frontend test coverage (§27 — needs a tooling
-choice) and the `registryDb.ts` split (§26 — deferred to the next schema change).
+**Frontend test coverage (§27) is started:** `frontend/jest.config.cjs` (Jest +
+jsdom, two added dev deps) with three suites and 22 tests over the money
+formatter, the `api` wrapper and the store form; `npm run test:all` runs
+backend + frontend (365 tests). Page-level behaviour tests remain (tidbits).
+**Still open from the review:** the `registryDb.ts` split (§26 — deferred to the
+next schema change).
 
 Previous — **Pass 2 of the production review — the trust boundary (2026-09-25,
 complete).**
