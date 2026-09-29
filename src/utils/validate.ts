@@ -1,4 +1,5 @@
 import { HttpError } from './errors.js';
+import { env } from '../config/env.js';
 
 /** Thrown by validation helpers; the global error handler maps it to 400 { error }. */
 export class ValidationError extends HttpError {
@@ -63,12 +64,116 @@ export const requireTerminalCount = (body: unknown): number => {
   return value;
 };
 
-/** Normalizes a store base URL: requires http(s) scheme, strips the trailing slash. */
-export const requireBaseUrl = (body: unknown): string => {
+const ipv4ToInt = (value: string): number | null => {
+  const parts = value.split('.');
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const octet = Number(part);
+    if (octet > 255) return null;
+    n = (n << 8) | octet;
+  }
+  return n >>> 0;
+};
+
+const inIpv4Cidr = (n: number, base: string, bits: number): boolean => {
+  const b = ipv4ToInt(base);
+  if (b === null) return false;
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return (n & mask) === (b & mask);
+};
+
+/**
+ * Ranges that are not the public internet. Dialling any of them from this
+ * server is SSRF by construction: loopback and RFC1918 are whatever else runs
+ * here, link-local carries the cloud metadata service at 169.254.169.254, and
+ * CGNAT is how some hosts front their own internal networks.
+ */
+const RESERVED_V4: ReadonlyArray<readonly [string, number]> = [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+];
+
+/** True when `host` is a literal address the control plane must never dial. */
+export const isReservedAddress = (host: string): boolean => {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (h.includes(':')) {
+    // ::ffff:10.0.0.1 is the same address as 10.0.0.1, so classify it as one.
+    const mapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(h)?.[1];
+    if (mapped) return isReservedAddress(mapped);
+    if (h === '::' || h === '::1') return true;
+    if (/^f[cd]/.test(h)) return true; // fc00::/7 unique local
+    if (/^fe[89ab]/.test(h)) return true; // fe80::/10 link-local
+    return false;
+  }
+  const n = ipv4ToInt(h);
+  if (n === null) return false;
+  return RESERVED_V4.some(([base, bits]) => inIpv4Cidr(n, base, bits));
+};
+
+/** Hostnames that name a metadata service rather than a machine. */
+const METADATA_HOSTNAMES = ['metadata.google.internal', 'metadata.goog'];
+const INTERNAL_SUFFIXES = ['.local', '.internal', '.localhost'];
+
+/**
+ * The one entry point for every URL this server is asked to dial while holding
+ * a secret — store and Head Office base URLs alike. Individual routes must not
+ * re-implement it: the review found four copies, and the two edit routes had
+ * none of the checks the create routes had.
+ *
+ * This is the synchronous half — shape and literal addresses. The DNS half
+ * lives in `assertManagedEndpoint`, because a public hostname can point at a
+ * private address and only resolution reveals that.
+ *
+ * The address policy is production-only on purpose: the dev fleet and the whole
+ * test suite register deployments on loopback, so a blanket refusal would break
+ * the system it is meant to protect.
+ */
+export const requireBaseUrl = (body: unknown, production = env.isProduction): string => {
   let url = requireString(body, 'baseUrl', MAX_URL_LENGTH);
   url = url.replace(/\/+$/, '');
   if (!/^https?:\/\//i.test(url)) {
     throw new ValidationError('baseUrl must start with http:// or https://');
+  }
+  const parsed = new URL(url);
+  if (!parsed.hostname) throw new ValidationError('baseUrl must name a host');
+  // Credentials embedded in the URL would be forwarded to wherever it points.
+  if (parsed.username || parsed.password) {
+    throw new ValidationError('baseUrl must not carry credentials');
+  }
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (METADATA_HOSTNAMES.includes(host) || host.endsWith('.google.internal')) {
+    throw new ValidationError('baseUrl points at a cloud metadata service');
+  }
+  if (production) {
+    if (parsed.protocol === 'http:') {
+      throw new ValidationError(
+        'baseUrl must use https:// in production — every push to it carries a secret token',
+      );
+    }
+    if (isReservedAddress(host)) {
+      throw new ValidationError(
+        'baseUrl is a private, loopback or link-local address, which the control plane will not call in production',
+      );
+    }
+    if (INTERNAL_SUFFIXES.some((suffix) => host.endsWith(suffix))) {
+      throw new ValidationError(
+        'baseUrl names an internal hostname, which the control plane will not call in production',
+      );
+    }
   }
   return url;
 };

@@ -20,10 +20,11 @@ import {
   ValidationError,
   optionalString,
   parseIdParam,
+  requireBaseUrl,
   requireSlug,
   requireString,
 } from '../utils/validate.js';
-import { pingPanel, probeAppKind, StoreClientError } from '../services/storeClient.js';
+import { assertManagedEndpoint, pingPanel, StoreClientError } from '../services/storeClient.js';
 import {
   deliverPanelLicence,
   type LicenceSequenceReconciliation,
@@ -130,29 +131,21 @@ panelsRouter.post(
     const name = requireString(req.body, 'name');
     const slug = requireSlug(req.body);
     const companyId = Number(req.body?.companyId);
-    const baseUrl = requireString(req.body, 'baseUrl', 300);
-    if (!/^https?:\/\//.test(baseUrl)) {
-      throw new ValidationError('baseUrl must start with http:// or https://');
-    }
+    const baseUrl = requireBaseUrl(req.body);
     const company = Number.isInteger(companyId) ? getCompanyById(companyId) : null;
     if (!company) throw new ValidationError('companyId does not match a known company');
     if (getPanelBySlug(slug)) {
       res.status(409).json({ error: `A panel with slug "${slug}" already exists` });
       return;
     }
-    // A Head Office row must point at a Head Office. A store deployment answers as
-    // `app: vula`, which can never authenticate as a panel — so say so plainly
-    // rather than letting it sit there showing "Down".
-    //
-    // Only a *definitive* mismatch is refused. An unreachable URL is allowed,
-    // because the registry row is normally created before the container is
-    // deployed, and 'unknown' is allowed for the same reason.
-    const probe = await probeAppKind(baseUrl);
-    if (probe.reachable && probe.kind === 'store') {
-      res.status(409).json({
-        error: `${baseUrl} is a store deployment, not a Head Office. A Head Office is a separate application on its own URL — see the Head Offices page for what that means.`,
-        code: 'wrong_app_kind',
-      });
+    // A Head Office row must point at a Head Office, and in production at a live
+    // public one — the same policy stores get, through the same helper. Only a
+    // definitive mismatch is refused: an unreachable URL and 'unknown' are
+    // allowed in development, because the row is normally created before the
+    // container is deployed.
+    const check = await assertManagedEndpoint(baseUrl, 'head-office');
+    if (!check.ok) {
+      res.status(check.status).json({ error: check.error, code: check.code });
       return;
     }
     const normalised = baseUrl.replace(/\/+$/, '');
@@ -224,11 +217,24 @@ panelsRouter.put(
     ) {
       throw new ValidationError('status must be active or paused');
     }
+    // The panel edit route previously accepted a new base URL with no validation
+    // at all — not even the scheme check the create route had. Repointing a Head
+    // Office moves every panel licence push to the new host, so it carries the
+    // same policy as creation.
+    let nextBaseUrl: string | undefined;
+    if (body.baseUrl !== undefined) {
+      nextBaseUrl = requireBaseUrl({ baseUrl: body.baseUrl });
+      if (nextBaseUrl !== panel.base_url) {
+        const check = await assertManagedEndpoint(nextBaseUrl, 'head-office');
+        if (!check.ok) {
+          res.status(check.status).json({ error: check.error, code: check.code });
+          return;
+        }
+      }
+    }
     const updated = updatePanel(panel.id, {
       ...(body.name !== undefined ? { name: String(body.name).trim() } : {}),
-      ...(body.baseUrl !== undefined
-        ? { baseUrl: String(body.baseUrl).trim().replace(/\/+$/, '') }
-        : {}),
+      ...(nextBaseUrl !== undefined ? { baseUrl: nextBaseUrl } : {}),
       ...(body.status !== undefined ? { status: body.status as 'active' | 'paused' } : {}),
     });
     res.json(panelToOut(updated!));

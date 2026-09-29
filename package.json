@@ -9,7 +9,7 @@
     "dev:api": "tsx watch server.ts",
     "dev:ui": "cd frontend && npm run dev",
     "start": "node dist/server.js",
-    "build": "tsc && cd frontend && npm run build",
+    "build": "tsc && cd frontend && npm run build && cd .. && node scripts/check-dist.mjs",
     "test": "jest",
     "test:watch": "jest --watch",
     "format": "prettier --write .",

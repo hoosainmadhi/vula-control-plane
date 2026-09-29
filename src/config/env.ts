@@ -87,6 +87,16 @@ export interface Env {
    * version and latency from the last time somebody looked.
    */
   healthSweepMinutes: number;
+  /**
+   * How many proxy hops sit in front of this server. Express trusts the
+   * X-Forwarded-For chain only that far, so `req.ip` is the real client rather
+   * than the load balancer. Zero (the default) trusts no proxy at all, which is
+   * the safe answer when the deployment is directly exposed: an untrusted
+   * X-Forwarded-For lets any caller choose the address the login limiter keys
+   * on, and trusting too many lets one spoofed hop collapse every client into
+   * one bucket.
+   */
+  trustProxyHops: number;
 }
 
 export const env: Env = {
@@ -110,6 +120,7 @@ export const env: Env = {
   // `|| 10` rather than `?? 10` so an empty variable means "the default", not
   // "zero", which would silently switch the schedule off.
   healthSweepMinutes: Number(process.env.HEALTH_SWEEP_INTERVAL_MINUTES || 10),
+  trustProxyHops: Math.max(0, Number(process.env.CP_TRUST_PROXY_HOPS || 0)),
 };
 
 export { logger };

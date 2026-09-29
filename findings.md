@@ -1,5 +1,64 @@
 # Findings
 
+## 2026-09-25 (pass 2) — the URL that carried the secret
+
+- **Four copies of a policy, two of them absent.** Store create and Head Office
+  create each implemented the app-kind probe inline (with slightly different
+  messages); store edit validated the shape but never probed; Head Office edit
+  did not even check the scheme — `String(body.baseUrl).trim()` straight into
+  the row. The asymmetry is the whole finding: creation was careful, editing was
+  not, and editing is the operation that moves an *existing* secret to a new
+  host. One helper now owns it, and the routes cannot drift because they have
+  nothing to drift.
+- **The sharpest edge was not the missing IP check; it was the missing re-probe.**
+  The review's headline was SSRF to cloud metadata. The more likely disaster in
+  this codebase was quieter: repoint a store at `https://attacker.example`, and
+  the next licence push hands over that store's token — no internal network
+  needed, just one authenticated PUT. Both are closed, but the re-probe is the
+  one that would have been forgotten if the fix had been "add an IP blocklist".
+- **A production-only policy, and the trade is written down.** The dev fleet and
+  every test in the suite register `http://localhost:32xx`, so blanket refusal
+  would break the system it protects. The address policy therefore applies when
+  `env.isProduction`, and it is deliberately *stricter* there in a second way:
+  an unreachable URL is refused in production, because the token leaves on the
+  first push, while development keeps allowing it (rows precede containers).
+  Two behaviours on one input, chosen by environment, each documented where it
+  is implemented.
+- **A test that reads a build artifact reports on the last build.** I added a
+  test scanning `frontend/dist` for the dev credentials; it failed — legitimately
+  — because the earlier `npm run build` had died on a typecheck error, so the
+  artifact predated the fix. A unit test can only ever describe the last build,
+  and it will report a false failure the moment the source is newer. The check
+  moved into `scripts/check-dist.mjs`, wired into `npm run build`, where the
+  artifact and the assertion are created together; the suite keeps the source
+  guard, which is what it can actually verify.
+- **Two fixture lessons from the new suite, both in one run.** (1) The first
+  run's failures were not the code: `makeCompany` seeded neither
+  `licensedTerminalCount` nor `paidThrough`, so every store create under it was
+  refused 402 — the same fixture fix Pass 1 needed in two other suites, which is
+  itself the signal that "a client fixture is a paying client" belongs in a
+  shared helper rather than copied per suite. (2) Half the remaining noise was
+  `mockResolvedValue` handing the *same* `Response` object to several calls; a
+  body can be read once, so the later reads threw "Body is unusable". A fresh
+  `Response` per call is what the other suites already do.
+- **The limiter needed two dimensions, not one.** Keyed by address alone, one
+  bad actor behind a shared NAT (or the proxy address before `trust proxy` was
+  configured) locks out every user; keyed by account alone, one IP can hammer
+  unlimited accounts. The login limiter now enforces both and refuses if either
+  bucket is full, and a refused request does not extend the window it was
+  refused for — otherwise the limiter itself keeps the door shut.
+- **`trust proxy` is a security setting, not plumbing.** The default here is 0
+  hops, which ignores `X-Forwarded-For` entirely. Trusting it unprompted would
+  let any caller choose the address the login limiter keys on — a lockout is the
+  mild version of that; evasion is the worse one. The value is explicit because
+  only the deployment knows its topology.
+- **Verification that the policy is real, not just unit-tested.** The suite
+  exercises the production branch through a parameter seam; the deployment also
+  refuses all seven cases when booted with `NODE_ENV=production` against a copy
+  of the live registry — plaintext, loopback, RFC1918, the metadata address and
+  hostname, an internal hostname, and an unreachable public URL — each with the
+  rule that refused it named in the message.
+
 ## 2026-09-25 (pass 3) — the delete guard, the un-clearable column, and a transaction that never ran
 
 - **`db.transaction(fn)` returns a function; it does not run it.** The

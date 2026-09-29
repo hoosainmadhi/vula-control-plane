@@ -1,5 +1,7 @@
 import { terminalRoster, type StoreRecord } from '../config/registryDb.js';
 import { env } from '../config/env.js';
+import { isReservedAddress } from '../utils/validate.js';
+import { promises as dns } from 'node:dns';
 
 /**
  * Client for a store's tenant-side internal API (/api/internal/*). Every call
@@ -182,6 +184,98 @@ export const probeAppKind = async (
       detail: err instanceof Error ? err.message : String(err),
     };
   }
+};
+
+export type ManagedKind = 'store' | 'head-office';
+
+export interface EndpointCheck {
+  ok: boolean;
+  /** Present when `ok` is false. */
+  code?: 'endpoint_private' | 'endpoint_unreachable' | 'wrong_app_kind';
+  error?: string;
+  /** HTTP status to answer with; 409 is a genuine conflict, 400 a policy refusal. */
+  status: number;
+  kind?: AppKind;
+}
+
+/**
+ * The asynchronous half of the managed-endpoint policy. `requireBaseUrl` has
+ * already refused the shape and any literal private address; this resolves the
+ * hostname — a public name can still point inward, and only resolution reveals
+ * that — and confirms the deployment identifies as the kind of application the
+ * row claims to point at.
+ *
+ * Refusing an unreachable URL is production-only, because a registry row is
+ * normally created before its container is deployed. In production that ordering
+ * is not acceptable for a URL this server will dial while holding a secret: the
+ * token goes out on the first push, so the host must prove it is live and the
+ * right product before the row is saved.
+ *
+ * Residual risk, stated rather than hidden: resolution here and the later
+ * `fetch` are independent, so a fast-rebinding DNS record could differ between
+ * the two. Closing that needs the resolved address pinned into the connection
+ * (a custom dispatcher), which is deliberately out of scope for this pass.
+ */
+export const assertManagedEndpoint = async (
+  baseUrl: string,
+  expected: ManagedKind,
+  production = env.isProduction,
+): Promise<EndpointCheck> => {
+  const host = new URL(baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (production) {
+    if (isReservedAddress(host)) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'endpoint_private',
+        error: `${host} is a private, loopback or link-local address, which the control plane will not call in production`,
+      };
+    }
+    try {
+      const answers = await dns.lookup(host, { all: true, verbatim: true });
+      const inward = answers.find((a) => isReservedAddress(a.address));
+      if (inward) {
+        return {
+          ok: false,
+          status: 400,
+          code: 'endpoint_private',
+          error: `${host} resolves to ${inward.address}, which is not a public address — the control plane will not call it in production`,
+        };
+      }
+    } catch {
+      // Unresolvable falls through to the probe, which reports it unreachable.
+    }
+  }
+
+  const probe = await probeAppKind(baseUrl);
+  if (!probe.reachable) {
+    if (production) {
+      return {
+        ok: false,
+        status: 400,
+        code: 'endpoint_unreachable',
+        error: `${baseUrl} does not answer (${probe.detail ?? 'no response'}). In production a managed URL must be live before it is registered — otherwise the first licence push sends a secret token to a host that cannot identify itself.`,
+      };
+    }
+    return { ok: true, status: 200, kind: probe.kind };
+  }
+
+  const mismatched =
+    (expected === 'store' && probe.kind === 'head-office') ||
+    (expected === 'head-office' && probe.kind === 'store');
+  if (mismatched) {
+    const found = probe.kind === 'store' ? 'a store deployment' : 'a Head Office deployment';
+    const wanted = expected === 'store' ? 'a store' : 'a Head Office';
+    const elsewhere = expected === 'store' ? 'the Head Offices page' : 'the Stores page';
+    return {
+      ok: false,
+      status: 409,
+      code: 'wrong_app_kind',
+      error: `${baseUrl} is ${found}, not ${wanted}. Register it on ${elsewhere} instead.`,
+      kind: probe.kind,
+    };
+  }
+  return { ok: true, status: 200, kind: probe.kind };
 };
 
 /** Pings GET /api/internal/status; resolves with the store's status body. */

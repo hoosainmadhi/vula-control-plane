@@ -16,7 +16,26 @@ CONTEXT.md "Internal API contract").
 
 ## Current Phase
 
-**Pass 3 of the production review — client lifecycle (2026-09-25, complete).**
+**Pass 2 of the production review — the trust boundary (2026-09-25, complete).**
+Owner: *"push / move on to phase 2"*. One managed-endpoint policy
+(`requireBaseUrl` + `assertManagedEndpoint`) now backs store create, store edit,
+Head Office create and Head Office edit — the two edit routes previously changed
+a base URL with no probe, so a row could be repointed and the next licence push
+would send that store's token to the new host. Production refuses plaintext,
+private/loopback/link-local/CGNAT/metadata addresses (literal and resolved) and
+unreachable hosts; development keeps allowing loopback and unreachable rows, as
+the fleet requires. The login limiter is proxy-aware
+(`CP_TRUST_PROXY_HOPS`, default 0), enforced per address *and* per account, and
+no longer extended by the requests it refuses. The dev-credentials hint is
+DEV-only and `npm run build` fails if it survives minification. Tests CP **328
+green (25 suites)**; typecheck and both builds clean; verified in production
+mode against a copy of the live registry (all seven refusals). Doctrine:
+CONTEXT §3a. **Remaining from the review:** Pass 4 (overdue tick, nested wizard
+validation, frontend tests, registryDb split); the unowned `companies.ts` hunk;
+and tidbits' limiter-storage and DNS-rebind items.
+
+Previous — **Pass 3 of the production review — client lifecycle (2026-09-25,
+complete).**
 Owner: *"lets go ahead with pass 3"*. Company delete now blocks on invoice
 history (financial records are retained; suspension is the off-ramp, and a
 successful delete is audited `company_deleted`); `updateCompany` switched from

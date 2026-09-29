@@ -10,6 +10,22 @@
   Related ideas that are consequently _not_ backlog: support retainers, per-branch
   support fees, support call-out charges.
 
+## Deferred from the trust-boundary pass (2026-09-25)
+
+- **The login limiter is per-process.** A restart clears the counters, and two
+  replicas do not share them. Fine for one office login endpoint on one
+  instance; shared storage (Redis) is the upgrade path the moment the control
+  plane runs more than one way.
+- **DNS resolution and the later fetch are independent**, so a record that
+  rebinds between the two is not caught by the address policy. Closing it means
+  pinning the resolved address into the connection (a custom dispatcher) — the
+  same technique the tenant's image fetcher uses.
+- **No production domain allowlist.** The review suggested requiring an approved
+  deployment domain (`*.stores.<vendor-domain>`); the policy today refuses
+  private addresses and requires the host to identify as Vula, which does not
+  constrain *which* public host. Needs an owner decision about the naming scheme
+  before it can be enforced.
+
 ## Deferred from the licence-counter pass (2026-09-16)
 
 - **Decide what to do about prettier drift.** The committed tree is not clean under

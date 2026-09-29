@@ -91,9 +91,11 @@ export default function LoginPage() {
           >
             {busy ? 'Signing in…' : 'Sign in'}
           </button>
-          <p className="text-center text-xs text-slate-400">
-            Dev default: admin@za-pos.local / temp123 (OFFICE_ADMIN_* env vars)
-          </p>
+          {import.meta.env.DEV && (
+            <p className="text-center text-xs text-slate-400">
+              Dev default: admin@za-pos.local / temp123 (OFFICE_ADMIN_* env vars)
+            </p>
+          )}
         </form>
       </div>
     </div>

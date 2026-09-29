@@ -13,7 +13,18 @@ const officeAdminHash = bcrypt.hashSync(env.officeAdminPassword, 10);
 
 authRouter.post(
   '/login',
-  rateLimiter({ windowMs: 15 * 60 * 1000, max: 20, label: 'office-login' }),
+  rateLimiter({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    label: 'office-login',
+    // Enforced per source address and per account, both. Account-only would let
+    // one IP hammer unlimited addresses; IP-only would let a shared NAT address
+    // or a distributed attempt lock out the legitimate admin.
+    accountKey: (req) =>
+      typeof req.body?.email === 'string' && req.body.email
+        ? String(req.body.email).trim().toLowerCase()
+        : undefined,
+  }),
   asyncHandler(async (req, res) => {
     const email = requireEmail(req.body);
     const password = requirePassword(req.body);

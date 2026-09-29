@@ -304,6 +304,43 @@ unreachable store costs a timeout, and stacking sweeps would turn a slow fleet
 into a growing queue of network calls), and the first sweep is **one interval
 after boot**, never at boot, so a restart loop cannot hammer the fleet.
 
+## 3a. The managed-endpoint trust boundary (2026-09-25)
+
+Every store and Head Office URL this server dials is a place it sends a secret:
+the per-store `CONTROL_PLANE_TOKEN` on every configure, health, licence and
+admin call. That makes the base URL a trust boundary rather than a field — and
+the review found it enforced four different ways, two of them (the edit routes)
+not at all, so an existing row could be repointed at an attacker's host with one
+PUT and the next licence push would deliver the token there.
+
+One helper now owns the policy — `requireBaseUrl` (shape, synchronous) and
+`assertManagedEndpoint` (resolution and identity, asynchronous) — and it is
+used by store create, store edit, Head Office create and Head Office edit.
+Individual routes must not re-implement it: that is how the four copies drifted
+apart in the first place.
+
+- **Shape**, in every environment: `http`/`https` only, no credentials embedded
+  in the URL, a real host.
+- **Address policy**, production only: `https` required (every push carries a
+  secret), and private, loopback, link-local, CGNAT, multicast, reserved and
+  cloud-metadata addresses refused — both as literals and as a resolution
+  result. A public hostname that resolves inward is the case only resolution
+  catches, so the helper resolves it.
+- **Identity**: the deployment must answer its public `/health` and, when it
+  identifies itself, identify as the right product; a mismatch is 409
+  `wrong_app_kind`. In production an unreachable URL is refused as well, because
+  the token goes out on the first push — the host must be live before the row is
+  saved. Development allows unreachable and unidentified hosts on purpose: the
+  fleet is loopback, and a row is normally created before its container is
+  deployed.
+
+**Residual risk, stated rather than hidden**: resolution and the later `fetch`
+are independent, so a DNS record that rebinds between them is not caught, and
+there is no domain allowlist. Closing both is tracked in `tidbits.md`. What is
+closed is the review's scenario: a row cannot be left pointing at an
+unvalidated host, because the host has to identify as Vula before anything is
+saved.
+
 ## 4. Internal API contract (CP-authored)
 
 This section is the authoritative wire contract. The tenant side shipped

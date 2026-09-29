@@ -1,5 +1,38 @@
 # Progress
 
+## 2026-09-25 — Pass 2 of the production review: the trust boundary
+
+Owner: *"push / move on to phase 2"*. The review's §8, §9, §12 and §13 — the
+outbound-call and login surfaces.
+
+- **One managed-endpoint policy, everywhere.** `requireBaseUrl` (shape) plus
+  `assertManagedEndpoint` (DNS resolution + identity) now back store create,
+  store edit, Head Office create and Head Office edit. The two edit routes had
+  no probe at all, so a row could be repointed at an attacker's host and the
+  next licence push would carry the store's token there — that is the hole
+  this closes.
+- **Production address policy:** `https` required, and private / loopback /
+  link-local / CGNAT / metadata addresses refused as literals *and* as
+  resolution results; metadata hostnames and internal suffixes refused. An
+  unreachable URL is refused in production too (the token leaves on the first
+  push) but still allowed in development, where the fleet is loopback and rows
+  precede containers.
+- **Proxy-aware login limiter:** `CP_TRUST_PROXY_HOPS` (default 0 — ignore
+  `X-Forwarded-For` entirely), enforced per address *and* per account, with a
+  refused request no longer extending the window, and expired buckets swept.
+- **Dev credentials hint** behind `import.meta.env.DEV`, and `npm run build`
+  now fails if it survives minification (`scripts/check-dist.mjs`).
+- Residual, recorded in tidbits: the limiter is per-process (a restart clears
+  it, two replicas do not share it), DNS resolution and the later fetch are
+  independent (a fast rebind is not caught without pinning the resolved IP),
+  and there is no production domain allowlist yet.
+
+Tests CP **328 green (25 suites)** — 18 of them new in
+`managedEndpoint.test.ts`; backend typecheck, frontend `tsc -b`, the
+production build and the new dist check all clean. Verified on a copy of the
+live registry booted with `NODE_ENV=production`: all seven refusals fire with
+the specific rule named. Live registry untouched.
+
 ## 2026-09-25 — Pass 3 of the production review: client lifecycle
 
 Owner: *"lets go ahead with pass 3"*. Four items, each verified against the

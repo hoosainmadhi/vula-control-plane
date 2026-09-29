@@ -3,6 +3,7 @@ import path from 'path';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import { apiRouter } from './routes/index.js';
 import { errorHandler, notFoundHandler } from './middleware/error.js';
+import { env } from './config/env.js';
 
 const APP_NAME = 'vula-control-plane';
 const APP_VERSION = '1.0.0';
@@ -21,6 +22,12 @@ const securityHeaders = (_req: Request, res: Response, next: NextFunction): void
 export const createApp = (): Express => {
   const app = express();
   app.disable('x-powered-by');
+  // Behind Coolify/Traefik the socket address is the proxy, so without this the
+  // login limiter sees every client as one IP and a single bad actor locks out
+  // the whole fleet. The default is 0 hops, which ignores X-Forwarded-For
+  // outright: trusting it unprompted would let any caller choose the address
+  // the limiter keys on.
+  app.set('trust proxy', env.trustProxyHops);
   app.use(securityHeaders);
   app.use(express.json({ limit: '100kb' }));
 

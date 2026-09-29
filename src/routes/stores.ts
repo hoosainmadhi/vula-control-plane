@@ -31,7 +31,7 @@ import {
   pushTerminals,
   ping,
   fetchTelemetry,
-  probeAppKind,
+  assertManagedEndpoint,
   StoreClientError,
 } from '../services/storeClient.js';
 import { runStoreProvisioning } from '../services/storeProvisioning.js';
@@ -415,14 +415,13 @@ storesRouter.post(
         'controlPlaneToken must be 64 lowercase hex characters when supplied',
       );
     }
-    // A store row must point at a store. Pointing it at a Head Office can never
-    // authenticate, so refuse while the URL is reachable and identifies as one.
-    const probe = await probeAppKind(baseUrl);
-    if (probe.reachable && probe.kind === 'head-office') {
-      res.status(409).json({
-        error: `${baseUrl} is a Head Office deployment, not a store. Register it on the Head Offices page instead.`,
-        code: 'wrong_app_kind',
-      });
+    // A store row must point at a store, and in production at a live public one.
+    // Every push to this URL carries the store's secret token, so an unvalidated
+    // URL is an exfiltration channel, not just a broken row (production review,
+    // 2026-09-23).
+    const check = await assertManagedEndpoint(baseUrl, 'store');
+    if (!check.ok) {
+      res.status(check.status).json({ error: check.error, code: check.code });
       return;
     }
 
@@ -587,6 +586,17 @@ storesRouter.put(
     if (body['vertical'] !== undefined) input.vertical = optionalVertical(body);
     if (body['terminalCount'] !== undefined) input.terminalCount = requireTerminalCount(body);
     if (body['baseUrl'] !== undefined) input.baseUrl = requireBaseUrl(body);
+    // Repointing a store is the sharpest edge in the registry: the next licence
+    // push carries this store's token to wherever the URL now points. The create
+    // route proved the URL identified as a store; the edit route proved nothing,
+    // so an existing row could be moved to an attacker's host with one PUT.
+    if (input.baseUrl !== undefined && input.baseUrl !== store.base_url) {
+      const check = await assertManagedEndpoint(input.baseUrl, 'store');
+      if (!check.ok) {
+        res.status(check.status).json({ error: check.error, code: check.code });
+        return;
+      }
+    }
     if (body['environment'] !== undefined) input.environment = optionalEnvironment(body);
     // Reconciling a store whose deployment already holds a token of its own —
     // the repair for "Invalid control plane token". Never returned anywhere, and
