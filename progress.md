@@ -1,5 +1,37 @@
 # Progress
 
+## 2026-09-25 — Pass 3 of the production review: client lifecycle
+
+Owner: *"lets go ahead with pass 3"*. Four items, each verified against the
+review's claim before being fixed:
+
+- **Company delete blocks on financial history** — `companyBlockers` now counts
+  invoices; 409 `company_in_use` names the retention rule when it is the money
+  that blocks; a successful delete (a row that never transacted) is audited
+  `company_deleted`.
+- **`updateCompany` presence-flag semantics** — absent = unchanged, explicit
+  null = clears; the old COALESCE could never clear `plan_id`, `paid_through`
+  or `trial_ends_at`.
+- **Atomic client/company edits** — the whole PUT in one transaction, the
+  licence push outside it; a refused allocation no longer leaves a half-applied
+  edit behind an error message.
+- **Pause-first panel teardown** — `DELETE /panels/:id` 409 `panel_active`
+  while active; `PUT` validates `status`; Pause/Resume beside Remove on the
+  Head Office tab and the Panels page.
+
+Caught and fixed mid-pass: `db.transaction(fn)` returns a wrapper — the two new
+transactions were assigned and never invoked, so the routes silently did
+nothing until five tests failed at once (findings, pass 3 entry). The house
+pattern was already in `billing.ts`.
+
+Tests CP **310 green (24 suites)**; backend typecheck, frontend `tsc -b` and
+the production build clean. Verified on a copy of the live registry: an atomic
+edit rolls the name back on a refused allocation; `paidThrough: null` clears and
+derives `suspended` with the activation note; panel delete is 409 → pause →
+delete; a company with 2 invoices is blocked with `blockers.invoices: 2`. Live
+registry untouched. Pass 2 (URL/SSRF, proxy-aware limiter, login dev-hint gate)
+remains queued.
+
 ## 2026-09-25 — Pass 1 of the production review: settlement → entitlement
 
 Owner: *"see attached and advise"* on `review-23Sep2026.md`, then *"continue with

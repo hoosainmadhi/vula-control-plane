@@ -809,6 +809,36 @@ full. Three things followed:
   the sweep, never rolled back. Every settlement is audited (`invoice_settled`)
   with its purpose and what it advanced.
 
+### Deleting and editing a client (2026-09-25)
+
+**A client with financial history cannot be deleted.** Invoices — and the
+payments on them — cascade away with the company row, so `DELETE /companies/:id`
+is refused with 409 `company_in_use` whenever the client owns stores, a Head
+Office, **or any invoice at all**. Suspension is the way to stop a client
+trading without losing the record; deletion is only for a row that never
+transacted (a duplicate made by mistake), and a successful one is audited
+`company_deleted` — that is the deletion worth being able to find later.
+
+**A client edit is one operation.** `PUT /clients/:id` and `PUT /companies/:id`
+apply the profile, the plan, the purchased quantity, the allocations and the
+once-off state inside a single transaction: a refused allocation no longer
+leaves a renamed or re-planned client sitting behind an error message. The
+licence push stays outside — a delivery failure is recorded and retried by the
+sweep, never rolled back with the edit.
+
+**Presence-flag updates.** On these endpoints an absent field is unchanged and
+an explicit `null` clears: `paidThrough: null` and `trialEndsAt: null` really
+remove the dates. The old `updateCompany` COALESCEd every column, so the API
+could set but never clear — an expired trial was un-clearable and a wrongly
+entered paid-through date permanent short of hand-edited SQL, while the routes
+and the office's empty date fields had been treating null as "clear" all along.
+
+**A Head Office registration tears down pause-first, like a store.** `DELETE
+/panels/:id` is refused with 409 `panel_active` while the panel is active; pause
+it (`PUT {status: 'paused'}`) and then remove it. The panel deployment keeps
+running either way — the guard exists so the control plane stops managing a live
+system deliberately, not by surprise.
+
 ### Charging once off (2026-09-16)
 
 **Support is not a separate charge — it is included in the per-terminal rate**

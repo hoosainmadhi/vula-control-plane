@@ -1,5 +1,53 @@
 # Findings
 
+## 2026-09-25 (pass 3) — the delete guard, the un-clearable column, and a transaction that never ran
+
+- **`db.transaction(fn)` returns a function; it does not run it.** The
+  better-sqlite3 API hands back a wrapper you must invoke, and the two new
+  transactions in the client/company PUTs assigned it and moved on — so the
+  routes read the untouched row back and answered 200 having written nothing.
+  Five tests failed at once, which is what a no-op refactor looks like. The tell
+  was an instrumented `updateCompany` that never logged: the function was never
+  called. The house pattern was already in the codebase (`billing.ts` does
+  `const settle = db.transaction(…); settle()`); the new code simply didn't
+  follow it. Lesson: when a change moves writes into a transaction, assert the
+  writes still happen — the presence-flag test caught this only because it
+  asserted the *effect* (null clears), not the call.
+- **A guard is only as good as what it counts.** Company deletion blocked
+  stores and Head Offices but not invoices — and invoices, with their payments,
+  cascade away with the company. A billing system that can erase a client's
+  financial history by deleting the client row is not a billing system. The
+  blocker now counts invoices, and when it is the money that blocks, the advice
+  changes: you cannot fix that one by reassigning rows, so the message says
+  *suspend instead*, not *remove those first*.
+- **COALESCE is a write API with one hand tied.** `updateCompany` COALESCEd
+  every column, so the API could set but never clear — an expired trial was
+  un-clearable and a wrong paid-through date permanent, while the routes (and
+  the office's empty date fields) had been treating null as "clear" all along.
+  Presence-flag semantics — absent = unchanged, explicit null = clear — is what
+  the callers already assumed; the helper just never delivered it.
+- **Atomicity is about the failure path, and the failure path is where half-done
+  lives.** The client PUT wrote the company fields, then validated allocations,
+  then pushed licences — so a refused allocation left a renamed, re-planned
+  client behind an "Update failed" toast. The operator's mental model is "the
+  edit failed, nothing changed"; the data said otherwise. One transaction per
+  logical operation, with the network push deliberately outside it.
+- **A probe that reads `None` for two keys is telling you about the probe.**
+  Verifying the null-clearing fix against a copy of the live registry, the first
+  probe reported FAIL: `paidThrough` cleared but `billingState` came back `None`
+  too. The response had been slow (three licence pushes to unreachable stores at
+  5 s each) and the helper had silently fallen back to a raw-string dict — both
+  keys missing, not one. The raw dump showed 200 with `billingState: 'suspended'`
+  and the activation note: the code was right and the test harness was lying.
+  On this surface, assert on the parsed body or dump the raw response; a silent
+  fallback turns a pass into a false failure, and the temptation then is to
+  "fix" working code.
+- **Pause-first belongs on every teardown of a managed deployment.** Stores had
+  it since 2026-09-10; panels did not. The rule is not about the registry row —
+  it is about the surprise of the control plane ceasing to manage a live system.
+  Same guard, same message shape, same UI affordance (Pause beside Remove) on
+  both panel surfaces.
+
 ## 2026-09-25 — settling the review's billing findings, and what "paying" actually buys
 
 The production review (`review-23Sep2026.md`) was verified claim by claim against

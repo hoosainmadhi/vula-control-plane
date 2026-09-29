@@ -382,6 +382,28 @@ export default function ClientDetailPage() {
     setPanelEditOpen(true);
   };
 
+  // Pause-first teardown: a panel cannot be removed while active, so pausing has
+  // to be reachable from the same row of actions as Remove.
+  const togglePanelPause = async (): Promise<void> => {
+    if (!headOffice) return;
+    setError(null);
+    try {
+      await api(`/panels/${headOffice.id}`, {
+        method: 'PUT',
+        body: { status: headOffice.status === 'active' ? 'paused' : 'active' },
+      });
+      notify(
+        'ok',
+        headOffice.status === 'active'
+          ? `${headOffice.name} paused — remove it or resume it from here`
+          : `${headOffice.name} resumed`,
+      );
+      await loadData();
+    } catch (err) {
+      notify('error', err instanceof Error ? err.message : 'Panel status change failed');
+    }
+  };
+
   const savePanelEdit = async (): Promise<void> => {
     if (!headOffice) return;
     setPanelSaving(true);
@@ -1030,6 +1052,18 @@ export default function ClientDetailPage() {
                   className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
                 >
                   Push Licence
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void togglePanelPause()}
+                  title={
+                    headOffice.status === 'active'
+                      ? 'Stop the control plane managing this panel (the deployment keeps running)'
+                      : 'Resume managing this panel'
+                  }
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                >
+                  {headOffice.status === 'active' ? 'Pause' : 'Resume'}
                 </button>
                 <button
                   type="button"

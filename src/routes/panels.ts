@@ -218,6 +218,12 @@ panelsRouter.put(
     if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim())) {
       throw new ValidationError('name must be a non-empty string');
     }
+    if (
+      body.status !== undefined &&
+      !['active', 'paused'].includes(String(body.status))
+    ) {
+      throw new ValidationError('status must be active or paused');
+    }
     const updated = updatePanel(panel.id, {
       ...(body.name !== undefined ? { name: String(body.name).trim() } : {}),
       ...(body.baseUrl !== undefined
@@ -235,6 +241,17 @@ panelsRouter.delete(
   '/:id',
   asyncHandler(async (req, res) => {
     const panel = panelFromParams(req.params.id);
+    // Pause-first teardown, matching stores: a Head Office deployment keeps
+    // running whether or not the registry row exists, so removing an active
+    // panel would stop the control plane managing a live system by surprise
+    // (production review, 2026-09-23).
+    if (panel.status === 'active') {
+      res.status(409).json({
+        error: `${panel.name} is active. Pause it first, then remove it — the Head Office deployment keeps running, so the control plane should stop managing it deliberately rather than by surprise.`,
+        code: 'panel_active',
+      });
+      return;
+    }
     deletePanel(panel.id);
     res.json({ ok: true, message: `${panel.name} removed` });
   }),

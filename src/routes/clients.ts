@@ -6,6 +6,7 @@ import {
   createCompany,
   updateCompany,
   getPlanById,
+  getRegistryDb,
   getStoreById,
   licensedTerminalCount,
   listStores,
@@ -370,54 +371,85 @@ clientsRouter.put(
       return { storeId, count };
     });
 
-    const updated = updateCompany(company.id, {
-      name,
-      billingEmail,
-      planId,
-      status,
-    });
-
-    // Apply the purchased quantity and allocations. The plan may be switching in
-    // the same request, so the ceiling is read from the plan that will be in force.
-    const effectivePlan = getPlanById((planId !== undefined ? planId : company.plan_id) ?? -1);
-    if (setupFeeStatusRaw !== undefined) {
-      setSetupFeeStatus(company.id, setupFeeStatusRaw as SetupFeeStatus);
-    }
-    if (requestedLicensed !== undefined || allocations) {
-      const ceiling = effectivePlan?.max_terminals_per_store ?? Number.MAX_SAFE_INTEGER;
-      for (const a of allocations ?? []) {
-        if (a.count > ceiling) {
-          throw new HttpError(
-            402,
-            `${effectivePlan?.name ?? 'The plan'} allows ${ceiling} licensed terminals per store; store ${a.storeId} was set to ${a.count}.`,
-            'terminal_cap_exceeded',
-          );
-        }
-      }
-      if (requestedLicensed !== undefined) {
-        setLicensedTerminalCount(company.id, requestedLicensed);
-      }
-      if (allocations) {
-        // The total may be raised implicitly when the allocation list adds up to
-        // more than the stored quantity — the office just described what the
-        // client bought, per store.
-        const total = allocations.reduce((n, a) => n + a.count, 0);
-        const nextLicensed = requestedLicensed ?? licensedTerminalCount(company.id);
-        if (total > nextLicensed) {
-          throw new HttpError(
-            402,
-            `Those allocations total ${total} terminals but the subscription is for ${nextLicensed}. Raise the licensed terminal quantity first.`,
-            'terminal_allocation_exceeded',
-          );
-        }
-        for (const a of allocations) allocateTerminals(company, a.storeId, a.count);
-      }
-    }
-
     const entitlementChanged =
       (planId !== undefined && planId !== company.plan_id) ||
       requestedLicensed !== undefined ||
       allocations !== undefined;
+
+    // One logical operation, one transaction (production review, 2026-09-23):
+    // the company fields, the purchased quantity and the allocations commit
+    // together or not at all. The old shape wrote the company first and
+    // validated allocations after, so a refused allocation left a renamed or
+    // re-planned client behind a "Update failed" message. Pure validation
+    // (plan exists, statuses well-formed) has already happened above.
+    const runEdit = getRegistryDb().transaction(() => {
+      const updatedCompany = updateCompany(company.id, {
+        name,
+        billingEmail,
+        planId,
+        status,
+      });
+
+      // Apply the purchased quantity and allocations. The plan may be switching
+      // in the same request, so the ceiling is read from the plan that will be
+      // in force.
+      const effectivePlan = getPlanById((planId !== undefined ? planId : company.plan_id) ?? -1);
+      if (setupFeeStatusRaw !== undefined) {
+        setSetupFeeStatus(company.id, setupFeeStatusRaw as SetupFeeStatus);
+      }
+      if (requestedLicensed !== undefined || allocations) {
+        const ceiling = effectivePlan?.max_terminals_per_store ?? Number.MAX_SAFE_INTEGER;
+        for (const a of allocations ?? []) {
+          if (a.count > ceiling) {
+            throw new HttpError(
+              402,
+              `${effectivePlan?.name ?? 'The plan'} allows ${ceiling} licensed terminals per store; store ${a.storeId} was set to ${a.count}.`,
+              'terminal_cap_exceeded',
+            );
+          }
+        }
+        if (requestedLicensed !== undefined) {
+          setLicensedTerminalCount(company.id, requestedLicensed);
+        }
+        if (allocations) {
+          // The total may be raised implicitly when the allocation list adds up to
+          // more than the stored quantity — the office just described what the
+          // client bought, per store.
+          const total = allocations.reduce((n, a) => n + a.count, 0);
+          const nextLicensed = requestedLicensed ?? licensedTerminalCount(company.id);
+          if (total > nextLicensed) {
+            throw new HttpError(
+              402,
+              `Those allocations total ${total} terminals but the subscription is for ${nextLicensed}. Raise the licensed terminal quantity first.`,
+              'terminal_allocation_exceeded',
+            );
+          }
+          for (const a of allocations) allocateTerminals(company, a.storeId, a.count);
+        }
+      }
+
+      recordAuditLog('office', 'client_updated', 'company', company.id, {
+        before: {
+          name: company.name,
+          billingEmail: company.billing_email,
+          planId: company.plan_id,
+        },
+        after: {
+          name,
+          billingEmail,
+          planId,
+          status,
+          licensedTerminalCount: requestedLicensed,
+          allocations,
+        },
+        reason: 'Updated client profile or subscription',
+      });
+      return updatedCompany;
+    });
+    runEdit();
+
+    // Outside the transaction: network. A delivery failure is recorded on the
+    // registry rows and retried by the sweep — never rolled back.
     let licencePush: Awaited<ReturnType<typeof pushLicencesForCompany>> | null = null;
     if (entitlementChanged) {
       try {
@@ -430,19 +462,6 @@ clientsRouter.put(
         };
       }
     }
-
-    recordAuditLog('office', 'client_updated', 'company', company.id, {
-      before: { name: company.name, billingEmail: company.billing_email, planId: company.plan_id },
-      after: {
-        name,
-        billingEmail,
-        planId,
-        status,
-        licensedTerminalCount: requestedLicensed,
-        allocations,
-      },
-      reason: 'Updated client profile or subscription',
-    });
 
     res.json({ ...buildClientListItem(getCompanyById(company.id)!), licencePush });
   }),

@@ -114,6 +114,19 @@ export default function PanelsPage() {
       );
     });
 
+  // Pause-first teardown: a panel cannot be removed while active, so pausing is
+  // offered right beside the actions that need it.
+  const togglePause = (panel: Panel): Promise<void> =>
+    run(panel, async () => {
+      await api(`/panels/${panel.id}`, {
+        method: 'PUT',
+        body: { status: panel.status === 'active' ? 'paused' : 'active' },
+      });
+      setNotice(
+        panel.status === 'active' ? `${panel.name} paused` : `${panel.name} resumed`,
+      );
+    });
+
   const openCreate = (): void => {
     setNewName('');
     setNewSlug('');
@@ -355,6 +368,17 @@ export default function PanelsPage() {
                           className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                         >
                           <Pencil className="h-3.5 w-3.5" /> Configure
+                        </button>
+                        <button
+                          onClick={() => void togglePause(panel)}
+                          title={
+                            panel.status === 'active'
+                              ? 'Stop the control plane managing this panel (the deployment keeps running)'
+                              : 'Resume managing this panel'
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                        >
+                          {panel.status === 'active' ? 'Pause' : 'Resume'}
                         </button>
                         <button
                           onClick={() => void pushLicence(panel)}

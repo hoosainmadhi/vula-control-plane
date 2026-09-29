@@ -1784,32 +1784,41 @@ export const createCompany = (input: CompanyInput): CompanyRecord => {
   return getCompanyById(Number(info.lastInsertRowid))!;
 };
 
+/**
+ * Patch a company with **presence-flag** semantics: a field absent from `input`
+ * is left unchanged, and an explicit `null` clears it. The previous
+ * implementation COALESCE'd every column, which meant the API could never clear
+ * `plan_id`, `paid_through` or `trial_ends_at` even though the routes — and the
+ * office's empty date fields — treated null as exactly that. An expired trial
+ * was therefore un-clearable, and a wrongly entered paid-through date could be
+ * edited but never removed (production review, 2026-09-23, #5).
+ */
 export const updateCompany = (
   id: number,
   input: Partial<CompanyInput> & { status?: 'active' | 'suspended' },
 ): CompanyRecord | null => {
-  if (!getCompanyById(id)) return null;
+  const existing = getCompanyById(id);
+  if (!existing) return null;
+
+  const sets: string[] = [];
+  const args: unknown[] = [];
+  const assign = (column: string, value: unknown): void => {
+    sets.push(`${column} = ?`);
+    args.push(value);
+  };
+  if (input.name !== undefined) assign('name', input.name);
+  if (input.billingEmail !== undefined) assign('billing_email', input.billingEmail);
+  if (input.planId !== undefined) assign('plan_id', input.planId);
+  if (input.paidThrough !== undefined) assign('paid_through', input.paidThrough);
+  if (input.trialEndsAt !== undefined) assign('trial_ends_at', input.trialEndsAt);
+  if (input.status !== undefined) assign('status', input.status);
+
+  if (sets.length === 0) return existing;
+
+  sets.push(`updated_at = datetime('now')`);
   getRegistryDb()
-    .prepare(
-      `UPDATE companies SET
-         name = COALESCE(?, name),
-         billing_email = COALESCE(?, billing_email),
-         plan_id = COALESCE(?, plan_id),
-         paid_through = COALESCE(?, paid_through),
-         trial_ends_at = COALESCE(?, trial_ends_at),
-         status = COALESCE(?, status),
-         updated_at = datetime('now')
-       WHERE id = ?`,
-    )
-    .run(
-      input.name ?? null,
-      input.billingEmail ?? null,
-      input.planId === undefined ? null : input.planId,
-      input.paidThrough === undefined ? null : input.paidThrough,
-      input.trialEndsAt === undefined ? null : input.trialEndsAt,
-      input.status ?? null,
-      id,
-    );
+    .prepare(`UPDATE companies SET ${sets.join(', ')} WHERE id = ?`)
+    .run(...args, id);
   return getCompanyById(id);
 };
 
@@ -2099,12 +2108,23 @@ export const deleteCompany = (id: number): boolean => {
 export interface CompanyBlockers {
   stores: number;
   panels: number;
+  /**
+   * Financial documents. Invoices — and the payments on them — cascade away with
+   * the company, so any history at all refuses deletion: a billing system does
+   * not hard-delete a client it has ever billed (production review, 2026-09-23).
+   */
+  invoices: number;
 }
 
 /** What would be silently destroyed if this company were deleted. */
 export const companyBlockers = (companyId: number): CompanyBlockers => ({
   stores: countStoresForCompany(companyId),
   panels: listPanelsForCompany(companyId).length,
+  invoices: (
+    getRegistryDb()
+      .prepare('SELECT COUNT(*) AS n FROM invoices WHERE company_id = ?')
+      .get(companyId) as { n: number }
+  ).n,
 });
 
 export const nextPanelLicenceSequence = (id: number): number => {

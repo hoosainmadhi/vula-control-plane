@@ -16,7 +16,25 @@ CONTEXT.md "Internal API contract").
 
 ## Current Phase
 
-**Pass 1 of the production review — settlement → entitlement (2026-09-25).**
+**Pass 3 of the production review — client lifecycle (2026-09-25, complete).**
+Owner: *"lets go ahead with pass 3"*. Company delete now blocks on invoice
+history (financial records are retained; suspension is the off-ramp, and a
+successful delete is audited `company_deleted`); `updateCompany` switched from
+COALESCE to presence-flag semantics so an explicit `null` clears `paid_through` /
+`trial_ends_at` / `plan_id` (the old helper could set but never un-set); the
+client and company PUTs apply the whole edit in one transaction (a refused
+allocation no longer leaves a renamed client behind an error), with the licence
+push outside it; and Head Office registrations tear down pause-first like stores
+(`DELETE /panels/:id` → 409 `panel_active`, Pause/Resume on both panel surfaces).
+One self-inflicted bug found and fixed: `db.transaction(fn)` returns a function —
+the two new transactions were never invoked, so the routes silently did nothing
+until the five-test wall came down (findings, 2026-09-25 pass 3). Tests CP **310
+green (24 suites)**; typecheck and both builds clean; verified against a copy of
+the live registry. Pass 2 (URL/SSRF, proxy-aware limiter, login dev-hint gate)
+remains queued.
+
+Previous — **Pass 1 of the production review — settlement → entitlement
+(2026-09-25).**
 Owner: *"see attached and advise"* on `review-23Sep2026.md`, verified claim by
 claim, then *"continue with Phase 1"* (fleet is dev-only, so strictness is safe).
 Shipped: `purpose` persisted on invoices and returned by GET; settlement

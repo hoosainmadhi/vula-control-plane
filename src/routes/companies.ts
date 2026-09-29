@@ -15,6 +15,7 @@ import {
   updatePlan,
   deletePlan,
   planFeatures,
+  getRegistryDb,
   licensedTerminalCount,
   setLicensedTerminalCount,
   setSetupFeeStatus,
@@ -511,7 +512,7 @@ companiesRouter.delete(
     const company = companyFromParams(req.params.id);
     const blockers = companyBlockers(company.id);
 
-    if (blockers.stores > 0 || blockers.panels > 0) {
+    if (blockers.stores > 0 || blockers.panels > 0 || blockers.invoices > 0) {
       const parts: string[] = [];
       if (blockers.stores > 0) {
         parts.push(`${blockers.stores} store${blockers.stores === 1 ? '' : 's'}`);
@@ -519,8 +520,18 @@ companiesRouter.delete(
       if (blockers.panels > 0) {
         parts.push(`${blockers.panels} Head Office${blockers.panels === 1 ? '' : 's'}`);
       }
+      if (blockers.invoices > 0) {
+        parts.push(`${blockers.invoices} invoice${blockers.invoices === 1 ? '' : 's'}`);
+      }
+      // Financial documents are retained forever: invoices — and the payments on
+      // them — cascade away with the company, so a client it has ever billed
+      // cannot be hard-deleted (production review, 2026-09-23).
+      const advice =
+        blockers.invoices > 0
+          ? `Its financial records are retained — suspend ${company.name} instead of deleting it.`
+          : 'Reassign or remove those first — deleting the company would strip their plan and licence. To stop trading without losing history, suspend it instead.';
       res.status(409).json({
-        error: `${company.name} still owns ${parts.join(' and ')}. Reassign or remove those first — deleting the company would strip their plan and licence. To stop trading without losing history, suspend it instead.`,
+        error: `${company.name} still owns ${parts.join(' and ')}. ${advice}`,
         code: 'company_in_use',
         blockers,
       });
@@ -528,6 +539,11 @@ companiesRouter.delete(
     }
 
     deleteCompany(company.id);
+    // A deletion that succeeded is exactly the one worth being able to find
+    // later: a duplicate row that never transacted.
+    recordAuditLog('office', 'company_deleted', 'company', company.id, {
+      after: { name: company.name, slug: company.slug },
+    });
     res.json({ ok: true, message: `${company.name} deleted` });
   }),
 );
@@ -563,6 +579,20 @@ companiesRouter.put(
         ? (optionalString(body, 'trialEndsAt', 10) ?? null)
         : undefined;
     const status = body.status !== undefined ? (body.status as 'active' | 'suspended') : undefined;
+    const setupFeeStatusRaw = body.setupFeeStatus;
+    if (
+      setupFeeStatusRaw !== undefined &&
+      !SETUP_FEE_STATUSES.includes(setupFeeStatusRaw as SetupFeeStatus)
+    ) {
+      // Pure validation, hoisted before the transaction: nothing is written for a
+      // request that was never going to succeed.
+      throw new ValidationError(`setupFeeStatus must be one of: ${SETUP_FEE_STATUSES.join(', ')}`);
+    }
+    const requestedLicensedCount =
+      body.licensedTerminalCount !== undefined
+        ? boundedInt(body.licensedTerminalCount, 'licensedTerminalCount', 0, 5000)
+        : undefined;
+    let licensedChanged = false;
 
     // Moving a client to another plan IS agreeing a new price (one of the three
     // moments a price is agreed), so the plan's terms are recorded on the
@@ -570,50 +600,47 @@ companiesRouter.put(
     // keeps an existing client's price stable.
     const planChanged = planId !== undefined && planId !== company.plan_id;
 
-    const updated = updateCompany(company.id, {
-      ...(body.name !== undefined ? { name: requireString(body, 'name') } : {}),
-      ...(body.billingEmail !== undefined
-        ? { billingEmail: optionalString(body, 'billingEmail', 200) ?? '' }
-        : {}),
-      ...(planId !== undefined ? { planId } : {}),
-      ...(paidThrough !== undefined ? { paidThrough } : {}),
-      ...(trialEndsAt !== undefined ? { trialEndsAt } : {}),
-      ...(status !== undefined ? { status } : {}),
-    });
+    // One logical operation, one transaction (production review, 2026-09-23):
+    // company fields, the agreed price on a plan switch, the purchased quantity
+    // and the setup-fee state commit together or not at all.
+    const runEdit = getRegistryDb().transaction(() => {
+      const updatedCompany = updateCompany(company.id, {
+        ...(body.name !== undefined ? { name: requireString(body, 'name') } : {}),
+        ...(body.billingEmail !== undefined
+          ? { billingEmail: optionalString(body, 'billingEmail', 200) ?? '' }
+          : {}),
+        ...(planId !== undefined ? { planId } : {}),
+        ...(paidThrough !== undefined ? { paidThrough } : {}),
+        ...(trialEndsAt !== undefined ? { trialEndsAt } : {}),
+        ...(status !== undefined ? { status } : {}),
+      });
 
-    if (planChanged) {
-      recordAgreedPricing(
-        company.id,
-        planId ? getPlanById(planId) : null,
-        'office',
-        `Moved ${company.name} to ${planId ? getPlanById(planId)?.name : 'no plan'} — priced at that plan's terms`,
-      );
-    }
-
-    // The purchased quantity and the state of the once-off onboarding charge.
-    // Lowering the quantity is allowed even when stores hold more licences than
-    // that: the allowance gates NEW device claims, and an operator reducing a
-    // subscription must not be blocked by tills already running. `note` on the
-    // response reports the mismatch.
-    const requestedLicensedCount =
-      body.licensedTerminalCount !== undefined
-        ? boundedInt(body.licensedTerminalCount, 'licensedTerminalCount', 0, 5000)
-        : undefined;
-    let licensedChanged = false;
-    if (requestedLicensedCount !== undefined) {
-      licensedChanged = requestedLicensedCount !== licensedTerminalCount(company.id);
-      setLicensedTerminalCount(company.id, requestedLicensedCount);
-    }
-
-    const setupFeeStatusRaw = body.setupFeeStatus;
-    if (setupFeeStatusRaw !== undefined) {
-      if (!SETUP_FEE_STATUSES.includes(setupFeeStatusRaw as SetupFeeStatus)) {
-        throw new ValidationError(
-          `setupFeeStatus must be one of: ${SETUP_FEE_STATUSES.join(', ')}`,
+      if (planChanged) {
+        recordAgreedPricing(
+          company.id,
+          planId ? getPlanById(planId) : null,
+          'office',
+          `Moved ${company.name} to ${planId ? getPlanById(planId)?.name : 'no plan'} — priced at that plan's terms`,
         );
       }
-      setSetupFeeStatus(company.id, setupFeeStatusRaw as SetupFeeStatus);
-    }
+
+      // The purchased quantity and the state of the once-off onboarding charge.
+      // Lowering the quantity is allowed even when stores hold more licences than
+      // that: the allowance gates NEW device claims, and an operator reducing a
+      // subscription must not be blocked by tills already running. `note` on the
+      // response reports the mismatch.
+      if (requestedLicensedCount !== undefined) {
+        licensedChanged = requestedLicensedCount !== licensedTerminalCount(company.id);
+        setLicensedTerminalCount(company.id, requestedLicensedCount);
+      }
+
+      if (setupFeeStatusRaw !== undefined) {
+        setSetupFeeStatus(company.id, setupFeeStatusRaw as SetupFeeStatus);
+      }
+
+      return updatedCompany;
+    });
+    runEdit();
 
     // An entitlement change (plan, paid-through, trial, suspension, licensed
     // quantity) is only real once the stores and Head Office hold licences that

@@ -598,7 +598,7 @@ describe('deleting a company', () => {
     expect(res.body.error).toMatch(/1 store/i);
     // Steering to suspend rather than delete, so history survives.
     expect(res.body.error).toMatch(/suspend it instead/i);
-    expect(res.body.blockers).toEqual({ stores: 1, panels: 0 });
+    expect(res.body.blockers).toEqual({ stores: 1, panels: 0, invoices: 0 });
   });
 
   it('refuses while it still owns a Head Office', async () => {
@@ -614,6 +614,38 @@ describe('deleting a company', () => {
     expect(res.body.error).toMatch(/1 Head Office/i);
   });
 
+  it('refuses to delete a client it has ever billed — financial records are kept', async () => {
+    const company = await makeCompany();
+    const inv = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({
+        companyId: company.id,
+        description: 'One-off charge',
+        amountCents: 250000,
+        includeOnboarding: false,
+      })
+      .expect(201);
+
+    const res = await request(app).delete(`/api/companies/${company.id}`).set(auth());
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('company_in_use');
+    expect(res.body.blockers.invoices).toBe(1);
+    expect(res.body.error).toMatch(/financial records are retained/i);
+
+    // The document survives the refusal — deleting the company would have
+    // cascaded it (and its payments) away.
+    const invoices = await request(app).get('/api/billing/invoices').set(auth()).expect(200);
+    expect((invoices.body as Array<{ id: number }>).some((i) => i.id === inv.body.id)).toBe(true);
+  });
+
+  it('still deletes a duplicate that never transacted', async () => {
+    const company = await makeCompany({ name: 'Mistake 2 Ltd', slug: 'mistake-2-ltd' });
+    const res = await request(app).delete(`/api/companies/${company.id}`).set(auth()).expect(200);
+    expect(res.body.ok).toBe(true);
+    await request(app).get(`/api/companies/${company.id}`).set(auth()).expect(404);
+  });
+
   it('allows deletion once the blockers are gone, without cascading anything away', async () => {
     const company = await makeCompany();
     const created = await makeStore({ slug: 'branch', companyId: company.id });
@@ -623,11 +655,21 @@ describe('deleting a company', () => {
       .send({ companyId: company.id, name: 'Panel', slug: 'ho-two', baseUrl: 'http://localhost:3260' })
       .expect(201);
 
-    // Detach the store (as the store modal does) and remove the panel.
+    // Detach the store (as the store modal does) and remove the panel — which
+    // now has to be paused first, matching store teardown.
     await request(app)
       .put(`/api/stores/${created.body.store.id}`)
       .set(auth())
       .send({ companyId: null })
+      .expect(200);
+    await request(app)
+      .delete(`/api/panels/${panel.body.panel.id}`)
+      .set(auth())
+      .expect(409);
+    await request(app)
+      .put(`/api/panels/${panel.body.panel.id}`)
+      .set(auth())
+      .send({ status: 'paused' })
       .expect(200);
     await request(app).delete(`/api/panels/${panel.body.panel.id}`).set(auth()).expect(200);
 
@@ -641,6 +683,68 @@ describe('deleting a company', () => {
 
   it('404s for an unknown company', async () => {
     await request(app).delete('/api/companies/9999').set(auth()).expect(404);
+  });
+});
+
+describe('removing a Head Office registration', () => {
+  const makePanel = async (slug: string): Promise<number> => {
+    const company = await makeCompany({ name: `Panel client ${slug}`, slug: `panel-${slug}` });
+    const res = await request(app)
+      .post('/api/panels')
+      .set(auth())
+      .send({
+        companyId: company.id,
+        name: `Panel ${slug}`,
+        slug,
+        baseUrl: `http://localhost:3260/${slug}`,
+      })
+      .expect(201);
+    return (res.body as { panel: { id: number } }).panel.id;
+  };
+
+  it('refuses to remove an active panel, naming the pause-first rule', async () => {
+    const panelId = await makePanel('ho-active');
+    const res = await request(app).delete(`/api/panels/${panelId}`).set(auth());
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('panel_active');
+    expect(res.body.error).toMatch(/pause it first/i);
+  });
+
+  it('removes once paused, and re-arms the refusal after a resume', async () => {
+    const panelId = await makePanel('ho-paused');
+    await request(app)
+      .put(`/api/panels/${panelId}`)
+      .set(auth())
+      .send({ status: 'paused' })
+      .expect(200);
+    // Resuming puts the deployment back under management, so the guard stands
+    // again — pausing is not a one-way door to deletion.
+    await request(app)
+      .put(`/api/panels/${panelId}`)
+      .set(auth())
+      .send({ status: 'active' })
+      .expect(200);
+    await request(app).delete(`/api/panels/${panelId}`).set(auth()).expect(409);
+
+    await request(app)
+      .put(`/api/panels/${panelId}`)
+      .set(auth())
+      .send({ status: 'paused' })
+      .expect(200);
+    await request(app).delete(`/api/panels/${panelId}`).set(auth()).expect(200);
+    await request(app).get(`/api/panels/${panelId}`).set(auth()).expect(404);
+  });
+
+  it('refuses a status that is neither active nor paused', async () => {
+    const panelId = await makePanel('ho-bad-status');
+    const res = await request(app)
+      .put(`/api/panels/${panelId}`)
+      .set(auth())
+      .send({ status: 'retired' });
+    expect(res.status).toBe(400);
+    // The refused write left the panel as it was.
+    const after = await request(app).get(`/api/panels/${panelId}`).set(auth()).expect(200);
+    expect(after.body.status).toBe('active');
   });
 });
 
@@ -703,4 +807,57 @@ describe('the fleet is self-describing', () => {
   });
 });
 
+});
+
+describe('updating a client (presence-flag semantics)', () => {
+  it('clears trial_ends_at and paid_through when the API sends null', async () => {
+    const company = await makeCompany({ paidThrough: '2030-01-01', trialEndsAt: '2030-06-30' });
+    await request(app)
+      .put(`/api/companies/${company.id}`)
+      .set(auth())
+      .send({ paidThrough: null, trialEndsAt: null })
+      .expect(200);
+
+    const res = await request(app).get(`/api/companies/${company.id}`).set(auth()).expect(200);
+    expect(res.body.paidThrough).toBeNull();
+    expect(res.body.trialEndsAt).toBeNull();
+    // Nothing paid and no trial: the state machine says so, with the note naming
+    // the recovery.
+    expect(res.body.billingState).toBe('suspended');
+    expect(res.body.note).toMatch(/no payment recorded/i);
+  });
+
+  it('leaves fields untouched when they are absent from the PUT body', async () => {
+    const company = await makeCompany({ paidThrough: '2030-01-01' });
+    await request(app)
+      .put(`/api/companies/${company.id}`)
+      .set(auth())
+      .send({ name: 'Renamed Client' })
+      .expect(200);
+
+    const res = await request(app).get(`/api/companies/${company.id}`).set(auth()).expect(200);
+    expect(res.body.name).toBe('Renamed Client');
+    expect(res.body.paidThrough).toBe('2030-01-01');
+  });
+
+  it('rolls the whole client edit back when a later step is refused', async () => {
+    const company = await makeCompany();
+    const store = await makeStore({ slug: 'atomic-branch', companyId: company.id });
+    const storeId = (store.body as { store: { id: number } }).store.id;
+
+    // The name change and the impossible allocation arrive in one request: the
+    // old shape committed the name and then refused the allocation, leaving
+    // "Update failed" on screen with half the edit applied.
+    const res = await request(app)
+      .put(`/api/clients/${company.id}`)
+      .set(auth())
+      .send({
+        name: 'Renamed Mid-Edit',
+        allocations: [{ storeId, licensedTerminalCount: 99999 }],
+      });
+    expect(res.status).toBe(402);
+
+    const res2 = await request(app).get(`/api/companies/${company.id}`).set(auth()).expect(200);
+    expect(res2.body.name).toBe('Urban Threads Retail Group');
+  });
 });
