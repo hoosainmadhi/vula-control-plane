@@ -10,6 +10,19 @@
   Related ideas that are consequently _not_ backlog: support retainers, per-branch
   support fees, support call-out charges.
 
+## Deferred from the operations pass (2026-09-25)
+
+- **Frontend tests (review §27).** Still none: the suite is backend-only. Setting
+  them up needs a tooling decision — Vitest (native to the Vite app, new deps) or
+  a second Jest project with jsdom (reuses the root toolchain, fewer deps) — and
+  the highest-value first targets are the surfaces this review touched: the
+  invoice-create modal's purpose/amount rules, the Record-payment outcome copy,
+  and the destructive confirmations.
+- **`registryDb.ts` split (review §26).** A 3,000-line file holding DDL,
+  migrations, CRUD and the invoice-number sequence. Deferred to the next schema
+  change, when the migration machinery has to be touched anyway; splitting it now
+  would churn the largest file in the repo for no behaviour.
+
 ## Deferred from the trust-boundary pass (2026-09-25)
 
 - **The login limiter is per-process.** A restart clears the counters, and two

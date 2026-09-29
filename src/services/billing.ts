@@ -15,6 +15,7 @@ import {
   getBillingSettings,
   getOfficeSettings,
   getSubscription,
+  markOverdueInvoices,
   nextInvoiceNumber,
   setSetupFeeStatus,
   updateCompany,
@@ -765,4 +766,35 @@ export async function runAutomatedRenewals(options?: {
   }
 
   return summary;
+}
+
+export interface BillingTickSummary {
+  /** Pending invoices whose due date has now passed, flipped to `overdue`. */
+  overdueMarked: number;
+  renewals: AutomatedRenewalSummary;
+}
+
+/**
+ * The daily billing tick: mark lapsed invoices overdue, then run the renewal
+ * sweep.
+ *
+ * It exists because both halves were things the panel implied happen and
+ * nothing did. `overdue` was in the schema with no writer, so a lapsed invoice
+ * read as pending for ever; and the renewal sweep was only reachable by an
+ * operator calling the route, while the Billing page's copy said renewals are
+ * automatic (production review, 2026-09-23, §22).
+ *
+ * What it deliberately does NOT do: record a settlement. The sweep raises
+ * documents; only an explicit settlement moves `paid_through` (CONTEXT §5e), so
+ * a tick can never turn into money nobody received.
+ */
+export async function runBillingTick(options?: { now?: Date }): Promise<BillingTickSummary> {
+  const now = options?.now ?? new Date();
+  const overdueMarked = markOverdueInvoices(now.toISOString().slice(0, 10));
+  const renewals = await runAutomatedRenewals({ now });
+
+  logger.info(
+    `Billing tick: marked ${overdueMarked} invoice(s) overdue; renewals created ${renewals.invoicesCreated}, settled ${renewals.renewalsProcessed}`,
+  );
+  return { overdueMarked, renewals };
 }

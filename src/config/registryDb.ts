@@ -2227,6 +2227,33 @@ export const listInvoices = (companyId?: number): InvoiceRecord[] => {
   return query as InvoiceRecord[];
 };
 
+/**
+ * Mark pending invoices whose due date has passed as `overdue`.
+ *
+ * The status has been in the schema since v1 — the CHECK, the Billing badge, and
+ * the renewal sweep's "unpaid" filter all know it — but nothing ever set it, so a
+ * lapsed invoice read as merely `pending` for ever and the word appeared in the
+ * UI with no state behind it (production review, 2026-09-23, §22).
+ *
+ * Only `pending` rows are touched, which is what makes this safe to run on a
+ * schedule: a paid or voided invoice is never restated, and a second run in the
+ * same day changes nothing.
+ *
+ * `today` is passed in rather than read from SQLite so the clock is explicit and
+ * testable; the caller uses the same UTC date the due dates were written with.
+ */
+export const markOverdueInvoices = (
+  today: string = new Date().toISOString().slice(0, 10),
+): number => {
+  const info = getRegistryDb()
+    .prepare(
+      `UPDATE invoices SET status = 'overdue', updated_at = datetime('now')
+        WHERE status = 'pending' AND due_date IS NOT NULL AND due_date < ?`,
+    )
+    .run(today);
+  return info.changes;
+};
+
 export const getInvoiceById = (id: number): InvoiceRecord | null => {
   const row = getRegistryDb().prepare('SELECT * FROM invoices WHERE id = ?').get(id);
   return row ? (row as InvoiceRecord) : null;

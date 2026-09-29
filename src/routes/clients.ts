@@ -26,13 +26,18 @@ import { requireOffice } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HttpError } from '../utils/errors.js';
 import {
+  ValidationError,
   requireString,
   requireSlug,
   optionalString,
+  optionalEmail,
   parseIdParam,
   requireInt,
+  requireTerminalCount,
+  requireBaseUrl,
   optionalInt,
 } from '../utils/validate.js';
+import { assertManagedEndpoint } from '../services/storeClient.js';
 import { entitlementsFor, requireFeature } from '../services/subscriptions.js';
 import { quoteForSubscription } from '../services/pricing.js';
 import {
@@ -80,6 +85,93 @@ clientsRouter.post(
     res.json({ ok: true, stores: outcome.pushed });
   }),
 );
+
+// --- Nested onboarding payloads -------------------------------------------------
+
+/**
+ * A store entry inside the onboarding wizard, validated through the same helpers
+ * `POST /stores` uses instead of being defaulted.
+ *
+ * The review found these entries effectively cast, not validated (production
+ * review, 2026-09-23, §19): `typeof x === 'number' ? x : 1` accepts `NaN`, a
+ * negative count and `1e9`, and a supplied nested `baseUrl` skipped every check
+ * the single-store route makes — including the address policy, which would have
+ * let the wizard smuggle a private or metadata URL into a row that then receives
+ * a token.
+ *
+ * The one deliberate difference: the probe allows an unreachable host. A wizard
+ * raises rows *before* their containers exist, so "does not answer yet" is the
+ * normal state here; the address policy and a definitive wrong-kind answer still
+ * refuse. The probe also only runs for a URL the operator supplied — a URL this
+ * server derived from the client slug is ours by construction.
+ */
+interface NestedStore {
+  name: string;
+  slug: string;
+  baseUrl: string;
+  terminalCount: number;
+  licensedTerminalCount: number;
+  adminEmail?: string;
+}
+
+const validateNestedStore = async (
+  entry: unknown,
+  fallback: { name: string; slug: string; baseUrl: string; adminEmail?: string },
+): Promise<NestedStore> => {
+  if (entry !== undefined && (typeof entry !== 'object' || entry === null || Array.isArray(entry))) {
+    throw new ValidationError('each entry in stores must be an object');
+  }
+  const e = (entry ?? {}) as Record<string, unknown>;
+  const suppliedUrl = e.baseUrl !== undefined && e.baseUrl !== null && e.baseUrl !== '';
+  const terminalCount = e.terminalCount === undefined ? 1 : requireTerminalCount(e);
+  const licensedTerminalCount =
+    e.licensedTerminalCount === undefined
+      ? terminalCount
+      : requireInt(e, 'licensedTerminalCount', { min: 0, max: 5000 });
+  const name = e.name === undefined ? fallback.name : requireString(e, 'name');
+  const slug = e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
+  const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
+  const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
+
+  if (suppliedUrl) {
+    const check = await assertManagedEndpoint(baseUrl, 'store', { allowUnreachable: true });
+    if (!check.ok) {
+      throw new HttpError(check.status, check.error ?? `${baseUrl} is not a usable store URL`, check.code);
+    }
+  }
+  return {
+    name,
+    slug,
+    baseUrl,
+    terminalCount,
+    licensedTerminalCount,
+    ...(adminEmail ? { adminEmail } : {}),
+  };
+};
+
+/** A Head Office entry inside onboarding or the single→multi upgrade. */
+const validateNestedHeadOffice = async (
+  entry: unknown,
+  fallback: { name: string; slug: string; baseUrl: string; adminEmail?: string },
+): Promise<{ name: string; slug: string; baseUrl: string; adminEmail?: string }> => {
+  if (entry !== undefined && (typeof entry !== 'object' || entry === null || Array.isArray(entry))) {
+    throw new ValidationError('headOffice must be an object');
+  }
+  const e = (entry ?? {}) as Record<string, unknown>;
+  const suppliedUrl = e.baseUrl !== undefined && e.baseUrl !== null && e.baseUrl !== '';
+  const name = e.name === undefined ? fallback.name : requireString(e, 'name');
+  const slug = e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
+  const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
+  const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
+
+  if (suppliedUrl) {
+    const check = await assertManagedEndpoint(baseUrl, 'head-office', { allowUnreachable: true });
+    if (!check.ok) {
+      throw new HttpError(check.status, check.error ?? `${baseUrl} is not a usable Head Office URL`, check.code);
+    }
+  }
+  return { name, slug, baseUrl, ...(adminEmail ? { adminEmail } : {}) };
+};
 
 // --- Wire Types ---
 
@@ -566,35 +658,36 @@ clientsRouter.post(
     // 2. Format stores list. `terminalCount` is what the POS is configured to
     // run; `licensedTerminalCount` is what the client buys — absent means the
     // same number, which is the wizard's default.
-    const rawStores = (req.body?.stores ?? []) as Array<Record<string, unknown>>;
-    const stores = rawStores.map((s, idx) => {
-      const terminalCount = typeof s.terminalCount === 'number' ? s.terminalCount : 1;
-      const licensedTerminalCount =
-        typeof s.licensedTerminalCount === 'number' ? s.licensedTerminalCount : terminalCount;
-      return {
-        name:
-          typeof s.name === 'string' && s.name.trim() ? s.name.trim() : `${name} Store ${idx + 1}`,
-        slug: typeof s.slug === 'string' && s.slug.trim() ? s.slug.trim() : `${slug}-${idx + 1}`,
-        baseUrl:
-          typeof s.baseUrl === 'string' && s.baseUrl.trim()
-            ? s.baseUrl.trim()
-            : `https://${slug}-${idx + 1}.vula-app.co.za`,
-        terminalCount,
-        licensedTerminalCount,
-        adminEmail: typeof s.adminEmail === 'string' ? s.adminEmail.trim() : undefined,
-      };
-    });
+    const rawStores = req.body?.stores;
+    if (rawStores !== undefined && !Array.isArray(rawStores)) {
+      throw new ValidationError(
+        'stores must be an array of { name, slug, baseUrl, terminalCount, licensedTerminalCount }',
+      );
+    }
+    const stores: NestedStore[] = [];
+    for (const [idx, entry] of ((rawStores ?? []) as unknown[]).entries()) {
+      stores.push(
+        await validateNestedStore(entry, {
+          name: `${name} Store ${idx + 1}`,
+          slug: `${slug}-${idx + 1}`,
+          baseUrl: `https://${slug}-${idx + 1}.vula-app.co.za`,
+        }),
+      );
+    }
 
     // If single store and no stores provided, create default store
     if (stores.length === 0) {
-      stores.push({
-        name,
-        slug,
-        baseUrl: `https://${slug}.vula-app.co.za`,
-        terminalCount: 1,
-        licensedTerminalCount: 1,
-        adminEmail: billingEmail || undefined,
-      });
+      stores.push(
+        await validateNestedStore(
+          {},
+          {
+            name,
+            slug,
+            baseUrl: `https://${slug}.vula-app.co.za`,
+            adminEmail: billingEmail || undefined,
+          },
+        ),
+      );
     }
 
     // What the client purchased, recorded up front: the sum of the per-store
@@ -635,23 +728,12 @@ clientsRouter.post(
     let headOffice:
       { name: string; slug: string; baseUrl: string; adminEmail?: string } | undefined;
     if (deploymentType === 'multi_store') {
-      const rawHo = req.body?.headOffice as Record<string, unknown> | undefined;
-      headOffice = {
-        name:
-          typeof rawHo?.name === 'string' && rawHo.name.trim()
-            ? rawHo.name.trim()
-            : `${name} Head Office`,
-        slug:
-          typeof rawHo?.slug === 'string' && rawHo.slug.trim() ? rawHo.slug.trim() : `${slug}-ho`,
-        baseUrl:
-          typeof rawHo?.baseUrl === 'string' && rawHo.baseUrl.trim()
-            ? rawHo.baseUrl.trim()
-            : `https://${slug}-ho.vula-app.co.za`,
-        adminEmail:
-          typeof rawHo?.adminEmail === 'string'
-            ? rawHo.adminEmail.trim()
-            : billingEmail || undefined,
-      };
+      headOffice = await validateNestedHeadOffice(req.body?.headOffice, {
+        name: `${name} Head Office`,
+        slug: `${slug}-ho`,
+        baseUrl: `https://${slug}-ho.vula-app.co.za`,
+        adminEmail: billingEmail || undefined,
+      });
     }
 
     // 4. Trigger orchestration
@@ -706,25 +788,12 @@ clientsRouter.post(
       return;
     }
 
-    const rawHo = (req.body?.headOffice ?? {}) as Record<string, unknown>;
-    const headOffice = {
-      name:
-        typeof rawHo.name === 'string' && rawHo.name.trim()
-          ? rawHo.name.trim()
-          : `${company.name} Head Office`,
-      slug:
-        typeof rawHo.slug === 'string' && rawHo.slug.trim()
-          ? rawHo.slug.trim()
-          : `${company.slug}-ho`,
-      baseUrl:
-        typeof rawHo.baseUrl === 'string' && rawHo.baseUrl.trim()
-          ? rawHo.baseUrl.trim()
-          : `https://${company.slug}-ho.vula-app.co.za`,
-      adminEmail:
-        typeof rawHo.adminEmail === 'string'
-          ? rawHo.adminEmail.trim()
-          : company.billing_email || undefined,
-    };
+    const headOffice = await validateNestedHeadOffice(req.body?.headOffice, {
+      name: `${company.name} Head Office`,
+      slug: `${company.slug}-ho`,
+      baseUrl: `https://${company.slug}-ho.vula-app.co.za`,
+      adminEmail: company.billing_email || undefined,
+    });
 
     let newStore:
       | {

@@ -198,6 +198,18 @@ export interface EndpointCheck {
   kind?: AppKind;
 }
 
+export interface ManagedEndpointOptions {
+  /** Defaults to `env.isProduction`. Passed explicitly only by tests. */
+  production?: boolean;
+  /**
+   * Accept a host that does not answer. Onboarding needs this: the wizard
+   * raises rows *before* the containers exist, so "not deployed yet" is the
+   * normal state there — while the address policy and a definitive wrong-kind
+   * answer still refuse.
+   */
+  allowUnreachable?: boolean;
+}
+
 /**
  * The asynchronous half of the managed-endpoint policy. `requireBaseUrl` has
  * already refused the shape and any literal private address; this resolves the
@@ -219,8 +231,9 @@ export interface EndpointCheck {
 export const assertManagedEndpoint = async (
   baseUrl: string,
   expected: ManagedKind,
-  production = env.isProduction,
+  options: ManagedEndpointOptions = {},
 ): Promise<EndpointCheck> => {
+  const production = options.production ?? env.isProduction;
   const host = new URL(baseUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (production) {
     if (isReservedAddress(host)) {
@@ -249,7 +262,7 @@ export const assertManagedEndpoint = async (
 
   const probe = await probeAppKind(baseUrl);
   if (!probe.reachable) {
-    if (production) {
+    if (production && !options.allowUnreachable) {
       return {
         ok: false,
         status: 400,

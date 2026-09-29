@@ -133,7 +133,7 @@ describe('requireBaseUrl', () => {
 describe('assertManagedEndpoint', () => {
   it('refuses a public hostname that resolves to a private address', async () => {
     lookupMock.mockResolvedValue(PRIVATE_DNS as never);
-    const check = await assertManagedEndpoint('https://branch.example.co.za', 'store', true);
+    const check = await assertManagedEndpoint('https://branch.example.co.za', 'store', { production: true });
     expect(check.ok).toBe(false);
     expect(check.code).toBe('endpoint_private');
     expect(check.status).toBe(400);
@@ -145,17 +145,17 @@ describe('assertManagedEndpoint', () => {
 
   it('refuses an unreachable URL in production, but allows it in development', async () => {
     fetchMock.mockRejectedValue(new Error('connect ECONNREFUSED'));
-    const prod = await assertManagedEndpoint('https://branch.example.co.za', 'store', true);
+    const prod = await assertManagedEndpoint('https://branch.example.co.za', 'store', { production: true });
     expect(prod.ok).toBe(false);
     expect(prod.code).toBe('endpoint_unreachable');
 
-    const dev = await assertManagedEndpoint('http://localhost:9999', 'store', false);
+    const dev = await assertManagedEndpoint('http://localhost:9999', 'store', { production: false });
     expect(dev.ok).toBe(true);
   });
 
   it('refuses the wrong kind of application with one message shape', async () => {
     respondWith(HEAD_OFFICE_HEALTH);
-    const asStore = await assertManagedEndpoint('https://ho.example.co.za', 'store', true);
+    const asStore = await assertManagedEndpoint('https://ho.example.co.za', 'store', { production: true });
     expect(asStore.code).toBe('wrong_app_kind');
     expect(asStore.status).toBe(409);
     expect(asStore.error).toBe(
@@ -163,21 +163,21 @@ describe('assertManagedEndpoint', () => {
     );
 
     respondWith(STORE_HEALTH);
-    const asPanel = await assertManagedEndpoint('https://branch.example.co.za', 'head-office', true);
+    const asPanel = await assertManagedEndpoint('https://branch.example.co.za', 'head-office', { production: true });
     expect(asPanel.code).toBe('wrong_app_kind');
     expect(asPanel.error).toMatch(/is a store deployment, not a Head Office/);
   });
 
   it('accepts the right kind, and accepts an unidentified one', async () => {
     respondWith(STORE_HEALTH);
-    const ok = await assertManagedEndpoint('https://branch.example.co.za', 'store', true);
+    const ok = await assertManagedEndpoint('https://branch.example.co.za', 'store', { production: true });
     expect(ok).toMatchObject({ ok: true, kind: 'store' });
 
     // A deployment that answers but does not identify itself is not refused:
     // the row may point at a proxy or an older build, and refusing would block
     // registration with nothing to show the operator.
     respondWith({ status: 'ok' });
-    const unknown = await assertManagedEndpoint('https://branch.example.co.za', 'store', true);
+    const unknown = await assertManagedEndpoint('https://branch.example.co.za', 'store', { production: true });
     expect(unknown.ok).toBe(true);
     expect(unknown.kind).toBe('unknown');
   });

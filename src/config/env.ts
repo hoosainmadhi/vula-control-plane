@@ -88,6 +88,12 @@ export interface Env {
    */
   healthSweepMinutes: number;
   /**
+   * Minutes between billing ticks — mark lapsed invoices overdue, then run the
+   * renewal sweep. Daily by default (1440); 0 disables the schedule, leaving
+   * both available by hand.
+   */
+  billingTickMinutes: number;
+  /**
    * How many proxy hops sit in front of this server. Express trusts the
    * X-Forwarded-For chain only that far, so `req.ip` is the real client rather
    * than the load balancer. Zero (the default) trusts no proxy at all, which is
@@ -120,6 +126,7 @@ export const env: Env = {
   // `|| 10` rather than `?? 10` so an empty variable means "the default", not
   // "zero", which would silently switch the schedule off.
   healthSweepMinutes: Number(process.env.HEALTH_SWEEP_INTERVAL_MINUTES || 10),
+  billingTickMinutes: Number(process.env.BILLING_TICK_INTERVAL_MINUTES || 1440),
   trustProxyHops: Math.max(0, Number(process.env.CP_TRUST_PROXY_HOPS || 0)),
 };
 

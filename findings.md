@@ -1,5 +1,54 @@
 # Findings
 
+## 2026-09-25 (pass 4) — a word with no writer, and payloads that never met the policy
+
+- **`overdue` was vocabulary without a writer.** The status sat in the CHECK
+  constraint, rendered as a Billing badge and was treated as "unpaid" by the
+  renewal sweep — and nothing in the codebase ever set it, so a lapsed invoice
+  read as `pending` for ever. The lesson generalises past this column: a status
+  the UI can display is a claim the system can be in that state, and if nothing
+  writes it, the claim is false. Now a daily tick materialises it, touching only
+  `pending` rows so a paid or voided invoice is never restated — which is also
+  what makes the operation safe to repeat.
+- **"Automatic renewal" was a copy claim with no worker behind it.** The sweep
+  existed, was correct, and was reachable only by calling a route by hand, while
+  the Billing page described renewals as something that happens. The fix is the
+  same shape as the health sweep's: a scheduled caller. The tick keeps one
+  invariant that the test file pins explicitly — it raises documents and marks
+  them late, and it never records a settlement, because only an explicit
+  settlement may move `paid_through`. An automatic job that can move money is how
+  the fabricated-settlement defect would come back.
+- **My first test of the tick was wrong, and the code was right.** I asserted a
+  renewal invoice would be raised for a client that already had an open one; the
+  sweep reuses the open invoice instead. That is the correct behaviour (one open
+  document per client, not a daily pile), and the test now says so in two cases
+  rather than one — the reuse is a rule worth stating, not an accident.
+- **Two scheduled jobs, one implementation of the guards.** Rather than copy the
+  skip-don't-queue and nothing-at-boot logic, `startScheduledTask` now owns it and
+  the health sweep delegates. The proof that the refactor was behaviour-preserving
+  is that its six existing tests passed untouched.
+- **A fix does not propagate to payloads that never went through it.** Pass 2
+  built the URL trust boundary for store and panel routes; the onboarding wizard
+  accepted a nested `baseUrl` and wrote it straight into a row, so the same
+  smuggling was still available one layer up — and the nested entries were
+  defaulted rather than validated (`typeof x === 'number' ? x : 1` accepts `NaN`,
+  `-5` and `1e9`). Three copies of that cast existed (wizard stores, wizard Head
+  Office, upgrade Head Office). This is the second time in this review that the
+  same policy had drifted across call sites; the answer is one helper per payload
+  shape, called by both routes.
+- **The exception had to be chosen, not assumed.** Onboarding raises rows before
+  their containers exist, so requiring a live host there would break the wizard —
+  the same tension development mode already resolves for the registry routes. The
+  checker takes `allowUnreachable` for that caller while still applying the
+  address policy and refusing a definitive wrong-kind answer. And the probe runs
+  only for a URL the operator supplied: a URL derived from the client slug cannot
+  be an attacker's, and probing it would add a timeout per store to every run.
+- **A non-array `stores` used to be a 500.** `(req.body?.stores ?? []).map(...)`
+  threw on any truthy non-array, so malformed input produced a stack trace instead
+  of a validation message. Guarded with a 400 — the same class as the missing
+  `purpose` column earlier in this review: the shape of the data was assumed
+  rather than checked, and the assumption held only for well-behaved clients.
+
 ## 2026-09-25 (pass 2) — the URL that carried the secret
 
 - **Four copies of a policy, two of them absent.** Store create and Head Office

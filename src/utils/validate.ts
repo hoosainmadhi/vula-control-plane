@@ -185,7 +185,19 @@ export const requireEmail = (body: unknown): string => {
   return email;
 };
 
-export const requirePassword = (body: unknown): string => requireString(body, 'password', 200);
+export const requirePassword = (body: unknown, key = 'password'): string =>
+  requireString(body, key, 200);
+
+/** Reads an optional email field: absent or blank → undefined, malformed → 400. */
+export const optionalEmail = (body: unknown, key = 'email'): string | undefined => {
+  const value = optionalString(body, key, 254);
+  if (value === undefined || value === null) return undefined;
+  const email = value.toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new ValidationError(`${key} is not a valid address`);
+  }
+  return email;
+};
 
 export const requireInt = (
   body: unknown,

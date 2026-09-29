@@ -403,3 +403,136 @@ describe('panel token reveal', () => {
     ).toBe(true);
   });
 });
+
+describe('onboarding payload validation (§19)', () => {
+  const wizard = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    name: 'Payload Pharmacy',
+    slug: 'payload-pharmacy',
+    deploymentType: 'single_store',
+    stores: [
+      {
+        name: 'Payload Main',
+        slug: 'payload-main',
+        baseUrl: 'http://localhost:3245',
+        terminalCount: 2,
+      },
+    ],
+    autoDeploy: false,
+    ...over,
+  });
+
+  it('refuses a stores value that is not an array, as a 400 rather than a crash', async () => {
+    const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send(wizard({ stores: 'payload-main' }));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/stores must be an array/i);
+  });
+
+  it('refuses a nested slug that could never be a store slug', async () => {
+    // The slug becomes a deployment hostname; the single-store route validates
+    // it and the wizard used to take whatever it was handed.
+    const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send(
+        wizard({
+          stores: [{ name: 'Bad', slug: 'Not A Slug!', baseUrl: 'http://localhost:3245' }],
+        }),
+      );
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/slug/i);
+  });
+
+  it('refuses nested terminal counts that are not whole numbers in range', async () => {
+    for (const terminalCount of [-3, 2.5, 400]) {
+      const res = await request(app)
+        .post('/api/clients')
+        .set(auth())
+        .send(
+          wizard({
+            slug: `payload-${String(terminalCount).replace(/[^a-z0-9]/gi, '')}`,
+            stores: [{ name: 'Bad', slug: 'bad-count', terminalCount }],
+          }),
+        );
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/terminalCount/i);
+    }
+  });
+
+  it('refuses a nested base URL with no scheme', async () => {
+    const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send(
+        wizard({
+          stores: [{ name: 'Bad', slug: 'bad-url', baseUrl: 'localhost:3245' }],
+        }),
+      );
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/http/i);
+  });
+
+  it('refuses a malformed nested admin email', async () => {
+    const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send(
+        wizard({
+          stores: [
+            {
+              name: 'Bad',
+              slug: 'bad-email',
+              baseUrl: 'http://localhost:3245',
+              adminEmail: 'not-an-email',
+            },
+          ],
+        }),
+      );
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/adminEmail/i);
+  });
+
+  it('refuses a nested Head Office URL with no scheme on a multi-store onboarding', async () => {
+    const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send(
+        wizard({
+          deploymentType: 'multi_store',
+          // Multi-store topology is a plan feature (L4), so the fixture has to
+          // buy a plan that grants it before the payload is even validated.
+          planId: await multiStorePlanId(),
+          stores: [
+            { name: 'A', slug: 'payload-a', baseUrl: 'http://localhost:3245' },
+            { name: 'B', slug: 'payload-b', baseUrl: 'http://localhost:3246' },
+          ],
+          headOffice: { name: 'HO', slug: 'payload-ho', baseUrl: 'localhost:3260' },
+        }),
+      );
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/http/i);
+  });
+
+  it('still accepts a well-formed payload, Head Office URL included', async () => {
+    const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send(
+        wizard({
+          slug: 'payload-good',
+          deploymentType: 'multi_store',
+          planId: await multiStorePlanId(),
+          stores: [
+            { name: 'Good A', slug: 'payload-good-a', baseUrl: 'http://localhost:3245' },
+            { name: 'Good B', slug: 'payload-good-b', baseUrl: 'http://localhost:3246' },
+          ],
+          headOffice: { name: 'Good HO', slug: 'payload-good-ho', baseUrl: 'http://localhost:3260' },
+        }),
+      )
+      .expect(201);
+    expect(res.body.client.headOffice).not.toBeNull();
+    expect(res.body.client.storesCount).toBe(2);
+  });
+});

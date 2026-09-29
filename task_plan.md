@@ -16,7 +16,21 @@ CONTEXT.md "Internal API contract").
 
 ## Current Phase
 
-**Pass 2 of the production review — the trust boundary (2026-09-25, complete).**
+**Pass 4 of the production review — operations (2026-09-25, complete).** Owner:
+*"go ahead with next task"*. `markOverdueInvoices` gives the `overdue` status its
+first writer; a daily billing tick (`BILLING_TICK_INTERVAL_MINUTES`, 0 disables)
+marks lapsed invoices and runs the renewal sweep, never settling anything; the
+two scheduled jobs share one implementation of the guards
+(`startScheduledTask`, with the health sweep delegating and its tests untouched);
+and the wizard's nested `stores[]`/`headOffice` plus the upgrade route's
+`headOffice` are validated through the same helpers as the registry routes —
+closing a hole where a nested `baseUrl` bypassed the Pass 2 trust boundary, and
+a non-array `stores` produced a 500. Tests CP **343 green (26 suites)**.
+**Still open from the review:** frontend test coverage (§27 — needs a tooling
+choice) and the `registryDb.ts` split (§26 — deferred to the next schema change).
+
+Previous — **Pass 2 of the production review — the trust boundary (2026-09-25,
+complete).**
 Owner: *"push / move on to phase 2"*. One managed-endpoint policy
 (`requireBaseUrl` + `assertManagedEndpoint`) now backs store create, store edit,
 Head Office create and Head Office edit — the two edit routes previously changed

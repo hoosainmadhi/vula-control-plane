@@ -334,6 +334,14 @@ apart in the first place.
   fleet is loopback, and a row is normally created before its container is
   deployed.
 
+**Onboarding is the one caller that may skip the reachability requirement.** The
+single→multi upgrade and the client wizard raise rows *before* their containers
+exist, so `assertManagedEndpoint` takes `allowUnreachable` there — the address
+policy and a definitive wrong-kind answer still refuse. It is passed only for a
+URL the operator supplied: a URL this server derived from the client slug is ours
+by construction, and probing it would add a timeout per store to every wizard run
+for a host that cannot exist yet.
+
 **Residual risk, stated rather than hidden**: resolution and the later `fetch`
 are independent, so a DNS record that rebinds between them is not caught, and
 there is no domain allowlist. Closing both is tracked in `tidbits.md`. What is
@@ -875,6 +883,25 @@ and the office's empty date fields had been treating null as "clear" all along.
 it (`PUT {status: 'paused'}`) and then remove it. The panel deployment keeps
 running either way — the guard exists so the control plane stops managing a live
 system deliberately, not by surprise.
+
+### Overdue invoices, and the daily tick (2026-09-25)
+
+**`overdue` is materialised, not derived.** The status has been in the schema
+since v1 — the CHECK, the Billing badge and the renewal sweep's unpaid filter all
+know it — but nothing ever wrote it, so a lapsed invoice read as merely `pending`
+for ever and the word appeared in the UI with no state behind it. `markOverdueInvoices`
+flips `pending` rows whose due date has passed; only `pending` is touched, which is
+what makes it safe to run repeatedly (a paid or voided invoice is never restated,
+and a second run the same day changes nothing). Due *today* is not yet late.
+
+**The billing tick** runs it and then the renewal sweep, daily by default
+(`BILLING_TICK_INTERVAL_MINUTES`, `0` disables). It exists because the renewal
+sweep was reachable only by an operator calling the route while the Billing page's
+copy implied renewals happen on their own. What the tick deliberately never does is
+record a settlement: the sweep raises documents, and only an explicit settlement
+moves `paid_through` — so an automatic job can never become money nobody received.
+The sweep also keeps one open invoice per client: a client that already has a
+pending or overdue invoice gets that one reused rather than a second raised.
 
 ### Charging once off (2026-09-16)
 

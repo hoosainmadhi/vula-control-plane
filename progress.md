@@ -1,5 +1,34 @@
 # Progress
 
+## 2026-09-25 — Pass 4: the daily billing tick, and nested onboarding payloads
+
+Owner: *"go ahead with next task"*. The review's §19 and §22.
+
+- **`overdue` finally gets written.** `markOverdueInvoices` flips `pending`
+  invoices whose due date has passed — the status had been in the schema, the UI
+  and the sweep's unpaid filter since v1 with nothing setting it.
+- **A daily billing tick** (`BILLING_TICK_INTERVAL_MINUTES`, default 1440, 0
+  disables) marks overdue invoices and runs the renewal sweep, so "automatic
+  renewal" is a mechanism rather than a line of copy. It never settles anything —
+  only an explicit settlement moves `paid_through`, pinned by a test.
+- **One scheduler implementation.** `startScheduledTask` owns the
+  skip-don't-queue and nothing-at-boot guards; the health sweep delegates to it
+  and its six existing tests passed untouched.
+- **Nested onboarding payloads are validated, not cast.** The wizard's `stores[]`
+  and `headOffice`, and the upgrade route's `headOffice`, now go through the same
+  helpers as the single-store routes: slug, terminal counts, base URL shape and
+  address policy, admin email. The wizard's nested `baseUrl` had bypassed the
+  Pass 2 trust boundary entirely, and a non-array `stores` was a 500. Onboarding
+  keeps one deliberate exception — `allowUnreachable`, because rows are raised
+  before containers exist — and probes only operator-supplied URLs.
+
+Tests CP **343 green (26 suites)** — 15 new (tick and payload validation);
+typecheck, frontend build and the dist check clean.
+
+Remaining from the review: **frontend test coverage** (§27, needs tooling) and the
+`registryDb.ts` split (§26, deferred to the next schema change).
+
+## 2026-09-25 — Pass 2 of the production review: the trust boundary
 ## 2026-09-25 — Pass 2 of the production review: the trust boundary
 
 Owner: *"push / move on to phase 2"*. The review's §8, §9, §12 and §13 — the
