@@ -118,7 +118,52 @@ On the control plane itself: `/health` answers; **Errors** is empty; **Deploymen
 shows the job and its steps; and the first scheduled health sweep (10 minutes after
 boot) leaves the fleet's health and versions fresh rather than deploy-time.
 
-## 7. Go-live sequence for the first real client (easy to miss)
+## 7. Staging dress rehearsal (run this before §8)
+
+The `staging` branch is the release candidate: promote `dev → staging`, deploy
+the same three workloads on staging hostnames, and rehearse the entire go-live
+sequence — including the failure paths — on real Coolify infrastructure. A
+staging that has never rehearsed a deploy is a hope with a hostname.
+
+**Hostnames** (single-label, all covered by the existing `*.vula-app.co.za`
+wildcard — no second wildcard record needed):
+- Control plane: `staging-cp.vula-app.co.za`
+- Stores: `staging-<slug>.vula-app.co.za`
+- Head Office: `staging-ho-<company-slug>.vula-app.co.za`
+
+**Secrets**: a **separate keypair** (`npx tsx scripts/generate-licence-key.ts`) —
+the staging fleet must not share the production trust root, or a leaked staging
+private key signs production licences. Its own `CONTROL_PLANE_TOKEN` per
+workload, its own JWT secrets, and a test SMTP account (Mailhog/Mailtrap on the
+host, or a plain inbox you own).
+
+**Differences from production (deliberate, and none of them weaken a gate)**:
+the database volumes are staging-only; the SMTP account is a test inbox; and the
+Head Office bootstraps its executive via `POST /api/internal/admin/init` rather
+than seeded demo data — the `SEED_DEMO_DATA` boot gate refuses production and
+staging alike, which is correct: the rehearsal should walk the real activation
+path, not receive a known login.
+
+**Rehearse, in order**:
+1. Deploy the control plane → Settings (office identity, the test SMTP) → send
+   the test email.
+2. Run the backup script's first pass (§9) and confirm the three databases land
+   off-host.
+3. Onboard a client on a multi-store plan → raise the initial invoice → record
+   the payment → confirm the client flips to `active`.
+4. Deploy a store → licence accepted, register **trading**, Head Office sees the
+   branch → ring a sale, confirm it reaches the Head Office summary.
+5. The failure paths: pause a store mid-sale (refusals, resume), a licence push
+   to a stopped store (recorded, retried by the sweep), and a wrong-app-kind
+   registration (refused).
+6. The restore drill (§9): restore the backup into a scratch container, boot it,
+   confirm a client, a store and an invoice are readable.
+
+**Then promote**: `staging → main`, and repeat §8's verification on the
+production resources. A staging that validated the whole sequence is the
+strongest argument the production deploy is uneventful.
+
+## 8. Go-live sequence for the first real client (easy to miss)
 
 The billing state machine is strict since 2026-09-25: **a client that has never
 paid derives `suspended`, and a suspended client cannot trade.** Onboarding alone
@@ -137,7 +182,7 @@ invoices `overdue` and raises renewals. It never records a settlement, by design
 so a client whose payment has arrived but was never recorded stays suspended and
 stops trading.
 
-## 8. Day-2
+## 9. Day-2
 
 - **Upgrades:** migrations run on every database open and some rebuild tables.
   Expect a short gap, not zero downtime, and snapshot the database before a schema
@@ -149,7 +194,7 @@ stops trading.
 - **Volumes are keyed by name** in Coolify: renaming the layout path applies to new
   deployments only, and orphans existing data.
 
-## 9. Backups (D3) — mechanism, schedule, drill
+## 10. Backups (D3) — mechanism, schedule, drill
 
 No app in the fleet schedules a backup, and a bare `.db` copy is not one (the WAL
 can hold most of the data). On the Coolify host, with `sqlite3` installed:
@@ -192,7 +237,7 @@ go-live and quarterly after**: restore a copy to a scratch container, boot it,
 sign in, and confirm a client, a store and an invoice are readable — an
 unrestored backup is a hope, not a backup.
 
-## 10. Accepted at launch (recorded, not forgotten)
+## 11. Accepted at launch (recorded, not forgotten)
 
 - **Secrets at rest**: tokens and the SMTP password are plaintext in the SQLite
   databases. Mitigations: one operator, an obscure panel hostname, the control

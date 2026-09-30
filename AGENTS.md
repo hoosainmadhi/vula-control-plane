@@ -244,14 +244,18 @@ env-setup.ts` sets `CP_DB_PATH=':memory:'` + office env; `beforeEach`
 
 ## Branch strategy & house notes
 
-- `main` (production) · `dev` (integration) · `feat/*`; hotfixes from `main`.
-  Commit style `type(scope): description` (`feat(platform)`, `feat(ui)`,
-  `fix(platform)`, `docs`, `chore`).
+- `main` (production) · `staging` (release candidate — the Coolify staging
+  resources track it; `prompts/production-cutover.md` §7 is the rehearsal) ·
+  `dev` (integration) · `feat/*`; hotfixes from `main`. Promote `dev → staging`
+  for the dress rehearsal, `staging → main` once it validates. Commit style
+  `type(scope): description` (`feat(platform)`, `feat(ui)`, `fix(platform)`,
+  `docs`, `chore`).
 - Deploy: Coolify build pack "Dockerfile", `PORT` injected by Coolify,
   `CP_DB_PATH=/data/control-plane.db` (persistent volume), `OFFICE_ADMIN_*`,
   `JWT_SECRET` (≥32 chars), `HEALTH_SWEEP_INTERVAL_MINUTES` (default 10; 0 =
   manual sweeps only), `CP_TRUST_PROXY_HOPS` (proxy hops in front of the app;
   0 trusts none, which is the safe default when directly exposed),
   `BILLING_TICK_INTERVAL_MINUTES` (default 1440 = daily; 0 = manual renewals
-  only). Full playbook in `prompts/`.
+  only), `MANAGED_ENDPOINT_SUFFIXES=.vula-app.co.za` (the approved deployment
+  domain for store/panel URLs in production). Full playbook in `prompts/`.
 - Seeded/dev credentials are demo-only; change before going live.
