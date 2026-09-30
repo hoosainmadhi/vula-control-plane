@@ -10,15 +10,15 @@ say `vula-app.co.za`, substitute the registered domain.
 
 ---
 
-## 0. Decisions to lock before touching Coolify
+## 0. Decisions — locked with the owner (2026-09-29)
 
-| # | Decision | Why it blocks |
-| - | -------- | ------------- |
-| D1 | **Hostname scheme.** Wildcard `*.<domain>` for stores (`<slug>.<domain>`), `<company-slug>-ho.<domain>` for Head Offices, and an **obscure** hostname for the panel (e.g. `admin.<domain>` — the tenant runbook argues the panel should not be discoverable). | DNS, `APP_URL`, `base_url` and every store row are built from it. Changing it later means re-registering every store. |
-| D2 | **Start from an empty registry** (recommended) or deliberately import selected real clients. | The dev registry holds demo clients, dozens of `localhost` rows and demo invoices. In production the managed-endpoint policy refuses `http://` and private addresses, so a lifted `localhost` row cannot even be re-saved. |
-| D3 | **Backups.** Neither app schedules one: stores have manual-only backup endpoints, Head Offices have none, and the control plane's registry has none. Decide the mechanism (host cron taking a volume snapshot, or `POST /api/backups?scope=db` per store on a schedule) and a retention. | "Persistent volume" is not a backup. This is the one gap that loses money silently. |
-| D4 | **Secrets at rest.** Store/panel control-plane tokens and the SMTP password sit in plaintext in both SQLite databases; the panel is a single admin with a 7-day JWT and no roles. Accept for launch, or schedule the encryption/RBAC work first? | Whoever reads a database file holds every store credential. Tolerable for a first deploy with one operator; not for a support hire. |
-| D5 | **Which login branches.** The panel deploys from `main`; this repo's session work is on `dev` (see §2). | A deploy from `main` today ships the pre-review CP. |
+| # | Decision | State |
+| - | -------- | ----- |
+| D1 | **Hostname scheme confirmed**: stores `<slug>.vula-app.co.za`, Head Offices `<company-slug>-ho.vula-app.co.za`, control plane `vula-cp-mzsza-2026.vula-app.co.za` — obscure on purpose; the panel is not meant to be discoverable. | Locked |
+| D2 | **Clean registry**: production boots with no companies, no stores and no demo invoices; real clients are onboarded from there. The development database is not lifted (its `localhost` rows would be refused by the managed-endpoint policy anyway). | Locked |
+| D3 | **Backups**: nightly `sqlite3 .backup` of the control-plane registry, every store database and every Head Office database on the host, copied off-host, 30-day retention, restore drill before go-live and quarterly after. Script and schedule in §9. | Script ready; cron to install on the host |
+| D4 | **Secrets**: generated per §4 and kept in a password manager as the source of record. Plaintext-at-rest accepted for launch with the mitigations in §10 (single operator, obscure panel hostname, host treated as the perimeter); field-level encryption deferred to tidbits. | Accepted for launch |
+| D5 | **Branch**: production deploys from `main`; promote after the §2 review. | **Open — the owner's merge** |
 
 ## 1. Close the tenant's fail-open traps before a store trades
 
@@ -59,12 +59,18 @@ customer databases.
 
 ## 3. DNS and TLS
 
-1. Wildcard `*.<domain>` → the Coolify host. That single record covers every
-   store, every merchant Head Office and the panel's own hostname.
-2. Per Coolify resource: **Automatic SSL** (Let's Encrypt).
+1. **One wildcard record covers nearly everything**: `*.vula-app.co.za` → the
+   Coolify host. That includes every store (`<slug>.vula-app.co.za`), every
+   merchant Head Office (`<company-slug>-ho.vula-app.co.za`) and the control plane
+   itself (`vula-cp-mzsza-2026.vula-app.co.za`).
+2. Per Coolify resource: **Automatic SSL** (Let's Encrypt) with the resource's
+   domain set — the panel's is `vula-cp-mzsza-2026.vula-app.co.za`.
 3. **The certificate must be live before the first store row is created.** From
-   the review's Pass 2, production refuses a store URL that is plaintext, private,
+   the Pass 2 policy, production refuses a store URL that is plaintext, private,
    or does not answer — the app-kind probe has to succeed at registration.
+4. Set `MANAGED_ENDPOINT_SUFFIXES=.vula-app.co.za` on the control plane so the
+   approved-domain allowlist matches the scheme (review §8: the control plane
+   dials only hosts on the deployment domain).
 
 ## 4. Secrets inventory
 
@@ -137,9 +143,60 @@ stops trading.
 - **Volumes are keyed by name** in Coolify: renaming the layout path applies to new
   deployments only, and orphans existing data.
 
-## 9. Accepted at launch (recorded, not forgotten)
+## 9. Backups (D3) — mechanism, schedule, drill
 
-Secrets at rest and panel RBAC (D4); the login limiter's counters are per-process
-(a restart clears them); DNS resolution and the later fetch are independent, so a
-fast-rebinding record is not caught, and there is no production domain allowlist
-yet — `tidbits.md` in this repo carries all four with the reasoning.
+No app in the fleet schedules a backup, and a bare `.db` copy is not one (the WAL
+can hold most of the data). On the Coolify host, with `sqlite3` installed:
+
+```bash
+#!/usr/bin/env bash
+# /usr/local/bin/vula-backup.sh — run nightly from root's crontab, e.g.
+#   17 2 * * * /usr/local/bin/vula-backup.sh
+set -euo pipefail
+STAMP=$(date +%Y%m%d-%H%M%S)
+DEST=/backups/vula                      # a second disk, or rsync'd off-host after
+mkdir -p "$DEST/cp" "$DEST/stores" "$DEST/ho"
+
+# Control plane registry — companies, stores, invoices, licence state, tokens.
+sqlite3 /data/apps/vula-app/cp/control-plane.db \
+  ".backup '$DEST/cp/control-plane-$STAMP.db'"
+
+# Stores — one SQLite database per volume, plus the images the app's own
+# backup endpoint would include.
+for db in /data/apps/vula-app/store/*/*-sqlite-db/za-pos.db; do
+  name=$(basename "$(dirname "$db")")
+  sqlite3 "$db" ".backup '$DEST/stores/${name}-$STAMP.db'"
+done
+
+# Head Offices — no in-app backup endpoint exists, so the same method.
+for db in /data/apps/vula-app/ho/*/*-sqlite-db/head-office.db; do
+  name=$(basename "$(dirname "$db")")
+  sqlite3 "$db" ".backup '$DEST/ho/${name}-$STAMP.db'"
+done
+
+# Off-host, then prune. Off-host is the part that survives the host.
+rsync -a --delete "$DEST/" backup@backup-host:/srv/vula-backups/
+find "$DEST" -name '*.db' -mtime +30 -delete
+```
+
+`.backup` uses SQLite's online backup API, so it is consistent while the apps
+write and produces one self-contained file — no WAL to carry. Retention: 30
+nights on the backup disk, plus a monthly copy kept a year. **Drill before
+go-live and quarterly after**: restore a copy to a scratch container, boot it,
+sign in, and confirm a client, a store and an invoice are readable — an
+unrestored backup is a hope, not a backup.
+
+## 10. Accepted at launch (recorded, not forgotten)
+
+- **Secrets at rest**: tokens and the SMTP password are plaintext in the SQLite
+  databases. Mitigations: one operator, an obscure panel hostname, the control
+  plane host treated as the perimeter (it holds every store token and the licence
+  private key), and off-host backups on a trusted target. Field-level encryption
+  is deferred and tracked in tidbits.
+- **The login limiter's counters are per-process** — a restart clears them, and
+  two replicas would not share them.
+- **DNS resolution and the later fetch are independent**, so a fast-rebinding
+  record is not caught by the address policy.
+- **Panel authentication** is one admin with a 7-day JWT and no roles — MFA and
+  RBAC are the pre-wide-exposure upgrade, not a launch blocker for a single
+  operator.

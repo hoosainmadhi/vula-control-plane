@@ -24,12 +24,12 @@ checklist to close before cutover — see
 
 - Coolify resource creation rights; a GitHub App covering both repos
   (`za-pos` and `za-pos-control-plane`), or public repos.
-- DNS for the registered domain (the examples below say `vula-app.co.za`; substitute
-  yours): a wildcard `*.<domain>` → the Coolify server, so every store answers at
-  `<slug>.<domain>` and every Head Office at `<company-slug>-ho.<domain>`, plus an
-  obscure hostname for this panel (the tenant's production runbook argues for one
-  deliberately — the panel is not meant to be discoverable). Store slug = the
-  registry slug = the subdomain label.
+- DNS: the domain is registered (**vula-app.co.za**) and a wildcard
+  `*.vula-app.co.za` → the Coolify server covers every store
+  (`<slug>.vula-app.co.za`), every Head Office (`<company-slug>-ho.vula-app.co.za`)
+  and this panel, which sits on the obscure hostname
+  `vula-cp-mzsza-2026.vula-app.co.za` by decision. Store slug = the registry slug =
+  the subdomain label.
 
 ## Part A — deploy a Vula store (repeat per store)
 
@@ -120,6 +120,9 @@ checklist to close before cutover — see
    HEALTH_SWEEP_INTERVAL_MINUTES=10       # keeps health/version honest; 0 = manual
    BILLING_TICK_INTERVAL_MINUTES=1440     # daily: marks lapsed invoices overdue and
                                           # raises renewals; 0 = manual
+   MANAGED_ENDPOINT_SUFFIXES=.vula-app.co.za
+                                          # the approved deployment domain; production
+                                          # refuses a store or panel URL outside it
    COOLIFY_API_URL / COOLIFY_API_TOKEN      # needed to auto-provision
    COOLIFY_PROJECT_UUID / COOLIFY_SERVER_UUID / COOLIFY_GITHUB_APP_UUID
    LOG_LEVEL=info
@@ -141,8 +144,8 @@ checklist to close before cutover — see
    overrides the image's `chown`, so a root-owned directory stops SQLite creating
    its WAL. (The image's entrypoint now makes a root-owned `/data` writable and
    drops to `node`, which covers a directory that becomes root-owned later.)
-4. **Domains:** the panel's own hostname (e.g. `https://admin.<domain>`) →
-   **Deploy**. Healthcheck hits `/health` (`{ status: 'ok' }`).
+4. **Domains:** `https://vula-cp-mzsza-2026.vula-app.co.za` → **Deploy**.
+   Healthcheck hits `/health` (`{ status: 'ok' }`).
 5. **After the first boot — Settings.** This is configuration, not env: sign in and
    set the office identity (the name that appears on invoices), the payment terms,
    and the SMTP account, then press **Send test email** and confirm it arrives.

@@ -79,10 +79,13 @@ outbound-call and login surfaces.
   refused request no longer extending the window, and expired buckets swept.
 - **Dev credentials hint** behind `import.meta.env.DEV`, and `npm run build`
   now fails if it survives minification (`scripts/check-dist.mjs`).
+- **The approved-domain allowlist is implemented** (`MANAGED_ENDPOINT_SUFFIXES`,
+  production only): with `.vula-app.co.za` set, `https://attacker.example` is
+  refused outright even if it identifies as Vula. The owner confirmed the domain,
+  which is what this needed.
 - Residual, recorded in tidbits: the limiter is per-process (a restart clears
-  it, two replicas do not share it), DNS resolution and the later fetch are
-  independent (a fast rebind is not caught without pinning the resolved IP),
-  and there is no production domain allowlist yet.
+  it, two replicas do not share it), and DNS resolution and the later fetch are
+  independent (a fast rebind is not caught without pinning the resolved IP).
 
 Tests CP **328 green (25 suites)** — 18 of them new in
 `managedEndpoint.test.ts`; backend typecheck, frontend `tsc -b`, the

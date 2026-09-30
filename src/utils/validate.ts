@@ -174,6 +174,23 @@ export const requireBaseUrl = (body: unknown, production = env.isProduction): st
         'baseUrl names an internal hostname, which the control plane will not call in production',
       );
     }
+    // An approved-domain allowlist closes the review's "attacker.example" case
+    // completely: in production this server dials only hosts on the deployment
+    // domain. Configured per deployment (MANAGED_ENDPOINT_SUFFIXES); empty
+    // leaves the check off, e.g. while a domain is still being chosen.
+    const approvedSuffixes = (process.env.MANAGED_ENDPOINT_SUFFIXES ?? '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+      .map((s) => (s.startsWith('.') ? s : `.${s}`));
+    if (
+      approvedSuffixes.length > 0 &&
+      !approvedSuffixes.some((suffix) => host === suffix.slice(1) || host.endsWith(suffix))
+    ) {
+      throw new ValidationError(
+        'baseUrl is not on an approved deployment domain — the control plane will not call it in production',
+      );
+    }
   }
   return url;
 };

@@ -124,6 +124,40 @@ describe('requireBaseUrl', () => {
     }
   });
 
+  describe('with an approved deployment domain configured', () => {
+    beforeEach(() => {
+      process.env.MANAGED_ENDPOINT_SUFFIXES = '.vula-app.co.za';
+    });
+
+    afterEach(() => {
+      delete process.env.MANAGED_ENDPOINT_SUFFIXES;
+    });
+
+    it('refuses a host outside the deployment domain in production', () => {
+      expect(() => requireBaseUrl({ baseUrl: 'https://attacker.example' }, true)).toThrow(
+        /approved deployment domain/,
+      );
+    });
+
+    it('allows hosts on the deployment domain, subdomain or bare', () => {
+      expect(requireBaseUrl({ baseUrl: 'https://branch.vula-app.co.za' }, true)).toBe(
+        'https://branch.vula-app.co.za',
+      );
+      expect(requireBaseUrl({ baseUrl: 'https://vula-cp-mzsza-2026.vula-app.co.za' }, true)).toBe(
+        'https://vula-cp-mzsza-2026.vula-app.co.za',
+      );
+      expect(requireBaseUrl({ baseUrl: 'https://vula-app.co.za' }, true)).toBe(
+        'https://vula-app.co.za',
+      );
+    });
+
+    it('does not apply the allowlist in development', () => {
+      expect(requireBaseUrl({ baseUrl: 'http://localhost:3260' }, false)).toBe(
+        'http://localhost:3260',
+      );
+    });
+  });
+
   it('leaves development alone — the fleet and the suite run on loopback', () => {
     expect(requireBaseUrl({ baseUrl: 'http://localhost:3260' }, false)).toBe('http://localhost:3260');
     expect(requireBaseUrl({ baseUrl: 'http://127.0.0.1:3261' }, false)).toBe('http://127.0.0.1:3261');

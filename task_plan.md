@@ -30,8 +30,12 @@ a non-array `stores` produced a 500. Tests CP **343 green (26 suites)**.
 jsdom, two added dev deps) with three suites and 22 tests over the money
 formatter, the `api` wrapper and the store form; `npm run test:all` runs
 backend + frontend (365 tests). Page-level behaviour tests remain (tidbits).
-**Still open from the review:** the `registryDb.ts` split (§26 — deferred to the
-next schema change).
+**The approved-domain allowlist** (`MANAGED_ENDPOINT_SUFFIXES`, production only)
+is implemented after the owner confirmed the domain — `vula-app.co.za`, with the
+panel at `vula-cp-mzsza-2026.vula-app.co.za` (review §8 closes completely, and
+`prompts/production-cutover.md` records the locked decisions). **Still open from
+the review:** the `registryDb.ts` split (§26 — deferred to the next schema
+change).
 
 Previous — **Pass 2 of the production review — the trust boundary (2026-09-25,
 complete).**

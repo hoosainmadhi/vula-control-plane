@@ -34,11 +34,10 @@
   rebinds between the two is not caught by the address policy. Closing it means
   pinning the resolved address into the connection (a custom dispatcher) — the
   same technique the tenant's image fetcher uses.
-- **No production domain allowlist.** The review suggested requiring an approved
-  deployment domain (`*.stores.<vendor-domain>`); the policy today refuses
-  private addresses and requires the host to identify as Vula, which does not
-  constrain *which* public host. Needs an owner decision about the naming scheme
-  before it can be enforced.
+- ~~**No production domain allowlist.**~~ **Implemented 2026-09-29** —
+  `MANAGED_ENDPOINT_SUFFIXES=.vula-app.co.za` (review §8's "approved deployment
+  domain"): production refuses a store or Head Office URL outside the deployment
+  domain. Leave it unset in development, where the fleet runs on loopback.
 
 ## Deferred from the licence-counter pass (2026-09-16)
 

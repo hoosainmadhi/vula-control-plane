@@ -342,9 +342,15 @@ URL the operator supplied: a URL this server derived from the client slug is our
 by construction, and probing it would add a timeout per store to every wizard run
 for a host that cannot exist yet.
 
+**The approved-domain allowlist** (`MANAGED_ENDPOINT_SUFFIXES`, production only):
+when set, a base URL outside the deployment domain is refused outright —
+`https://attacker.example` cannot be registered even if it identifies as Vula.
+Set to `.vula-app.co.za` in production per the hostname scheme.
+
 **Residual risk, stated rather than hidden**: resolution and the later `fetch`
-are independent, so a DNS record that rebinds between them is not caught, and
-there is no domain allowlist. Closing both is tracked in `tidbits.md`. What is
+are independent, so a DNS record that rebinds between them is not caught. Closing
+that needs the resolved address pinned into the connection (a custom dispatcher);
+it is tracked in `tidbits.md` rather than pretended away. What is
 closed is the review's scenario: a row cannot be left pointing at an
 unvalidated host, because the host has to identify as Vula before anything is
 saved.
