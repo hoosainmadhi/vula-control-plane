@@ -22,7 +22,13 @@ say `vula-app.co.za`, substitute the registered domain.
 
 ## 1. Close the tenant's fail-open traps before a store trades
 
-All four are in `~/apps/za-pos`, all small, all verified by reading the code:
+**All four are fixed 2026-09-29 on the tenant's `dev` branch** (see its
+`progress.md`) — the lease key is a production boot gate on both apps,
+`APP_URL` is required, the Head Office database path honours its fallback, and
+the seed gate refuses production. Re-verify with the licence-activation check in
+§6 after the first deploy.
+
+Originally all four were verified by reading the code:
 
 1. **`LEASE_PUBLIC_KEY` is not a boot gate.** Blank or malformed leaves the store
    in *unlicensed dev mode*: licences are accepted but **not verified**, and every
