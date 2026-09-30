@@ -10,6 +10,19 @@
   Related ideas that are consequently _not_ backlog: support retainers, per-branch
   support fees, support call-out charges.
 
+## Deferred from the optimed comparison (2026-09-30)
+
+- **The Coolify lifecycle exports are unwired.** `stopApplication`,
+  `startApplication` and `deleteApplication` are exported with no callers, while
+  optimed wires suspend/resume and teardown into its routes (suspend stops the
+  container). Whether pausing a store should stop its container here is a
+  product decision — the current "pause" is registry-level only and the
+  deployment keeps running. `restartApplication` (re-read env without a rebuild)
+  and domain read/update are the other two optimed has that this repo lacks.
+- **`COOLIFY_ZA_POS_REPO_URL` / `COOLIFY_ZA_POS_BRANCH`** are read by
+  `deployFromSpec` but not in `.env.sample` — add them to the deploy docs when
+  the first production store is provisioned by the wizard.
+
 ## Deferred from the operations pass (2026-09-25)
 
 - **Frontend tests (review §27) — started 2026-09-25.** The harness exists

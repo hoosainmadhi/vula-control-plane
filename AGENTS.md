@@ -41,6 +41,7 @@ npm run typecheck    # backend tsc --noEmit
 npm run build        # backend tsc + frontend production build
 npm start            # run compiled dist/server.js (production)
 npm run smoke        # boot smoke vs the dev store stub (API must be running)
+npm run probe        # verify Coolify API connectivity and token (needs COOLIFY_*)
 npm run format       # prettier
 ```
 
@@ -91,6 +92,7 @@ za-pos-control-plane/
 ├── scripts/
 │   ├── dev-store-stub.ts  # stand-in tenant internal API until za-pos ships it
 │   ├── reseed-fleet.ts    # rebuild the demo registry from the live deployments
+│   ├── coolify-probe.ts   # verify Coolify API connectivity + token before first use
 │   └── smoke-test.sh      # curl boot smoke against :3240 + stub :3299
 ├── frontend/              # React 19 + Vite + Tailwind v4 (own package)
 │   └── src/

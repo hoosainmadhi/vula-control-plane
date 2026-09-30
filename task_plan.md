@@ -33,7 +33,12 @@ backend + frontend (365 tests). Page-level behaviour tests remain (tidbits).
 **The approved-domain allowlist** (`MANAGED_ENDPOINT_SUFFIXES`, production only)
 is implemented after the owner confirmed the domain — `vula-app.co.za`, with the
 panel at `vula-cp-mzsza-2026.vula-app.co.za` (review §8 closes completely, and
-`prompts/production-cutover.md` records the locked decisions). **Still open from
+`prompts/production-cutover.md` records the locked decisions). **`main` is
+promoted to the same commit** (`origin/main` = `d19016f`, fast-forward) —
+production now deploys the reviewed code. **The optimed Coolify probe is
+adopted** (`npm run probe`, `scripts/coolify-probe.ts`) — the one piece of its
+integration this repo lacked; the unused lifecycle exports (stop/start/delete)
+stay unwired pending the product question in tidbits. **Still open from
 the review:** the `registryDb.ts` split (§26 — deferred to the next schema
 change).
 

@@ -15,6 +15,7 @@
     "format": "prettier --write .",
     "typecheck": "tsc --noEmit",
     "stub": "tsx scripts/dev-store-stub.ts",
+    "probe": "tsx scripts/coolify-probe.ts",
     "smoke": "bash scripts/smoke-test.sh",
     "test:ui": "jest --config frontend/jest.config.cjs",
     "test:all": "npm test && npm run test:ui"

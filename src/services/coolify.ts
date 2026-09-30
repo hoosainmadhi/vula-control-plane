@@ -270,6 +270,33 @@ export async function triggerDeploy(coolifyUuid: string): Promise<void> {
   );
 }
 
+/** Connectivity probe for scripts/coolify-probe.ts — verifies URL, token and
+ *  that the API answers, before the first provisioning depends on them. The
+ *  optimed control plane ships the same check (`npm run probe`); without it a
+ *  misconfigured Coolify integration surfaces only mid-onboarding, as a failed
+ *  store deployment. */
+export const probeCoolify = async (): Promise<{ version: string | null; message: string }> => {
+  const config = readCoolifyConfig();
+  if (!config) {
+    return {
+      version: null,
+      message:
+        'Coolify is not configured (COOLIFY_API_URL / COOLIFY_API_TOKEN / COOLIFY_PROJECT_UUID / COOLIFY_SERVER_UUID / COOLIFY_GITHUB_APP_UUID)',
+    };
+  }
+  try {
+    // /api/v1/version returns a plain-text version (e.g. "4.3.10"), not JSON.
+    const res = await fetch(`${config.apiUrl}${API_VERSION_PATH}/version`, {
+      headers: { Authorization: `Bearer ${config.apiToken}` },
+    });
+    if (!res.ok) return { version: null, message: `HTTP ${res.status}` };
+    const version = (await res.text()).trim();
+    return { version, message: 'Connected' };
+  } catch (err) {
+    return { version: null, message: err instanceof Error ? err.message : 'Probe failed' };
+  }
+};
+
 /** Stops an application container. */
 export async function stopApplication(coolifyUuid: string): Promise<void> {
   const config = readCoolifyConfig();

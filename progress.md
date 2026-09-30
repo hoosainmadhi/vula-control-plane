@@ -1,5 +1,28 @@
 # Progress
 
+## 2026-09-30 — the optimed comparison, and a Coolify probe
+
+Owner: *"go ahead"* on the CP `dev → main` promotion (done — `origin/main` at
+`d19016f`, fast-forward, 11 commits / 57 files) and *"look at
+~/apps/optimed-control-plane to see coolify integration"*.
+
+- **Comparison:** optimed's client wraps the whole lifecycle (stop/start/
+  restart, domain read/update, delete, probe, manual-onboarding instructions);
+  this repo's does creation and deploy for two application types from one repo,
+  with the lease public key injected and a per-client volume layout. Each has a
+  half the other lacks; the lifecycle half is recorded in tidbits as a product
+  decision (does pausing a store stop its container?), not cleanup.
+- **Adopted:** `probeCoolify` + `scripts/coolify-probe.ts` + `npm run probe` —
+  verifies the Coolify API URL, token and UUIDs against the real instance
+  before anything depends on provisioning. Four tests (missing config, plain-
+  text version, HTTP refusal, network failure).
+- Two harness lessons from the probe tests: the "missing configuration" case
+  deleted the COOLIFY_* variables for the whole process, so the tests after it
+  ran with no config (fixtures that mutate process.env must restore), and
+  `scripts/coolify-probe.ts` called the repo logger's `error` with two
+  arguments where it takes one.
+
+## 2026-09-25 — Pass 4 (continued): the frontend suite exists
 ## 2026-09-25 — Pass 4 (continued): the frontend suite exists
 
 Owner: *"go ahead with next task"*. The review's §27 — frontend coverage was

@@ -1,5 +1,38 @@
 # Findings
 
+## 2026-09-30 — the optimed comparison, and a Coolify probe adopted
+
+Owner: *"look at ~/apps/optimed-control-plane to see coolify integration"* — the
+reference implementation's Coolify client, read against this repo's, with the
+cutover in mind.
+
+- **The two clients diverged from a common ancestor, and each kept one half.**
+  Optimed's wraps the whole application lifecycle (create, deploy, stop, start,
+  restart, domain read/update, delete, a connectivity probe and a
+  manual-onboarding-instructions fallback); this repo's does creation and deploy
+  only — but for two application types from one repo (`dockerfile_location`),
+  with the lease public key and `APP_URL` injected into every deployment, a
+  per-client host-path layout, and a configurable repo/branch. Neither is a
+  superset; the lifecycle half is what this repo never grew.
+- **The lifecycle exports were dead code here.** `stopApplication`,
+  `startApplication` and `deleteApplication` were exported with no callers, so
+  "pause a store" stops at the registry flag while optimed's suspend stops the
+  container. Whether pausing a store should stop its container is a product
+  decision, not cleanup — recorded in tidbits rather than wired silently.
+- **The probe was the one piece worth adopting today.** `npm run probe` verifies
+  the Coolify API URL, token and UUIDs against the real instance before anything
+  depends on provisioning — without it, a wrong API URL surfaces only
+  mid-onboarding as a failed store deployment. It went in verbatim (same
+  plain-text `/api/v1/version` endpoint, same env names) with a small test suite;
+  the first version of that suite deleted the `COOLIFY_*` variables it was
+  checking and poisoned the tests after it — a probe test that mutates the
+  process environment needs its own restore.
+- **The API quirks are already encoded here.** `deployFromSpec` uses
+  `applications/private-github-app`, env vars without `is_build_time`, storage
+  via POST, and the per-client bind-mount layout — the same quirks optimed's
+  findings documented against Coolify v4.3.10. The common ancestor shows in the
+  shared `request` wrapper's error handling too.
+
 ## 2026-09-25 (pass 4) — a word with no writer, and payloads that never met the policy
 
 - **`overdue` was vocabulary without a writer.** The status sat in the CHECK
