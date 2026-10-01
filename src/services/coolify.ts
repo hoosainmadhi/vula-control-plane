@@ -164,12 +164,28 @@ const deployFromSpec = async (spec: DeploymentSpec): Promise<CreateServiceResult
   // is what Coolify keys storage by, so it must be unique and stable.
   const volumeName = `vula-${spec.kind}-${slug}-sqlite-db`;
   const hostPath = `/data/apps/vula-app/${spec.kind}/${spec.clientSlug}/${slug}-sqlite-db`;
-  await request(config, 'POST', `${API_VERSION_PATH}/applications/${coolifyUuid}/storages`, {
-    type: 'persistent',
-    name: volumeName,
-    mount_path: '/data',
-    host_path: hostPath,
-  });
+  try {
+    await request(config, 'POST', `${API_VERSION_PATH}/applications/${coolifyUuid}/storages`, {
+      type: 'persistent',
+      name: volumeName,
+      mount_path: '/data',
+      host_path: hostPath,
+    });
+  } catch (err) {
+    // Coolify 4.3.23 refuses API-created bind mounts outright ("host_path ...
+    // is not allowed"), so the per-client host tree the backup plan assumes can
+    // no longer come from this call. A named volume keeps /data persistent
+    // through the same API — it lives under /var/lib/docker/volumes instead.
+    if (!(err instanceof CoolifyError)) throw err;
+    logger.warn(
+      `Coolify refused a host-path volume for ${slug} — falling back to named volume ${volumeName}`,
+    );
+    await request(config, 'POST', `${API_VERSION_PATH}/applications/${coolifyUuid}/storages`, {
+      type: 'persistent',
+      name: volumeName,
+      mount_path: '/data',
+    });
+  }
 
   // Trigger deployment
   await request(

@@ -65,6 +65,15 @@ beforeEach(() => {
     if (s.startsWith(COOLIFY_URL)) {
       if (s.endsWith('/storages')) {
         storageCalls.push({ url: s, body: String(init?.body ?? '') });
+        if (
+          process.env.COOLIFY_REFUSE_HOST_PATH === 'true' &&
+          String(init?.body ?? '').includes('host_path')
+        ) {
+          return jsonResponse(422, {
+            message: 'Validation failed.',
+            errors: { host_path: ['This field is not allowed.'] },
+          });
+        }
         return jsonResponse(201, { ok: true });
       }
       if (s.endsWith('/applications/private-github-app')) {
@@ -102,6 +111,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.COOLIFY_FAIL_CREATE;
+  delete process.env.COOLIFY_REFUSE_HOST_PATH;
   tearDownCoolify();
   fetchMock?.mockRestore();
 });
@@ -221,6 +231,40 @@ describe('deployment job truthfulness', () => {
 
     expect(coolifyCreateCalls).toBe(2);
     expect(getStoreBySlug('urban-threads-sandton')?.coolify_uuid).toBe(store?.coolify_uuid);
+  });
+
+  it('falls back to a named volume when Coolify refuses API-created bind mounts', async () => {
+    process.env.COOLIFY_REFUSE_HOST_PATH = 'true';
+    storageCalls.length = 0;
+
+    const { clientId } = await createMultiStoreClient();
+
+    // The client still onboards end-to-end: the volume exists, just not at the
+    // per-client host path — Coolify 4.3.23 no longer allows that through the
+    // API, so the retry must be a named volume with no host_path in it.
+    expect(coolifyCreateCalls).toBe(2);
+    const storeStorageCalls = storageCalls.filter((call) =>
+      call.body.includes('urban-threads-sandton-sqlite-db'),
+    );
+    // Two calls: the refused host-path bind mount, then the named-volume retry.
+    expect(storeStorageCalls).toHaveLength(2);
+    const refused = JSON.parse(storeStorageCalls[0].body) as { host_path?: string };
+    expect(refused.host_path).toBe(
+      '/data/apps/vula-app/store/urban-threads/urban-threads-sandton-sqlite-db',
+    );
+    const storageBody = JSON.parse(storeStorageCalls[1].body) as {
+      name: string;
+      mount_path: string;
+      host_path?: string;
+    };
+    expect(storageBody).toMatchObject({
+      name: 'vula-store-urban-threads-sandton-sqlite-db',
+      mount_path: '/data',
+    });
+    expect(storageBody.host_path).toBeUndefined();
+
+    const detail = await clientDetail(clientId);
+    expect(detail.latestDeployment!.job.status).toBe('complete');
   });
 
   it('wires the topology in both directions with a per-branch Head Office token', async () => {
