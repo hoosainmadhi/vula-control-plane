@@ -52,6 +52,7 @@ import { quoteForSubscription } from '../services/pricing.js';
 import { setupFeeInvoiceFor } from '../services/billing.js';
 import { summariseSubscription } from '../services/terminalLicences.js';
 import { pushLicencesForCompany } from '../services/billing.js';
+import { logger } from '../config/env.js';
 
 export const companiesRouter = Router();
 companiesRouter.use(requireOffice);
@@ -406,6 +407,19 @@ plansRouter.put(
         : {}),
       ...(body.isActive !== undefined ? { isActive: Boolean(body.isActive) } : {}),
     });
+
+    // When plan features or limits change, auto-push renewed licences to all active companies on this plan
+    const subscribedCompanies = listCompanies().filter((c) => c.plan_id === id && c.status === 'active');
+    for (const company of subscribedCompanies) {
+      try {
+        await pushLicencesForCompany(company.id);
+      } catch (err) {
+        logger.warn(
+          `Failed to auto-push licences for company ${company.slug} after plan update: ${(err as any)?.message}`,
+        );
+      }
+    }
+
     res.json(planToOut(updated!));
   }),
 );

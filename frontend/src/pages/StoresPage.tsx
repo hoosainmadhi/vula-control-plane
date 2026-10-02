@@ -43,6 +43,8 @@ export default function StoresPage() {
     storeName: string;
     tempPassword: string;
     note: string;
+    emailedTo?: string;
+    emailError?: string;
   } | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
@@ -371,6 +373,8 @@ export default function StoresPage() {
           storeName={adminPassword.storeName}
           tempPassword={adminPassword.tempPassword}
           note={adminPassword.note}
+          emailedTo={adminPassword.emailedTo}
+          emailError={adminPassword.emailError}
           onClose={() => setAdminPassword(null)}
         />
       )}

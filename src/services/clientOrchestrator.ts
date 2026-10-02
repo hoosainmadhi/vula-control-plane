@@ -40,6 +40,7 @@ import { licencePublicKey } from './licenceSigner.js';
 import { entitlementsFor } from './subscriptions.js';
 import { allocateTerminals, checkAllocation, terminalAllowance } from './terminalLicences.js';
 import { bootstrapStoreAdmin, generateAdminPassword } from './storeProvisioning.js';
+import { trySendAdminCredentialsEmail } from './mailer.js';
 import { logger } from '../config/env.js';
 import { wireStoreToHeadOffice } from './topology.js';
 
@@ -209,17 +210,29 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
         }
 
         // Bootstrap the panel's first admin — best-effort: the container is
-        // usually still building at this point. The generated password is
-        // discarded; the operator issues a login via the reveal-once reset.
+        // usually still building at this point. The password is never stored;
+        // the outlet receives it by email when SMTP allows.
         if (meta.adminEmail) {
+          const panelPassword = generateAdminPassword();
           try {
             await bootstrapHeadOfficeAdmin(panel, {
               name: 'Head Office Administrator',
               email: meta.adminEmail,
-              password: generateAdminPassword(),
+              password: panelPassword,
             });
           } catch (aErr) {
             const msg = `Head Office admin bootstrap pending for ${panel.slug}: ${String(aErr)}`;
+            warnings.push(msg);
+            logger.info(msg);
+          }
+          const delivery = await trySendAdminCredentialsEmail({
+            surface: panel.name,
+            loginUrl: panel.base_url,
+            adminEmail: meta.adminEmail,
+            tempPassword: panelPassword,
+          });
+          if (!delivery.emailed) {
+            const msg = `Head Office credentials email pending for ${panel.slug}: ${delivery.emailError}`;
             warnings.push(msg);
             logger.info(msg);
           }
@@ -249,6 +262,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
               slug: meta.slug,
               baseUrl: meta.baseUrl,
               terminalCount: meta.terminalCount || 1,
+              adminEmail: meta.adminEmail ?? null,
             },
             token,
           );
@@ -292,16 +306,25 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
         // Bootstrap store admin over HTTP if adminEmail provided — best-effort
         // (container likely still building). Random credential, never persisted.
         if (meta.adminEmail) {
+          const storePassword = generateAdminPassword();
           try {
-            const adminOk = await bootstrapStoreAdmin(
-              store,
-              meta.adminEmail,
-              generateAdminPassword(),
-            );
+            const adminOk = await bootstrapStoreAdmin(store, meta.adminEmail, storePassword);
             if (!adminOk) {
               const msg = `Store admin init pending for ${store.slug}: store not accepting yet`;
               warnings.push(msg);
               logger.info(msg);
+            } else {
+              const delivery = await trySendAdminCredentialsEmail({
+                surface: store.name,
+                loginUrl: store.base_url,
+                adminEmail: meta.adminEmail,
+                tempPassword: storePassword,
+              });
+              if (!delivery.emailed) {
+                const msg = `Credentials email pending for ${store.slug}: ${delivery.emailError}`;
+                warnings.push(msg);
+                logger.info(msg);
+              }
             }
           } catch (aErr) {
             const msg = `Store admin init pending for ${store.slug}: ${String(aErr)}`;

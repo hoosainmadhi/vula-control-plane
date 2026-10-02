@@ -214,6 +214,9 @@ export default function ClientsPage() {
             baseUrl: s.baseUrl || `https://${clientSlug}-${i + 1}.vula-app.co.za`,
             terminalCount: licensed,
             licensedTerminalCount: licensed,
+            // The outlet's login is emailed here and bootstrapped from it —
+            // the same default the single-store and Head Office paths use.
+            adminEmail: billingEmail,
           };
         });
       }

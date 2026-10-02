@@ -251,6 +251,8 @@ export interface ResetAdminResponse {
   ok: boolean;
   tempPassword: string;
   note: string;
+  emailedTo?: string;
+  emailError?: string;
 }
 
 export interface StoreFormValues {

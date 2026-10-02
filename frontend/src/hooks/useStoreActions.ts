@@ -11,6 +11,8 @@ export interface AdminPasswordReveal {
   storeName: string;
   tempPassword: string;
   note: string;
+  emailedTo?: string;
+  emailError?: string;
 }
 
 /**
@@ -93,7 +95,13 @@ export function useStoreActions(options: {
       const res = await api<ResetAdminResponse>(`/stores/${store.id}/reset-admin`, {
         method: 'POST',
       });
-      onAdminPassword({ storeName: store.name, tempPassword: res.tempPassword, note: res.note });
+      onAdminPassword({
+        storeName: store.name,
+        tempPassword: res.tempPassword,
+        note: res.note,
+        emailedTo: res.emailedTo,
+        emailError: res.emailError,
+      });
       return true;
     } catch (err) {
       setSupportError(err instanceof ApiError ? err.message : 'Reset failed');

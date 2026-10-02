@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import crypto from 'crypto';
+import { trySendAdminCredentialsEmail, type AdminCredentialsDelivery } from '../services/mailer.js';
 import type {
   ConfigStatus,
   HealthStatus,
@@ -480,8 +481,13 @@ storesRouter.post(
       companyId = company.id;
     }
 
+    const adminEmail =
+      typeof req.body?.adminEmail === 'string' && req.body.adminEmail.trim()
+        ? req.body.adminEmail.trim().toLowerCase()
+        : null;
+
     const store = createStore(
-      { name, slug, vertical, terminalCount, baseUrl, environment },
+      { name, slug, vertical, terminalCount, baseUrl, environment, adminEmail },
       controlPlaneToken,
     );
     if (companyId !== null) setStoreCompany(store.id, companyId);
@@ -490,10 +496,6 @@ storesRouter.post(
     if (allocation) allocateTerminals(allocation.company, store.id, allocation.count);
 
     const provision = Boolean(req.body?.provision);
-    const adminEmail =
-      typeof req.body?.adminEmail === 'string' && req.body.adminEmail.trim()
-        ? req.body.adminEmail.trim().toLowerCase()
-        : null;
 
     if (provision) {
       setStoreDeployStatus(store.id, 'provisioning', { adminEmail: adminEmail ?? undefined });
@@ -901,9 +903,31 @@ storesRouter.post(
       return;
     }
     const { tempPassword } = await resetAdmin(store); // StoreClientError → 502 via error handler
+    // The outlet's durable copy arrives by email when the row knows its admin
+    // address — the password itself is still never stored.
+    let delivery: AdminCredentialsDelivery = { emailed: false };
+    if (store.admin_email) {
+      delivery = await trySendAdminCredentialsEmail({
+        surface: store.name,
+        loginUrl: store.base_url,
+        adminEmail: store.admin_email,
+        tempPassword,
+      });
+    }
     recordAuditLog('office', 'reset_store_admin', 'store', store.id, {
       reason: 'Temporary store password issued from the Support panel',
+      ...(delivery.emailed ? { emailedTo: delivery.emailedTo } : {}),
+      ...(delivery.emailError ? { emailError: delivery.emailError } : {}),
     });
-    res.json({ ok: true, tempPassword, note: 'Shown once — the control plane does not store it.' });
+    res.json({
+      ok: true,
+      tempPassword,
+      note: 'Shown once — the control plane does not store it.',
+      ...(delivery.emailed
+        ? { emailedTo: delivery.emailedTo }
+        : delivery.emailError
+          ? { emailError: `Credentials email not sent: ${delivery.emailError}` }
+          : {}),
+    });
   }),
 );

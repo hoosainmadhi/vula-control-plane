@@ -126,6 +126,8 @@ export default function ClientDetailPage() {
     storeName: string;
     tempPassword: string;
     note: string;
+    emailedTo?: string;
+    emailError?: string;
   } | null>(null);
 
   // Add Store modal state
@@ -1815,6 +1817,8 @@ export default function ClientDetailPage() {
           storeName={adminPassword.storeName}
           tempPassword={adminPassword.tempPassword}
           note={adminPassword.note}
+          emailedTo={adminPassword.emailedTo}
+          emailError={adminPassword.emailError}
           onClose={() => setAdminPassword(null)}
         />
       )}

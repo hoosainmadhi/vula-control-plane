@@ -12,6 +12,7 @@ import {
 } from './coolify.js';
 import { pushTerminals } from './storeClient.js';
 import { deliverStoreLicence } from './licenceDelivery.js';
+import { trySendAdminCredentialsEmail } from './mailer.js';
 import { getCompanyById, recordLicencePush, recordConfigResult } from '../config/registryDb.js';
 
 /** The host directory a deployment belongs under: its client's slug, or its own. */
@@ -135,12 +136,24 @@ export async function runStoreProvisioning(
       throw new Error(`Store ${store.slug} timed out waiting for health check at ${store.base_url}`);
     }
 
-    // 3. Bootstrap initial store admin user if email was specified
+    // 3. Bootstrap initial store admin user if email was specified — the
+    // outlet receives the one-time password by email when SMTP allows; it is
+    // never stored, so a failed delivery is logged for the operator to re-issue.
     if (adminEmail) {
       const tempPass = generateAdminPassword();
       const adminCreated = await bootstrapStoreAdmin(store, adminEmail, tempPass);
       if (adminCreated) {
-        logger.info(`Initial admin bootstrapped for ${store.slug} (${adminEmail})`);
+        const delivery = await trySendAdminCredentialsEmail({
+          surface: store.name,
+          loginUrl: store.base_url,
+          adminEmail,
+          tempPassword: tempPass,
+        });
+        logger.info(
+          delivery.emailed
+            ? `Initial admin bootstrapped for ${store.slug} (${adminEmail}); credentials emailed`
+            : `Initial admin bootstrapped for ${store.slug} (${adminEmail}); credentials email pending: ${delivery.emailError}`,
+        );
       }
     }
 

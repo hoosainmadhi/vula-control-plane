@@ -1202,6 +1202,8 @@ export interface CreateStoreInput {
   terminalCount: number;
   baseUrl: string;
   environment?: StoreEnvironment;
+  /** The outlet admin's address — the login username and credential-email recipient. */
+  adminEmail?: string | null;
 }
 
 export const createStore = (input: CreateStoreInput, controlPlaneToken: string): StoreRecord => {
@@ -1209,8 +1211,8 @@ export const createStore = (input: CreateStoreInput, controlPlaneToken: string):
   const insert = db.transaction(() => {
     const info = db
       .prepare(
-        `INSERT INTO stores (name, slug, vertical, terminal_count, base_url, control_plane_token, environment)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO stores (name, slug, vertical, terminal_count, base_url, control_plane_token, environment, admin_email)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.name,
@@ -1220,6 +1222,7 @@ export const createStore = (input: CreateStoreInput, controlPlaneToken: string):
         input.baseUrl,
         controlPlaneToken,
         input.environment ?? 'development',
+        input.adminEmail?.trim().toLowerCase() || null,
       );
     return Number(info.lastInsertRowid);
   });

@@ -214,3 +214,82 @@ export const sendInvoiceEmail = async (
   });
   return { ...sent, recipient: input.recipient };
 };
+
+export interface AdminCredentialsEmailInput {
+  /** The store or Head Office name the recipient will recognise. */
+  surface: string;
+  /** Where the recipient signs in — that deployment's own origin. */
+  loginUrl: string;
+  adminEmail: string;
+  tempPassword: string;
+}
+
+/**
+ * The one-time login for a newly bootstrapped store or Head Office admin.
+ * The control plane never stores these passwords, so this email is the
+ * durable copy the outlet keeps. The tenant keeps the password working until
+ * it is changed — there is no forced first-login reset (owner decision,
+ * 2026-10-02), which makes this delivery the credential, not a placeholder.
+ */
+export const sendAdminCredentialsEmail = async (
+  input: AdminCredentialsEmailInput,
+): Promise<{ messageId: string; recipient: string }> => {
+  const settings = getRawOfficeSettings();
+  const sent = await send({
+    from: senderFor(settings),
+    to: input.adminEmail,
+    subject: `Your ${input.surface} login — from ${settings.office_name}`,
+    text:
+      `${settings.office_name} set up your point-of-sale login for ${input.surface}.\n\n` +
+      `Sign in at ${input.loginUrl}\n` +
+      `Email: ${input.adminEmail}\n` +
+      `Password: ${input.tempPassword}\n\n` +
+      `Keep this message — for security the password is not stored anywhere and cannot be looked up later.`,
+    html: `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1e293b">
+      <div style="border-bottom:3px solid #059669;padding-bottom:12px;margin-bottom:16px">
+        <div style="font-size:20px;font-weight:bold">${esc(settings.office_name)}</div>
+      </div>
+      <h2 style="margin:0 0 8px;font-size:16px">Your ${esc(input.surface)} login</h2>
+      <p style="margin:0 0 12px;color:#64748b;font-size:13px">Sign in at <strong>${esc(
+        input.loginUrl,
+      )}</strong></p>
+      <table style="font-size:14px"><tbody>
+        <tr><td style="padding:4px 12px 4px 0;color:#64748b">Email</td><td style="padding:4px 0">${esc(
+          input.adminEmail,
+        )}</td></tr>
+        <tr><td style="padding:4px 12px 4px 0;color:#64748b">Password</td><td style="padding:4px 0"><strong>${esc(
+          input.tempPassword,
+        )}</strong></td></tr>
+      </tbody></table>
+      <p style="margin-top:12px;color:#64748b;font-size:12px">Keep this message — for security the password is not stored anywhere and cannot be looked up again.</p>
+      <p style="margin-top:24px;color:#94a3b8;font-size:11px">Sent by ${esc(settings.office_name)}</p>
+    </div>`,
+  });
+  return { ...sent, recipient: input.adminEmail };
+};
+
+export interface AdminCredentialsDelivery {
+  emailed: boolean;
+  emailedTo?: string;
+  emailError?: string;
+}
+
+/**
+ * Best-effort delivery: a bootstrap or reset must not fail because SMTP is
+ * unconfigured or the relay refused — the caller reports the outcome (a step
+ * warning, a response field) and the operator can re-issue via the Admin
+ * password action. The password passes through to the message body only.
+ */
+export const trySendAdminCredentialsEmail = async (
+  input: AdminCredentialsEmailInput,
+): Promise<AdminCredentialsDelivery> => {
+  try {
+    const sent = await sendAdminCredentialsEmail(input);
+    return { emailed: true, emailedTo: sent.recipient };
+  } catch (err) {
+    return {
+      emailed: false,
+      emailError: err instanceof Error ? err.message : String(err),
+    };
+  }
+};

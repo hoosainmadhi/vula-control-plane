@@ -80,6 +80,8 @@ export default function StoreDetailPage() {
     storeName: string;
     tempPassword: string;
     note: string;
+    emailedTo?: string;
+    emailError?: string;
   } | null>(null);
 
   const storeId = Number(id);
@@ -404,6 +406,8 @@ export default function StoreDetailPage() {
           storeName={adminPassword.storeName}
           tempPassword={adminPassword.tempPassword}
           note={adminPassword.note}
+          emailedTo={adminPassword.emailedTo}
+          emailError={adminPassword.emailError}
           onClose={() => setAdminPassword(null)}
         />
       )}

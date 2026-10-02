@@ -291,10 +291,19 @@ export interface AdminPasswordModalProps {
   storeName: string;
   tempPassword: string;
   note: string;
+  emailedTo?: string;
+  emailError?: string;
   onClose: () => void;
 }
 
-export function AdminPasswordModal({ storeName, tempPassword, note, onClose }: AdminPasswordModalProps) {
+export function AdminPasswordModal({
+  storeName,
+  tempPassword,
+  note,
+  emailedTo,
+  emailError,
+  onClose,
+}: AdminPasswordModalProps) {
   const copy = async (): Promise<void> => {
     try {
       await navigator.clipboard.writeText(tempPassword);
@@ -313,6 +322,8 @@ export function AdminPasswordModal({ storeName, tempPassword, note, onClose }: A
           {tempPassword}
         </div>
         <p className="text-xs text-amber-700">{note}</p>
+        {emailedTo && <p className="text-xs text-emerald-700">A copy was emailed to {emailedTo}.</p>}
+        {emailError && <p className="text-xs text-amber-700">{emailError}</p>}
         <div className="flex justify-end gap-2">
           <button
             onClick={copy}
