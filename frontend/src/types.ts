@@ -109,6 +109,7 @@ export interface Panel {
   slug: string;
   name: string;
   baseUrl: string;
+  adminEmail?: string | null;
   status: StoreStatus;
   lastHealthStatus: HealthStatus;
   lastHealthAt: string | null;

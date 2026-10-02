@@ -153,3 +153,41 @@ describe('store admin credentials by email', () => {
     expect(transport.sendMail).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('head office executive credentials by email', () => {
+  const createPanelFor = async (slug: string, billingEmail?: string): Promise<number> => {
+    const co = await request(app)
+      .post('/api/companies')
+      .set(authHeader(token))
+      .send({ name: `Panel Co ${slug}`, slug, ...(billingEmail ? { billingEmail } : {}) })
+      .expect(201);
+    const companyId = ((co.body.company ?? co.body) as { id: number }).id;
+    const panel = await request(app)
+      .post('/api/panels')
+      .set(authHeader(token))
+      .send({ companyId, name: `${slug} Head Office`, slug: `${slug}-ho`, baseUrl: 'http://localhost:3299' })
+      .expect(201);
+    return ((panel.body.panel ?? panel.body) as { id: number }).id;
+  };
+
+  it('bootstraps the executive and emails the login', async () => {
+    await configureSmtp();
+    const pid = await createPanelFor('panel-co', 'exec@ho.test');
+
+    const res = await request(app).post(`/api/panels/${pid}/reset-admin`).set(authHeader(token));
+    expect(res.status).toBe(200);
+    expect(res.body.tempPassword).toBeTruthy();
+    expect(res.body.emailedTo).toBe('exec@ho.test');
+    expect(transport.sendMail).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses when no address is on record for the Head Office', async () => {
+    await configureSmtp();
+    const pid = await createPanelFor('panel-co-noaddr');
+
+    const res = await request(app).post(`/api/panels/${pid}/reset-admin`).set(authHeader(token));
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('panel_admin_address_missing');
+    expect(transport.sendMail).not.toHaveBeenCalled();
+  });
+});

@@ -183,6 +183,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
             slug: meta.slug,
             baseUrl: meta.baseUrl,
             controlPlaneToken: token,
+            adminEmail: meta.adminEmail ?? null,
           });
         }
 

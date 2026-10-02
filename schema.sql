@@ -130,6 +130,7 @@ CREATE TABLE IF NOT EXISTS panels (
   base_url            TEXT    NOT NULL
     CHECK (base_url LIKE 'http://%' OR base_url LIKE 'https://%'),
   control_plane_token TEXT    NOT NULL,
+  admin_email         TEXT,
   status              TEXT    NOT NULL DEFAULT 'active'
     CHECK (status IN ('active', 'paused')),
   last_health_status  TEXT    NOT NULL DEFAULT 'unknown'

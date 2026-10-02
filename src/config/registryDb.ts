@@ -446,6 +446,7 @@ const PANELS_DDL = `
     base_url            TEXT    NOT NULL
       CHECK (base_url LIKE 'http://%' OR base_url LIKE 'https://%'),
     control_plane_token TEXT    NOT NULL,
+    admin_email         TEXT,
     status              TEXT    NOT NULL DEFAULT 'active'
       CHECK (status IN ('active', 'paused')),
     last_health_status  TEXT    NOT NULL DEFAULT 'unknown'
@@ -673,6 +674,9 @@ export const getRegistryDb = (): Database.Database => {
   const addPanelColumn = (name: string, ddl: string) => {
     if (!panelCols.some((c) => c.name === name)) db.exec(`ALTER TABLE panels ADD COLUMN ${ddl}`);
   };
+  // The Head Office's admin address — the executive login's username and the
+  // credential-email recipient (mirrors stores.admin_email).
+  addPanelColumn('admin_email', 'admin_email TEXT');
   addPanelColumn('deploy_status', "deploy_status TEXT NOT NULL DEFAULT 'not_deployed'");
   addPanelColumn('coolify_uuid', 'coolify_uuid TEXT');
   addPanelColumn('volume_name', 'volume_name TEXT');
@@ -1995,6 +1999,7 @@ export interface PanelRecord {
   name: string;
   base_url: string;
   control_plane_token: string;
+  admin_email: string | null;
   status: 'active' | 'paused';
   last_health_status: HealthStatus;
   last_health_at: string | null;
@@ -2031,15 +2036,23 @@ export interface PanelInput {
   name: string;
   baseUrl: string;
   controlPlaneToken: string;
+  adminEmail?: string | null;
 }
 
 export const createPanel = (input: PanelInput): PanelRecord => {
   const info = getRegistryDb()
     .prepare(
-      `INSERT INTO panels (company_id, slug, name, base_url, control_plane_token)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO panels (company_id, slug, name, base_url, control_plane_token, admin_email)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     )
-    .run(input.companyId, input.slug, input.name, input.baseUrl, input.controlPlaneToken);
+    .run(
+      input.companyId,
+      input.slug,
+      input.name,
+      input.baseUrl,
+      input.controlPlaneToken,
+      input.adminEmail?.trim().toLowerCase() || null,
+    );
   return getPanelById(Number(info.lastInsertRowid))!;
 };
 

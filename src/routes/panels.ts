@@ -25,6 +25,9 @@ import {
   requireString,
 } from '../utils/validate.js';
 import { assertManagedEndpoint, pingPanel, StoreClientError } from '../services/storeClient.js';
+import { bootstrapHeadOfficeAdmin } from '../services/storeClient.js';
+import { generateAdminPassword } from '../services/storeProvisioning.js';
+import { trySendAdminCredentialsEmail, type AdminCredentialsDelivery } from '../services/mailer.js';
 import {
   deliverPanelLicence,
   type LicenceSequenceReconciliation,
@@ -52,6 +55,7 @@ export interface PanelOut {
   slug: string;
   name: string;
   baseUrl: string;
+  adminEmail: string | null;
   status: 'active' | 'paused';
   lastHealthStatus: 'up' | 'down' | 'unknown';
   lastHealthAt: string | null;
@@ -77,6 +81,7 @@ const panelToOut = (panel: PanelRecord): PanelOut => {
     slug: panel.slug,
     name: panel.name,
     baseUrl: panel.base_url,
+    adminEmail: panel.admin_email ?? null,
     status: panel.status,
     lastHealthStatus: panel.last_health_status,
     lastHealthAt: panel.last_health_at,
@@ -122,6 +127,60 @@ panelsRouter.get(
   '/',
   asyncHandler(async (_req, res) => {
     res.json(listPanels().map(panelToOut));
+  }),
+);
+
+// Issue the Head Office executive's one-time login. This is also the recovery
+// path: the deploy step's bootstrap attempt fails while the container builds
+// and is never revisited, so a young Head Office often has no executive yet.
+// The tenant HO has no password-reset endpoint — an existing executive's
+// password is out of scope here.
+panelsRouter.post(
+  '/:id/reset-admin',
+  asyncHandler(async (req, res) => {
+    const panel = panelFromParams(req.params.id);
+    if (panel.status === 'paused') {
+      res.status(409).json({ error: 'Panel is paused — resume before issuing a login' });
+      return;
+    }
+    const recipient = panel.admin_email ?? getCompanyById(panel.company_id)?.billing_email ?? null;
+    if (!recipient) {
+      throw new HttpError(
+        400,
+        'No admin address on record for this Head Office — set the client’s billing email first.',
+        'panel_admin_address_missing',
+      );
+    }
+    const tempPassword = generateAdminPassword();
+    // Throws as a 502 StoreClientError when the tenant refuses — a 409 means an
+    // executive already exists, and the HO has no password-reset endpoint, so
+    // that refusal is the honest limit of this action.
+    await bootstrapHeadOfficeAdmin(panel, {
+      name: 'Head Office Administrator',
+      email: recipient,
+      password: tempPassword,
+    });
+    const delivery: AdminCredentialsDelivery = await trySendAdminCredentialsEmail({
+      surface: panel.name,
+      loginUrl: panel.base_url,
+      adminEmail: recipient,
+      tempPassword,
+    });
+    recordAuditLog('office', 'reset_panel_admin', 'panel', panel.id, {
+      reason: 'Head Office executive login issued from the panel row',
+      ...(delivery.emailed ? { emailedTo: delivery.emailedTo } : {}),
+      ...(delivery.emailError ? { emailError: delivery.emailError } : {}),
+    });
+    res.json({
+      ok: true,
+      tempPassword,
+      note: 'Shown once — the control plane does not store it.',
+      ...(delivery.emailed
+        ? { emailedTo: delivery.emailedTo }
+        : delivery.emailError
+          ? { emailError: `Credentials email not sent: ${delivery.emailError}` }
+          : {}),
+    });
   }),
 );
 
