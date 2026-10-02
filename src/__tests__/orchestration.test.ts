@@ -22,6 +22,8 @@ const COOLIFY_URL = 'http://coolify.test';
 let fetchMock: jest.SpyInstance;
 let token = '';
 let coolifyCreateCalls = 0;
+/** Every Coolify create-application body the CP sent, so payload quirks can be asserted. */
+let createBodies: string[] = [];
 /** Every storage request the CP made, so the host tree it asks for can be asserted. */
 let storageCalls: Array<{ url: string; body: string }> = [];
 /** Every intended-branch-list push, so the panel's picker can be asserted. */
@@ -55,6 +57,7 @@ beforeEach(() => {
   resetRegistryDb();
   configureCoolify();
   coolifyCreateCalls = 0;
+  createBodies = [];
   storageCalls = [];
   rosterCalls = [];
   fetchMock = jest.spyOn(globalThis, 'fetch');
@@ -78,6 +81,7 @@ beforeEach(() => {
       }
       if (s.endsWith('/applications/private-github-app')) {
         coolifyCreateCalls++;
+        createBodies.push(String(init?.body ?? ''));
         if (process.env.COOLIFY_FAIL_CREATE === 'true') {
           return jsonResponse(500, { message: 'Coolify exploded' });
         }
@@ -265,6 +269,19 @@ describe('deployment job truthfulness', () => {
 
     const detail = await clientDetail(clientId);
     expect(detail.latestDeployment!.job.status).toBe('complete');
+  });
+
+  it('sends dockerfile_location in the path form Coolify 4.3.23 validates', async () => {
+    await createMultiStoreClient();
+
+    // 4.3.23 refuses the bare 'Dockerfile' the 4.3.10-era payload sent — the
+    // form must be a path, or every wizard onboarding dies on create.
+    const locations = createBodies.map(
+      (b) => (JSON.parse(b) as { dockerfile_location: string }).dockerfile_location,
+    );
+    expect(locations).toContain('/Dockerfile');
+    expect(locations).toContain('/head-office/Dockerfile');
+    for (const loc of locations) expect(loc.startsWith('/')).toBe(true);
   });
 
   it('wires the topology in both directions with a per-branch Head Office token', async () => {

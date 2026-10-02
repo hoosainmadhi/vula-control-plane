@@ -65,11 +65,20 @@ const request = async (
     // Non-JSON error body
   }
   if (!res.ok) {
-    const detail =
-      (data as { message?: string; detail?: string })?.message ??
-      (data as { detail?: string })?.detail ??
-      `HTTP ${res.status}`;
-    throw new CoolifyError(`Coolify ${method} ${path} failed: ${detail}`);
+    const body = data as
+      | { message?: string; detail?: string; errors?: Record<string, string[]> }
+      | null;
+    const detail = body?.message ?? body?.detail ?? `HTTP ${res.status}`;
+    // Laravel validation failures carry the failing fields in `errors` —
+    // without them a 422 reports only "Validation failed.", naming no rule.
+    const fields = body?.errors
+      ? Object.entries(body.errors)
+          .map(([field, msgs]) => `${field}: ${msgs.join('; ')}`)
+          .join(' | ')
+      : null;
+    throw new CoolifyError(
+      `Coolify ${method} ${path} failed: ${detail}${fields ? ` (${fields})` : ''}`,
+    );
   }
   return data;
 };
@@ -221,7 +230,9 @@ export async function createStoreDeployment(input: {
     kind: 'store',
     clientSlug: input.clientSlug,
     appName: 'za-pos',
-    dockerfileLocation: 'Dockerfile',
+    // Coolify 4.3.23 validates dockerfile_location as a path: the bare
+    // 'Dockerfile' the 4.3.10-era payload sent is refused 422.
+    dockerfileLocation: '/Dockerfile',
     controlPlaneToken,
     jwtSecret,
     envVars: [
@@ -261,7 +272,7 @@ export async function createHeadOfficeDeployment(input: {
     kind: 'ho',
     clientSlug: input.clientSlug,
     appName: 'vula-ho',
-    dockerfileLocation: 'head-office/Dockerfile',
+    dockerfileLocation: '/head-office/Dockerfile',
     controlPlaneToken,
     jwtSecret,
     envVars: [
