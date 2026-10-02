@@ -128,7 +128,7 @@ const request = async (
 export const pushTerminals = async (
   store: Pick<
     StoreRecord,
-    'base_url' | 'control_plane_token' | 'terminal_count' | 'vertical' | 'terminal_names_json'
+    'base_url' | 'control_plane_token' | 'terminal_count' | 'vertical' | 'terminal_names_json' | 'name'
   >,
   options: CallOptions = {},
   extra: Record<string, unknown> = {},
@@ -141,6 +141,10 @@ export const pushTerminals = async (
       terminalCount: store.terminal_count,
       vertical: store.vertical,
       terminals: terminalRoster(store),
+      // The registry name is the store's trading name — pushed on every
+      // configure so the register header and receipts stop showing the
+      // tenant's factory default ("Vula Store").
+      name: store.name,
       ...extra,
     },
     options,

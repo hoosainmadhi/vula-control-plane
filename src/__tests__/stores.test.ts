@@ -111,6 +111,9 @@ describe('POST /api/stores — create + first push', () => {
         { till: 2, name: 'Till 2' },
         { till: 3, name: 'Till 3' },
       ],
+      // The registry name rides every configure — the store's own
+      // store_name (register header, receipts) is provisioned, not defaulted.
+      name: 'Gardens Mall',
     });
 
     // Creation also delivers a signed licence, so the store can verify its

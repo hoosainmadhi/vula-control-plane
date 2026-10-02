@@ -14,6 +14,7 @@ const store = {
   terminal_count: 2,
   vertical: 'general',
   terminal_names_json: null,
+  name: 'Store Example',
 } as const;
 
 interface FetchInit {
@@ -74,6 +75,7 @@ describe('pushTerminals', () => {
         { till: 1, name: 'Till 1' },
         { till: 2, name: 'Till 2' },
       ],
+      name: 'Store Example',
     });
   });
 
