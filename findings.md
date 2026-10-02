@@ -1,5 +1,41 @@
 # Findings
 
+## 2026-10-02 (late) — the rehearsal's biggest catch: a suspended client's till traded anyway
+
+The owner rang a sale on a **suspended** client's store and it went through.
+The control plane had done everything right — the licence signed at
+`issue_licences` carried `billingState: 'suspended'` — and the store traded
+anyway.
+
+- **The tenant's acceptance path flattened the state machine.**
+  `za-pos/src/services/licence.ts` treated a licence with no `paidThrough` as
+  "informational" (a pre-subscription-redesign assumption — null used to mean
+  *no billing model*) and mapped every signed state to **active** unless it
+  was a trial. The paid path had the mirror hole: date math only, so a
+  **manually suspended** client with a paid period outstanding also kept
+  trading. Both fixed: the signed billing state is now the authority for
+  suspension (and survives as `trial`/`unlicensed` doctrine), pinned by two
+  new tests (tenant `e4b94ff`).
+- **Why the rehearsal could catch it at all:** the strict state machine means
+  an onboarded-but-unpaid client is *suspended* — and the §7 rehearsal
+  deliberately walks that state before any payment. A demo fleet that seeds
+  paying customers would never have noticed. The failure was invisible in the
+  panel (the CP derives and shows `suspended` honestly) and lived entirely in
+  the till.
+- **Pause is a different thing, and the owner saw that too.** Pausing a store
+  flips a registry flag and refuses CP→store pushes — the till keeps trading
+  on its licence, because a paused store *refuses the very push that would
+  tell it it's paused*. That is documented behaviour (cutover §9), not a bug
+  — but the owner's expectation (pause = till stops) is legitimate, and there
+  is a clean design if wanted: **push a sales-blocked licence first, then
+  flip to paused**; resume re-pushes the normal licence. Awaiting the owner's
+  go — it changes documented pause semantics (CONTEXT §2b).
+- **Also raised:** every store's centre label read "Vula Store" — the
+  tenant's default `store_name`, which nothing sets because the configure
+  contract carries no name. Proposal: add `name` to the configure payload
+  (a wire-contract change — CONTEXT.md update on both sides) so provisioning
+  stamps the trading name the CP already knows.
+
 ## 2026-10-02 (night) — a store with no Head Office renders a link to the developer's own machine
 
 Seen live in the staging rehearsal: a store that was never wired to a Head
