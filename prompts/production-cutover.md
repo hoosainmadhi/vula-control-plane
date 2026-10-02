@@ -215,23 +215,38 @@ can hold most of the data). On the Coolify host, with `sqlite3` installed:
 set -euo pipefail
 STAMP=$(date +%Y%m%d-%H%M%S)
 DEST=/backups/vula                      # a second disk, or rsync'd off-host after
-mkdir -p "$DEST/cp" "$DEST/stores" "$DEST/ho"
+mkdir -p "$DEST/cp" "$DEST/stores" "$DEST/ho" "$DEST/other"
 
-# Control plane registry — companies, stores, invoices, licence state, tokens.
-sqlite3 /data/apps/vula-app/cp/control-plane.db \
-  ".backup '$DEST/cp/control-plane-$STAMP.db'"
-
-# Stores — one SQLite database per volume, plus the images the app's own
-# backup endpoint would include.
-for db in /data/apps/vula-app/store/*/*-sqlite-db/za-pos.db; do
-  name=$(basename "$(dirname "$db")")
-  sqlite3 "$db" ".backup '$DEST/stores/${name}-$STAMP.db'"
+# Since Coolify 4.3.23 the API refuses bind mounts, so API-created deployments
+# keep their /data in a NAMED VOLUME under
+# /var/lib/docker/volumes/<app-uuid>-<name>/_data — the storage names carry the
+# slug, so discovery stays readable (…-vula-store-<slug>-sqlite-db, …-vula-ho-…).
+for vol in $(docker volume ls --format '{{.Name}}' | grep -- '-vula-'); do
+  for db in "/var/lib/docker/volumes/$vol/_data"/*.db; do
+    [ -e "$db" ] || continue
+    case "$vol" in
+      *-vula-cp-*)    dest="$DEST/cp";;
+      *-vula-store-*) dest="$DEST/stores";;
+      *-vula-ho-*)    dest="$DEST/ho";;
+      *)              dest="$DEST/other";;
+    esac
+    sqlite3 "$db" ".backup '$dest/$(basename "$db" .db)-${vol}-$STAMP.db'"
+  done
 done
 
-# Head Offices — no in-app backup endpoint exists, so the same method.
-for db in /data/apps/vula-app/ho/*/*-sqlite-db/head-office.db; do
-  name=$(basename "$(dirname "$db")")
-  sqlite3 "$db" ".backup '$DEST/ho/${name}-$STAMP.db'"
+# A deployment given a manual bind mount under the host tree (the UI still
+# allows those) is backed up from its path. .backup is self-contained — the
+# -wal/-shm sidecars stay behind.
+for db in /data/apps/vula-app/cp/control-plane.db \
+          /data/apps/vula-app/store/*/*-sqlite-db/za-pos.db \
+          /data/apps/vula-app/ho/*/*-sqlite-db/head-office.db; do
+  [ -e "$db" ] || continue
+  case "$db" in
+    *control-plane.db*) dest="$DEST/cp";;
+    *za-pos.db*)        dest="$DEST/stores";;
+    *)                  dest="$DEST/ho";;
+  esac
+  sqlite3 "$db" ".backup '$dest/$(basename "$db" .db)-$STAMP.db'"
 done
 
 # Off-host, then prune. Off-host is the part that survives the host.

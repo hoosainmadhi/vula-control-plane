@@ -1,5 +1,71 @@
 # Progress
 
+## 2026-10-02 (evening) — the outlet's login goes out by email, and the store row finally keeps its admin address
+
+Owner: *"go ahead - no forced change in PW"* — the credentials email is a
+feature, and the tenant confirmed the temp password works until changed (no
+forced first-login reset), which makes the delivery the credential itself.
+
+- **The row dropped the address.** The wizard sends `adminEmail` per store, the
+  create route read it, threaded it into provisioning metadata — and never
+  wrote the `admin_email` column. Every bootstrap and every credential email
+  was being refused at the `if` that guards on that column. Fixed at both
+  creation sites (route + orchestrator) via `createStore`'s new `adminEmail`
+  field; the frontend's multi-store branch now defaults each branch's address
+  from the client's billing email, matching the single-store and Head Office
+  paths (the rehearsal's stores got none because it didn't).
+- **Delivery is best-effort everywhere a bootstrap or reset happens**: the
+  orchestrator's store and Head Office steps, the background provisioning
+  runner, and the Admin-password route. SMTP unconfigured or the relay
+  refusing degrades to a step warning or a response field — never a failure —
+  and the operator re-issues via the reveal-once action. `mailer.ts` gains
+  `sendAdminCredentialsEmail` (the outlet-facing login, signed off with the
+  office's name) and `trySendAdminCredentialsEmail` (the swallow-to-outcome
+  wrapper). The reset route reports `emailedTo` / `emailError`; the modal
+  shows which happened. The password passes through to the message body only —
+  still never stored (new `credentialEmail.test.ts`, 3 tests).
+- **§10's backup script now discovers volumes by name** — since 4.3.23 refuses
+  API bind mounts, API-created databases live under
+  `/var/lib/docker/volumes/<app-uuid>-<name>/_data`; the storage names carry
+  the slug, so the globs stay readable. The host-tree loop remains for
+  deployments given manual UI bind mounts.
+- Owner's data-loss worry answered from the session's own evidence: the
+  staging CP was redeployed four times today and its registry survived every
+  one — named volumes persist across redeploys; only deleting and re-creating
+  an application yields a fresh volume (and the old one stays on the host).
+  Tests: backend **355 green (28 suites)**, frontend **22 green**, typecheck
+  and the production build clean. Commit `33326b5`.
+
+## 2026-10-02 (later) — the full §7 rehearsal sequence ran green end to end
+
+Owner: *"github grant done"*. Job 1 resumed at `head_office_deploy` and, after
+two more truthfully-failed retries, completed all seven steps.
+
+- **The grant worked; the retry proved no-duplicate resumption.** The Head
+  Office and store 1 applications were not re-created; only the failed/pending
+  steps ran. Containers built (`vula-ho-rehearsal-retail-ho`,
+  `za-pos-rehearsal-retail-1/2`, all `running:healthy` in ~12 minutes).
+- **The entitlement gate fired mid-rehearsal, correctly.** Store 2's deploy was
+  refused 402: the wizard had onboarded the client licensed for **2** terminals,
+  and store 1 had taken both. Raised the subscription to 4 (`PUT /clients/1`),
+  retried, store 2 deployed. The 402 message named the remedy exactly as
+  designed.
+- **`wire_topology` failed while the containers built — truthfully.** The step
+  refused to fake success against unreachable stores; once the containers were
+  healthy the retry wired both branches. Initial config pushes are best-effort
+  warnings (the sweep/manual push recovers), wiring is a required step.
+- **§8 walked as designed, on two invoices.** The wizard had raised the
+  once-off itself (`VULA-2026-000001`, purpose `onboarding`, R2 000) — so the
+  `initial` invoice correctly carried only the subscription (R600). Both
+  settled: the onboarding payment `periodAdvanced=False` (it never moves the
+  period), the initial payment `True` — **client `active`, paid through
+  2026-11-02**, licences re-pushed on settlement.
+- **§6 verification green:** both stores `lastHealthStatus: up`,
+  `registerState: ok`, `tradingBlocked: false`, 2 tills each, config pushed
+  (Till 1..2), licences accepted (sequence 6). Note for tidbits: completed
+  steps retain the previous attempt's `error` text after a successful retry —
+  stale display data to clean (clear `error` when a step completes).
+
 ## 2026-10-02 — the rehearsal earned its keep: two payload fixes, one permissions gate
 
 Owner: *"ran the wizard. nothing happening on coolify"* — the first §7 rehearsal
