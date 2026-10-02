@@ -1,5 +1,106 @@
 # Progress
 
+## 2026-10-02 — the rehearsal earned its keep: two payload fixes, one permissions gate
+
+Owner: *"ran the wizard. nothing happening on coolify"* — the first §7 rehearsal
+onboarding, which failed truthfully at `head_office_deploy` and surfaced three
+real defects in one run.
+
+- **Rehearsal step 1 closed.** Settings persisted (office identity, 14-day
+  terms, VAT 15%, Zoho SMTP working — my first flat read of GET /settings was a
+  false negative: the block nests under a `settings` key). Registry verified
+  clean per D2: 0 stores, 0 clients, 8 plans.
+- **4.3.23 bit twice more.** The wizard's `head_office_deploy` failed on the
+  same validation class I hit creating the CP resource: `dockerfile_location`
+  must be a **path** (`/Dockerfile`, `/head-office/Dockerfile`) — the bare
+  filename forms `deployFromSpec` still sent are refused. Fixed, and Coolify's
+  422s now carry their failing field names in the step error instead of a bare
+  "Validation failed." (commit `25b15d7`).
+- **The repo default named a repo that does not exist.** The tenant's GitHub
+  repo is `hoosainmadhi/vula-app` (local clone ~/apps/za-pos); the CP's
+  `ZA_POS_REPO_URL` default pointed at `hoosainmadhi/za-pos.git`, so every
+  create died with "Repository not found or not accessible by the GitHub App."
+  Fixed the default, pinned `COOLIFY_ZA_POS_REPO_URL` on the staging resource,
+  and the orchestration suite now records create bodies and asserts both the
+  repo and the `/`-prefixed dockerfile paths (commit `39e91df`).
+- **Still gating: the GitHub App's repo grant.** A throwaway create straight
+  from `vula-app.git` fails identically, so the inherited app
+  (`digicure-githubapp` — optimed's, borrowed with the rest of its `COOLIFY_*`
+  config) holds `vula-control-plane` but not the tenant repo. Owner grants it
+  in GitHub, then job 1 retries — the wizard's resume path keeps the
+  company/subscription rows and re-runs the failed step.
+- Tenant `main` verified current (5c27eca, all branches aligned) with the §1
+  fail-open gates present; `head-office/Dockerfile` and the root `Dockerfile`
+  both exist for the two provisioning paths. Tests **352 green (27 suites)**;
+  typecheck clean.
+
+## 2026-10-01 (later) — the staging control plane is live
+
+Owner: *"look at .env in ~/apps/optimed-control-plane"* — the Coolify
+credentials, which opened the whole staging build.
+
+- **Stood up entirely through the API.** The five `COOLIFY_*` settings were
+  merged from optimed's `.env` into this repo's (file-to-file, no secret
+  printed); `npm run probe` connected (Coolify **4.3.23**). Following the house
+  project split, `vula-control-plane` and `vula-tenants` projects were created,
+  and the staging CP application `vula-cp-staging` built from the `staging`
+  branch with the §4/§7 env block — production `NODE_ENV`, its own staging
+  JWT/admin/lease secrets (generated to a chmod-600 /tmp file for the password
+  manager, never printed), `MANAGED_ENDPOINT_SUFFIXES`, `CP_TRUST_PROXY_HOPS=1`,
+  and `COOLIFY_PROJECT_UUID` pointed at `vula-tenants` so wizard onboarding
+  provisions stores into the tenants project. First deploy:
+  **`https://staging-cp.vula-app.co.za/health` answers ok over real TLS** —
+  rehearsal step 1 done, and D2's clean registry holds (fresh volume).
+- **Coolify 4.3.23 refuses API-created bind mounts, and the client now says
+  so.** `deployFromSpec`'s `host_path` storage POST — the per-client host tree
+  §10's backup script assumes — is refused 422 on this API version. The fix
+  tries the host path first and falls back to a named docker volume (the only
+  API-accepted persistent form), pinned by a new orchestration test.
+  Consequence: API-created databases live under
+  `/var/lib/docker/volumes/<name>/_data`, not `/data/apps/vula-app/...` — §10
+  amended. Also new since 4.3.10: `dockerfile_location` wants `/Dockerfile`.
+- **Merging the credentials into `.env` broke two upgrade tests — the suite
+  was inheriting the operator's environment.** `config/env.ts` runs dotenv at
+  import, after jest's `setupFiles`, so with real `COOLIFY_*` keys present the
+  provisioning paths flipped to live calls against mocks that answer no uuid.
+  `env-setup.ts` now pins the five to empty strings (dotenv never overrides an
+  existing var), leaving `configureCoolify` in charge where Coolify is under
+  test. The suite is hermetic against the operator's `.env` again.
+- Both fixes committed (`3d80647` fallback, `05f457f` hermetic env), pushed to
+  `dev` and fast-forwarded to `staging`; the CP redeployed with them. Tests
+  **351 green (27 suites)**; typecheck clean.
+
+## 2026-10-01 — cutover prep: the promotion was already on the remote, and the gate holds with the unowned hunk
+
+Owner: *"ok so continue"* then *"carry on"* — proceeding with the repo-side half
+of the cutover order (everything after it is Coolify/host work).
+
+- **All three branches already carry everything.** `origin/main`,
+  `origin/staging` and `origin/dev` are all at `132ccc3` — the two docs commits
+  rode onto `main` and `staging` outside this session (an earlier check in the
+  same conversation had `main` two docs commits behind; the remote moved between
+  that check and the fetch). Nothing was pushed here: the only local action was
+  `fetch origin staging:staging`, which fast-forwarded the stale local
+  `staging` branch (it sat at `1aadb92`, one behind its own remote). §2 of the
+  cutover plan is therefore done — production deploys `132ccc3`, the reviewed
+  code with the current runbook.
+- **The gate holds on the working tree, hunk included.** `tsc --noEmit` clean
+  and the backend suite **350 green (27 suites)** with the uncommitted
+  `companies.ts` hunk in place — it breaks nothing observable. It remains
+  unreviewed, untested and uncommitted (plan PUT → auto-push licences to active
+  companies on that plan); the commit-or-drop decision is still open, and until
+  it is made it cannot reach a deployment — which it can't, being uncommitted.
+- **The probe has no credentials here.** `.env` carries no `COOLIFY_*` keys, so
+  `npm run probe` cannot run from this machine yet — it wants
+  `COOLIFY_API_URL`, `COOLIFY_API_TOKEN`, `COOLIFY_PROJECT_UUID`,
+  `COOLIFY_SERVER_UUID`, `COOLIFY_GITHUB_APP_UUID`. Running it before anything
+  depends on provisioning is the point of it: a wrong API URL should surface as
+  a probe failure, not as a failed store deployment mid-onboarding.
+- Next is the host court: `*.vula-app.co.za` wildcard DNS live before any
+  registration, secrets per §4 (a **separate licence keypair for staging** —
+  the rehearsal must not share the production trust root), the three staging
+  resources, and the §7 rehearsal in order.
+
 ## 2026-09-30 — the optimed comparison, and a Coolify probe
 
 Owner: *"go ahead"* on the CP `dev → main` promotion (done — `origin/main` at

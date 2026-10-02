@@ -77,6 +77,15 @@ customer databases.
 4. Set `MANAGED_ENDPOINT_SUFFIXES=.vula-app.co.za` on the control plane so the
    approved-domain allowlist matches the scheme (review §8: the control plane
    dials only hosts on the deployment domain).
+5. **The Coolify GitHub App must have both repos granted.** Store and Head
+   Office deployments build from the tenant repo (`hoosainmadhi/vula-app`);
+   the control plane builds from its own. A missing grant surfaces as
+   "Repository not found or not accessible by the GitHub App" on the wizard's
+   deploy step — add the repo in the GitHub App's settings (Repository
+   access), then retry the deployment job. Found in the staging rehearsal
+   (2026-10-02): the CP had inherited optimed's app (`digicure-githubapp`),
+   which held `vula-control-plane` but not the tenant repo — and the CP's old
+   repo default named `hoosainmadhi/za-pos`, a repo that does not exist.
 
 ## 4. Secrets inventory
 
@@ -236,6 +245,16 @@ nights on the backup disk, plus a monthly copy kept a year. **Drill before
 go-live and quarterly after**: restore a copy to a scratch container, boot it,
 sign in, and confirm a client, a store and an invoice are readable — an
 unrestored backup is a hope, not a backup.
+
+**API-created volumes are named volumes (Coolify 4.3.23).** The API now refuses
+bind mounts outright — `host_path` comes back "not allowed" — so everything
+created through it (including the control plane's own provisioning, which falls
+back automatically) keeps its `/data` in a named docker volume instead. The
+database files live under `/var/lib/docker/volumes/<volume-name>/_data/` on the
+host (`docker volume ls | grep vula-` enumerates them), not under the
+`/data/apps/vula-app/...` tree the script above globs. Point the globs at the
+volumes, or create the bind mounts by hand in the UI where the API refuses
+them. Verified 2026-10-01 standing up the staging control plane.
 
 ## 11. Accepted at launch (recorded, not forgotten)
 
