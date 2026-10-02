@@ -158,6 +158,38 @@ describe('plans', () => {
     expect(res.body.features).toEqual(['advanced_reports']);
   });
 
+  it('re-pushes licences to the active companies on the plan after an edit (2026-10-02)', async () => {
+    // Pins the plan-edit re-push that rode in with 33326b5 unreviewed: a plan
+    // edit changes caps and features — entitlements — and the licence
+    // propagation the company PUT already does must fire here too, or a cap
+    // change never reaches the fleet's tills.
+    const planId = await planIdByCode('vula-network');
+    const company = await makeCompany();
+    await request(app)
+      .post('/api/stores')
+      .set(auth())
+      .send({
+        name: 'Planned Store',
+        slug: 'planned-store',
+        baseUrl: 'http://localhost:3299',
+        terminalCount: 2,
+        companyId: company.id,
+      })
+      .expect(201);
+
+    fetchMock.mockClear();
+    await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ maxTerminalsPerStore: 3 })
+      .expect(200);
+
+    const licencePosts = fetchMock.mock.calls.filter(([u]) =>
+      String(u).endsWith('/api/internal/licence'),
+    );
+    expect(licencePosts.length).toBeGreaterThan(0);
+  });
+
   it('creates a plan with the per-terminal model', async () => {
     const res = await request(app)
       .post('/api/plans')

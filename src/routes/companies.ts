@@ -52,7 +52,7 @@ import { quoteForSubscription } from '../services/pricing.js';
 import { setupFeeInvoiceFor } from '../services/billing.js';
 import { summariseSubscription } from '../services/terminalLicences.js';
 import { pushLicencesForCompany } from '../services/billing.js';
-import { logger } from '../config/env.js';
+import { logger } from '../utils/logger.js';
 
 export const companiesRouter = Router();
 companiesRouter.use(requireOffice);
@@ -415,7 +415,9 @@ plansRouter.put(
         await pushLicencesForCompany(company.id);
       } catch (err) {
         logger.warn(
-          `Failed to auto-push licences for company ${company.slug} after plan update: ${(err as any)?.message}`,
+          `Failed to auto-push licences for company ${company.slug} after plan update: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
         );
       }
     }
