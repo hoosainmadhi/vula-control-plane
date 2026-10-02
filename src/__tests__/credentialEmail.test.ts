@@ -127,4 +127,29 @@ describe('store admin credentials by email', () => {
     expect(res.body.emailError).toBeUndefined();
     expect(transport.sendMail).not.toHaveBeenCalled();
   });
+
+  it('falls back to the initial bootstrap when the store has no admin user to reset', async () => {
+    await configureSmtp();
+    const id = await createStore('manager@north.test');
+
+    // The deploy step's bootstrap never landed (the container was still
+    // building), so the store refuses the reset — the fallback bootstraps the
+    // first admin and the credentials still go out by email.
+    fetchMock.mockImplementation(async (url: string) => {
+      const s = String(url);
+      if (s.endsWith('/api/internal/admin/reset')) {
+        return jsonResponse(409, { error: 'Store has no admin user to reset' });
+      }
+      if (s.endsWith('/api/internal/admin/init')) {
+        return jsonResponse(201, { ok: true });
+      }
+      return jsonResponse(200, { ok: true });
+    });
+
+    const res = await request(app).post(`/api/stores/${id}/reset-admin`).set(authHeader(token));
+    expect(res.status).toBe(200);
+    expect(res.body.tempPassword).toBeTruthy();
+    expect(res.body.emailedTo).toBe('manager@north.test');
+    expect(transport.sendMail).toHaveBeenCalledTimes(1);
+  });
 });

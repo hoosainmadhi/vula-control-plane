@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import { trySendAdminCredentialsEmail, type AdminCredentialsDelivery } from '../services/mailer.js';
+import { bootstrapStoreAdmin, generateAdminPassword } from '../services/storeProvisioning.js';
 import type {
   ConfigStatus,
   HealthStatus,
@@ -902,7 +903,25 @@ storesRouter.post(
         .json({ error: 'Store is paused — resume before resetting the admin password' });
       return;
     }
-    const { tempPassword } = await resetAdmin(store); // StoreClientError → 502 via error handler
+    let tempPassword: string;
+    let viaBootstrap = false;
+    try {
+      tempPassword = (await resetAdmin(store)).tempPassword;
+    } catch (err) {
+      // A store whose bootstrap never landed (the container was still building
+      // during the deploy step) has no admin user to reset — the tenant refuses
+      // with "no admin user". Fall back to the initial bootstrap so the
+      // reveal-once action always yields a working login; without an address on
+      // the row there is nothing to bootstrap for, so that refusal rethrows.
+      if (!(err instanceof StoreClientError) || !/no admin user/i.test(err.message)) throw err;
+      if (!store.admin_email) throw err;
+      tempPassword = generateAdminPassword();
+      const created = await bootstrapStoreAdmin(store, store.admin_email, tempPassword);
+      if (!created) {
+        throw new StoreClientError('Store refused the admin bootstrap (it may already have one)');
+      }
+      viaBootstrap = true;
+    }
     // The outlet's durable copy arrives by email when the row knows its admin
     // address — the password itself is still never stored.
     let delivery: AdminCredentialsDelivery = { emailed: false };
@@ -916,6 +935,7 @@ storesRouter.post(
     }
     recordAuditLog('office', 'reset_store_admin', 'store', store.id, {
       reason: 'Temporary store password issued from the Support panel',
+      ...(viaBootstrap ? { viaBootstrap } : {}),
       ...(delivery.emailed ? { emailedTo: delivery.emailedTo } : {}),
       ...(delivery.emailError ? { emailError: delivery.emailError } : {}),
     });
