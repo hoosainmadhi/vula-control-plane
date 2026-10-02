@@ -226,6 +226,11 @@ describe('deployment job truthfulness', () => {
     const panel = getPanelById(detail.headOffice!.id);
     expect(panel?.coolify_uuid).toBe('uuid-ho-1');
 
+    // The deploy steps own the terminal status: a completed deploy reads
+    // 'deployed', never a 'provisioning' label nothing will revisit.
+    expect(getStoreBySlug('urban-threads-sandton')?.deploy_status).toBe('deployed');
+    expect(panel?.deploy_status).toBe('deployed');
+
     // Retry the job: existing resources are never re-created.
     const jobId = detail.latestDeployment!.job.id;
     await request(app)

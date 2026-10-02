@@ -225,6 +225,11 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
           }
         }
 
+        // The step's Coolify work succeeded — write the terminal status the
+        // row has been promising since 'provisioning'. Container liveness is
+        // the health badge's claim, not this one's.
+        setPanelDeployStatus(panel.id, 'deployed');
+
         updateDeploymentStep(step.id, {
           status: 'complete',
           resourceId: panel.id,
@@ -313,6 +318,11 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
           warnings.push(msg);
           logger.info(msg);
         }
+
+        // Same terminal write as the Head Office step: the deployment exists
+        // and Coolify accepted it. 'provisioning' with no writer behind it is
+        // how a row ends up claiming a state nobody made true.
+        setStoreDeployStatus(store.id, 'deployed');
 
         updateDeploymentStep(step.id, {
           status: 'complete',
