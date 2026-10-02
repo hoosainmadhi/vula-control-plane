@@ -282,6 +282,14 @@ describe('deployment job truthfulness', () => {
     expect(locations).toContain('/Dockerfile');
     expect(locations).toContain('/head-office/Dockerfile');
     for (const loc of locations) expect(loc.startsWith('/')).toBe(true);
+
+    // And from the tenant's real repo — the old default named hoosainmadhi/za-pos,
+    // which does not exist, so Coolify refused every create.
+    for (const body of createBodies) {
+      expect((JSON.parse(body) as { git_repository: string }).git_repository).toBe(
+        'https://github.com/hoosainmadhi/vula-app.git',
+      );
+    }
   });
 
   it('wires the topology in both directions with a per-branch Head Office token', async () => {

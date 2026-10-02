@@ -83,7 +83,10 @@ const request = async (
   return data;
 };
 
-const ZA_POS_REPO_URL = process.env.COOLIFY_ZA_POS_REPO_URL || 'https://github.com/hoosainmadhi/za-pos.git';
+// The tenant's real GitHub repo — its local clone is ~/apps/za-pos but the
+// repo itself is vula-app; the old default named a repo that does not exist,
+// and every store deployment died on create ("Repository not found").
+const ZA_POS_REPO_URL = process.env.COOLIFY_ZA_POS_REPO_URL || 'https://github.com/hoosainmadhi/vula-app.git';
 const ZA_POS_REPO_BRANCH = process.env.COOLIFY_ZA_POS_BRANCH || 'main';
 const STORE_INTERNAL_PORT = '3000';
 
