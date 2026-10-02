@@ -1,5 +1,58 @@
 # Findings
 
+## 2026-10-02 (night) — a store with no Head Office renders a link to the developer's own machine
+
+Seen live in the staging rehearsal: a store that was never wired to a Head
+Office renders a "Head Office" nav link pointing at `http://localhost:3260`.
+
+- **The CP side is correct.** `topology.ts` pushes
+  `headOffice: { enabled: true, url: panel.base_url, token }` to every wired
+  branch, so any store wired to a real Head Office links at the real origin.
+  The rehearsal store was added to its client *after* the Head Office was
+  deleted, so nothing ever wired it.
+- **The tenant side is the defect.** The store resolves its HO URL as
+  `settings.head_office_url` → `HO_URL` env → **`http://localhost:3260`** — a
+  development port as the production last resort (`src/services/settings.ts`).
+  A fresh, unwired store therefore advertises a live-looking link to a dead
+  address. Flagged for the tenant workstream: an unwired store should hide or
+  disable the Head Office link; a hardcoded dev fallback must never be the
+  production answer. Deciding that also decides what a single-store client's
+  store shows — the link may simply not belong there.
+
+## 2026-10-01 — the operator's .env is part of the test environment, and 4.3.23 no longer sells bind mounts
+
+Owner: *"look at .env in ~/apps/optimed-control-plane"* — the credential
+hand-off for the cutover, which met two things this tree had never met before.
+
+- **The suite's greenness silently depended on the shape of a file nobody
+  commits.** Two upgrade suites failed the moment real `COOLIFY_*` keys landed
+  in the local `.env` — not because of the new storage-fallback code (the stash
+  experiment failed identically without it) but because `config/env.ts` runs
+  `dotenv.config()` at import time, and imports happen *after* jest's
+  `setupFiles`. Deleting the keys in `env-setup.ts` was therefore undone by the
+  very next import: with a config present, every suite's provisioning paths
+  flipped from "Coolify not configured" to live calls against generic mocks
+  that answer no uuid (`head_office_deploy failed: Coolify create application
+  returned no uuid`). The fix pins the five keys to empty strings in
+  `env-setup.ts` — dotenv never overrides an existing variable, and
+  `readCoolifyConfig` treats `''` as unconfigured — leaving
+  `configureCoolify()` in charge of the one suite that wants them. The
+  general lesson is the one the scratch-DB guard already taught: a seam that
+  reads the environment must have the test harness own the environment, not
+  inherit whatever the operator's machine happens to hold.
+- **The Coolify API is environment too, and it moved under the adopted
+  payload.** The client's create-and-deploy quirks were documented against
+  Coolify 4.3.10; the real instance is 4.3.23, where the storage POST refuses
+  bind mounts outright (`host_path` → "This field is not allowed") and
+  `dockerfile_location` validates only the `/Dockerfile` form, not `Dockerfile`.
+  A named volume is the one persistent form the API still accepts, so
+  `deployFromSpec` now tries the per-client host path first and falls back to a
+  named volume, pinned by an orchestration test. The quiet consequence is
+  bigger than the code: the §10 backup script globs host paths that API-created
+  deployments no longer have — the databases live under
+  `/var/lib/docker/volumes/<name>/_data` — and the runbook now says so before
+  the restore drill depends on it.
+
 ## 2026-09-30 — the optimed comparison, and a Coolify probe adopted
 
 Owner: *"look at ~/apps/optimed-control-plane to see coolify integration"* — the
