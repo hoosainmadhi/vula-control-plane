@@ -1,5 +1,38 @@
 # Progress
 
+## 2026-10-02 (night) — names are provisioned, the till warns before checkout, and the licence hole got its teeth
+
+Owner reports from driving the rehearsal stores: *"single store should not
+have the menu item Head Office"* (done — tenant `51fd5a9`), *"Paused
+Rehearsal Two North -> but can still access POS and ring up sale"*,
+*"why is Store name 'Vula Store' for all stores?"*, *"I think we need a
+popup"* for the suspension refusal, and the rehearsal's biggest catch: a sale
+rang up on a **suspended** client's store.
+
+- **The licence enforcement hole (tenant `e4b94ff`):** the CP signs
+  `billingState` into every licence, but the tenant's acceptance path
+  flattened it — a null paid-period mapped to *active* ("no billing
+  configured" — a pre-redesign assumption), and the paid path never consulted
+  manual suspension. Fixed: the signed state is the authority for suspension;
+  the date math refines active↔past_due only. The stores rebuild into
+  enforcement — client 2's tills now **hard-block** sales until the money
+  sequence, with the popup below on screen.
+- **The suspension popup (tenant `3917ff7`):** the checkout refusal text is
+  now one constant (`SUSPENDED_SALES_MESSAGE`) shared by the checkout 402 and
+  the till's modal — the register warns before the first ring-up, dismissible
+  for the shift, reappearing until the account is settled. Exposed via
+  runtime-config (`subscription.suspendedMessage`) so the two cannot drift.
+- **Store names are provisioned (CP `1a2fcfb` + tenant `3917ff7`):** the
+  configure payload carries the registry `name` (a wire-contract change —
+  CONTEXT.md updated on both sides, payload assertions pinned in both test
+  suites); the tenant applies it to its own `store_name`. Dev's names had
+  come from seed scripts; production now gets them from provisioning. The
+  three rehearsal stores were re-pushed and report their real names — North
+  was resumed, pushed and **re-paused**, preserving the owner's pause test.
+- Fleet state after the rebuilds: all four tenant containers and the CP
+  healthy; client 1's store trading with its name; client 2 suspended with
+  the popup live.
+
 ## 2026-10-02 (evening) — the outlet's login goes out by email, and the store row finally keeps its admin address
 
 Owner: *"go ahead - no forced change in PW"* — the credentials email is a
