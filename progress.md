@@ -1,5 +1,33 @@
 # Progress
 
+## 2026-10-03 — production is live: vula-cp-prod deployed, healthy, clean, logins verified
+
+Owner: *"secrets done"* — the production licence keypair, JWT secret and admin
+password saved to the password manager and passed file-to-file (`~/Notes/
+vula-prod-*.txt`), with the office email confirmed as hello@vula-app.co.za.
+
+- **`vula-cp-prod` deployed end to end through the Coolify API** (uuid
+  `yx3ntdoau1qhula5i3mr7wpz`, project vula-control-plane, environment
+  production): built from `main` on
+  `https://vula-cp-mzsza-2026.vula-app.co.za`, 18 env vars (production
+  NODE_ENV, the **production** lease keypair, `MANAGED_ENDPOINT_SUFFIXES`,
+  `CP_TRUST_PROXY_HOPS=1`, `COOLIFY_PROJECT_UUID` → vula-tenants, the tenant
+  repo pinned to vula-app.git), named volume `vula-cp-prod-data` at /data.
+- **Verified live:** `/health` ok over TLS, login ok, **registry clean per
+  D2** (0 clients, 0 stores), office name at the seeded default pending the
+  owner's real identity in Settings.
+- **The rehearsal's dividend:** every failure mode this deploy could have hit
+  had already been hit and fixed in staging — the 4.3.23 payload changes, the
+  repo default, the GitHub App grant, the env-var masking — so production
+  deployed first time, healthy, with zero surprises.
+- The nightly backup picks up the production volume automatically
+  (`-vula-cp-prod-` matches the cp bucket). Restore drill passed the day
+  before on the staging backup.
+- **Remaining for the first real client (owner, the flow they've done
+  twice):** Settings with the real legal identity + production SMTP + test
+  email; check the 8-plan catalogue; first store Part A/B; first client
+  through §8. Parked: pause-as-kill-switch.
+
 ## 2026-10-02 (night) — names are provisioned, the till warns before checkout, and the licence hole got its teeth
 
 Owner reports from driving the rehearsal stores: *"single store should not
