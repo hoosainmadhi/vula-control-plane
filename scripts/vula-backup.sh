@@ -9,10 +9,12 @@ DEST=/backups/vula                      # a second disk, or rsync'd off-host bel
 mkdir -p "$DEST/cp" "$DEST/stores" "$DEST/ho" "$DEST/other"
 
 # API-created deployments keep their /data in named Docker volumes under
-# /var/lib/docker/volumes/<app-uuid>-<name>/_data — the storage names carry the
-# slug, so discovery stays readable. .backup is self-contained (no WAL to carry).
+# <docker-root>/volumes/<app-uuid>-<name>/_data — the docker root is DISCOVERED
+# (this host moved it off /var/lib/docker), and the storage names carry the
+# slug so discovery stays readable. .backup is self-contained (no WAL to carry).
+DOCKER_ROOT=$(docker info --format '{{.DockerRootDir}}')
 for vol in $(docker volume ls --format '{{.Name}}' | grep -- '-vula-'); do
-  for db in "/var/lib/docker/volumes/$vol/_data"/*.db; do
+  for db in "$DOCKER_ROOT/volumes/$vol/_data"/*.db; do
     [ -e "$db" ] || continue
     case "$vol" in
       *-vula-cp-*)    dest="$DEST/cp";;
