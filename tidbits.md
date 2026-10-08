@@ -422,13 +422,16 @@ into that plan.
   filesystem (13 % on this box), not `/data` where Docker lives — the threshold
   never trips, so it is `force_docker_cleanup` doing the work. Don't "fix" the
   threshold expecting it to watch /data.
-- **The two control-plane apps have auto-deploy OFF** (2026-10-08). The
-  webhook's late deliveries produced double deployments (a manual trigger
-  racing the delivery); with the flag off a push queues nothing and a release
-  is one deliberate `POST /api/v1/deploy?uuid=<app-uuid>` (or the UI's
-  Redeploy). Note where the flag lives: `is_auto_deploy_enabled` reads NULL on
+- **Auto-deploy is OFF everywhere but the website** (2026-10-08). The
+  webhook's late deliveries produced double deployments for the control planes
+  (a manual trigger racing the delivery), and the tenant fleet rebuilt
+  thirteen apps on every code commit to `main` — 45 minutes of a busy queue
+  that read as "stuck". Releasing is now deliberate:
+  `scripts/release-apps.sh fleet|cp|all|<name>|list` (Coolify still builds four
+  at a time). The website keeps auto-deploy on so a marketing push publishes
+  the site. Note where the flag lives: `is_auto_deploy_enabled` reads NULL on
   the Application model — the value is on its `application_settings` relation.
-  The store apps keep auto-deploy on; their watch paths do the filtering.
+  Anyone pushing code should know the demos no longer move by themselves.
 - **Commit this repo's uncommitted tree when the owner says so**: the storage
   helper (`scripts/vula-bind-storage.sh`), the new reset-script master
   (`scripts/vula-demo-reset.sh`), the backup change (demo clients excluded),

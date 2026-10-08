@@ -2437,3 +2437,16 @@ applications row (`is_auto_deploy_enabled` reads NULL on the model; the
 `application_settings` relation holds it). Documented in
 `prompts/deploy-coolify-control-plane.md`; the store apps keep auto-deploy on
 and rely on their watch paths.
+
+**Same day, hours later — the fleet followed.** Two code commits landed on
+`main` (the tenant workstream's `refactor(ui)` and `feat(demo)`) and rebuilt
+thirteen apps: nine builds finished in 45 minutes while the rest sat queued,
+which read, fairly, as a stuck queue. Nothing was stuck — but auto-deploy on
+`main` means every development commit is a fleet release, so the fleet's
+auto-deploy is **off** too (all thirteen tenant apps; the website stays on, so
+a marketing push still publishes the site). The release path is now
+`scripts/release-apps.sh` (`fleet` | `cp` | `all` | `<name>` | `list`) — one
+command, Coolify still builds four at a time, and the rebuild happens when
+someone chooses it. Verified: `vula-website` reads `auto_deploy=true`, the
+stores and Head Office read `false`, and the push carrying this note queued
+nothing.

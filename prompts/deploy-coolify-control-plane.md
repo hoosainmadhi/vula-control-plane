@@ -151,8 +151,11 @@ checklist to close before cutover — see
    delivers late on this host (one to two minutes, sometimes never), so a
    manual trigger raced it and every release built twice, serially. A release
    is now one deliberate deploy: **Redeploy** in the UI, or
-   `POST /api/v1/deploy?uuid=<app-uuid>`. The store apps keep auto-deploy on —
-   their watch paths do the filtering.
+   `POST /api/v1/deploy?uuid=<app-uuid>`. **The store apps are off as well** —
+   a code push deploys nothing for the fleet either, because thirteen apps
+   rebuilding on every commit looked like a stuck queue. Releasing is one
+   command: `scripts/release-apps.sh fleet` (or `cp`, or `all`). The website
+   keeps auto-deploy on, so a marketing push deliberately publishes the site.
 5. **After the first boot — Settings.** This is configuration, not env: sign in and
    set the office identity (the name that appears on invoices), the payment terms,
    and the SMTP account, then press **Send test email** and confirm it arrives.
