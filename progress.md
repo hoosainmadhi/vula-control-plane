@@ -2423,3 +2423,17 @@ clickable so can navigate to store"* and *"update all docs"*.
 - Docs swept: both deploy runbooks to the new tree, the marketing README's
   deploy rules, the tenant deploy prompts, and this repo's planning files
   (task plan's current phase + `## Next Step`, findings, tidbits).
+
+## 2026-10-08 — the control plane's release path is deliberate now
+
+Both control-plane apps have **auto-deploy off**. The prompt was a release
+showing two deployments per app in Coolify: the GitHub webhook delivers late
+on this host (one to two minutes — sometimes not at all), so the manual
+trigger I use when it goes quiet raced it, and the same commit built twice,
+serially. For two apps released by hand anyway, deterministic beats
+convenient: push, then deploy once (`POST /api/v1/deploy?uuid=…`, or the UI's
+Redeploy). The setting lives on the application's *settings*, not the
+applications row (`is_auto_deploy_enabled` reads NULL on the model; the
+`application_settings` relation holds it). Documented in
+`prompts/deploy-coolify-control-plane.md`; the store apps keep auto-deploy on
+and rely on their watch paths.

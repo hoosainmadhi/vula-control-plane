@@ -147,6 +147,12 @@ checklist to close before cutover — see
    `node`, which covers a directory that becomes root-owned later.)
 4. **Domains:** `https://vula-cp-mzsza-2026.vula-app.co.za` → **Deploy**.
    Healthcheck hits `/health` (`{ status: 'ok' }`).
+   **Auto-deploy is OFF for this application** (2026-10-08). The GitHub webhook
+   delivers late on this host (one to two minutes, sometimes never), so a
+   manual trigger raced it and every release built twice, serially. A release
+   is now one deliberate deploy: **Redeploy** in the UI, or
+   `POST /api/v1/deploy?uuid=<app-uuid>`. The store apps keep auto-deploy on —
+   their watch paths do the filtering.
 5. **After the first boot — Settings.** This is configuration, not env: sign in and
    set the office identity (the name that appears on invoices), the payment terms,
    and the SMTP account, then press **Send test email** and confirm it arrives.
