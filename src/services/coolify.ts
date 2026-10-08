@@ -90,9 +90,26 @@ const ZA_POS_REPO_URL = process.env.COOLIFY_ZA_POS_REPO_URL || 'https://github.c
 const ZA_POS_REPO_BRANCH = process.env.COOLIFY_ZA_POS_BRANCH || 'main';
 const STORE_INTERNAL_PORT = '3000';
 
+/** Root of the host-side data tree the fleet's bind-backed volumes live under. */
+export const vulaDataRoot = (): string => process.env.VULA_DATA_ROOT || '/data/apps/vula-app';
+
+/**
+ * Where a deployment's `/data` lives on the host (migrated 2026-10-06):
+ *   clients/<client>/stores/<store>/  ·  clients/<client>/head-office/
+ * The volume NAME stays Coolify's storage key; this path is the bind target
+ * `scripts/vula-bind-storage.sh` points that volume at, because Coolify
+ * 4.3.23's API refuses to create binds itself.
+ */
+export const vulaHostPath = (kind: 'store' | 'ho', clientSlug: string, slug: string): string =>
+  kind === 'ho'
+    ? `${vulaDataRoot()}/clients/${clientSlug}/head-office`
+    : `${vulaDataRoot()}/clients/${clientSlug}/stores/${slug}`;
+
 export interface CreateServiceResult {
   coolifyUuid: string;
   volumeName: string;
+  /** Canonical host directory for this deployment's `/data` (see vulaHostPath). */
+  hostPath: string;
   controlPlaneToken: string;
   jwtSecret: string;
 }
@@ -171,11 +188,11 @@ const deployFromSpec = async (spec: DeploymentSpec): Promise<CreateServiceResult
   }
 
   // Persistent volume mount
-  // One directory per deployment, under the client that owns it, named for the
-  // convention already on the host (`optimed-<slug>-sqlite-db`). The volume name
-  // is what Coolify keys storage by, so it must be unique and stable.
+  // The volume name is what Coolify keys storage by, so it must be unique and
+  // stable; the host path is where the bind lives once the volume is pointed at
+  // it (see vulaHostPath and scripts/vula-bind-storage.sh).
   const volumeName = `vula-${spec.kind}-${slug}-sqlite-db`;
-  const hostPath = `/data/apps/vula-app/${spec.kind}/${spec.clientSlug}/${slug}-sqlite-db`;
+  const hostPath = vulaHostPath(spec.kind, spec.clientSlug, slug);
   try {
     await request(config, 'POST', `${API_VERSION_PATH}/applications/${coolifyUuid}/storages`, {
       type: 'persistent',
@@ -184,13 +201,14 @@ const deployFromSpec = async (spec: DeploymentSpec): Promise<CreateServiceResult
       host_path: hostPath,
     });
   } catch (err) {
-    // Coolify 4.3.23 refuses API-created bind mounts outright ("host_path ...
-    // is not allowed"), so the per-client host tree the backup plan assumes can
-    // no longer come from this call. A named volume keeps /data persistent
-    // through the same API — it lives under /var/lib/docker/volumes instead.
+    // Coolify 4.3.23 refuses API-created bind mounts outright ("host_path is
+    // not allowed"), so persistence comes from the named volume, and a host
+    // step points that volume at the client tree:
+    //   scripts/vula-bind-storage.sh <app-uuid> <volume-name> <host-path>
     if (!(err instanceof CoolifyError)) throw err;
     logger.warn(
-      `Coolify refused a host-path volume for ${slug} — falling back to named volume ${volumeName}`,
+      `Coolify refused a host-path volume for ${slug} — named volume ${volumeName} created; ` +
+        `run scripts/vula-bind-storage.sh ${coolifyUuid} ${volumeName} ${hostPath} on the host`,
     );
     await request(config, 'POST', `${API_VERSION_PATH}/applications/${coolifyUuid}/storages`, {
       type: 'persistent',
@@ -208,7 +226,7 @@ const deployFromSpec = async (spec: DeploymentSpec): Promise<CreateServiceResult
   );
 
   logger.info(`Provisioned Coolify deployment ${coolifyUuid} for ${slug} (${cleanDomain})`);
-  return { coolifyUuid, volumeName, controlPlaneToken, jwtSecret };
+  return { coolifyUuid, volumeName, hostPath, controlPlaneToken, jwtSecret };
 };
 
 /**

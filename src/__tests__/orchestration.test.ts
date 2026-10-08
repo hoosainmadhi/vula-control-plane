@@ -216,7 +216,7 @@ describe('deployment job truthfulness', () => {
     expect(storageBody).toMatchObject({
       name: 'vula-store-urban-threads-sandton-sqlite-db',
       mount_path: '/data',
-      host_path: '/data/apps/vula-app/store/urban-threads/urban-threads-sandton-sqlite-db',
+      host_path: '/data/apps/vula-app/clients/urban-threads/stores/urban-threads-sandton',
     });
 
     // One create per resource: the Head Office and the store.
@@ -259,7 +259,7 @@ describe('deployment job truthfulness', () => {
     expect(storeStorageCalls).toHaveLength(2);
     const refused = JSON.parse(storeStorageCalls[0].body) as { host_path?: string };
     expect(refused.host_path).toBe(
-      '/data/apps/vula-app/store/urban-threads/urban-threads-sandton-sqlite-db',
+      '/data/apps/vula-app/clients/urban-threads/stores/urban-threads-sandton',
     );
     const storageBody = JSON.parse(storeStorageCalls[1].body) as {
       name: string;
