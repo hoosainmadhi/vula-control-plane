@@ -2290,3 +2290,136 @@ id` otherwise) — caught on the first live run, after the stores had registered
 Result, verified by reading each panel's `branch_stores` and comparing every
 token against the branch's own settings: **13 branches across 5 panels, all
 paired** — Urban Threads 3, HM Spares 1, Kloof 3, Cresta 3, AHK 3.
+
+## 2026-10-06 — the deployed demo fleet's Head Office wiring, fixed live
+
+The demo fleet's Urban Threads Head Office reported `Invalid control plane token`
+on every branch ping. Reading the three databases side by side explained it: the
+panel's `branch_stores` rows carried a stale `control_plane_token` and a NULL
+`head_office_token`, while each branch accepted its own env `CONTROL_PLANE_TOKEN`
+on the vendor routes and its `settings.head_office_token` on the merchant routes.
+The panel therefore sent no merchant header at all, and its legacy fallback
+carried the wrong vendor token. The rows now carry the two credentials the live
+branches actually accept (read on the box, never printed); all three branches
+ping `up` from the panel.
+
+Two more found the same way:
+
+- **The demo panel still pointed at the retired `demo-ho` hostname** — probes
+  said "no available server" (an edge 503) because the deployment now answers on
+  `demo-urban-threads-ho`. `PUT /api/panels/5` re-probed the new URL and health
+  came back `up`. The registry was the one place a renamed deployment's URL had
+  never been updated.
+- **The nightly demo-reset goldens predated the fleet repair**, so the 02:17
+  restore would have reinstated the stale URLs and tokens. All seven goldens were
+  re-snapshotted (`sqlite3 .backup`) from the live volumes.
+
+The branch rows were written directly (no panel API exposes the merchant
+credential); the path that normally sets them — the wizard's `wire_topology`
+step — only runs for CP-created deployments, and this demo fleet was assembled
+by hand around the seeded databases.
+
+## 2026-10-06 — the fleet's data moved onto the host tree
+
+The demo fleet and both control planes kept their `/data` on Docker named
+volumes — the fallback Coolify 4.3.23's API forced (binds are refused:
+`host_path` is "not allowed", `type: bind` is invalid, and there is no
+server-execute endpoint to work around it). The owner asked for the agreed tree:
+
+    /data/apps/vula-app/control-plane/<env>/control-plane.db
+    /data/apps/vula-app/clients/<client>/head-office/head-office.db
+    /data/apps/vula-app/clients/<client>/stores/<store>/za-pos.db
+
+Each of the 13 deployments was migrated with a verified procedure: stop → copy →
+`diff -rq` → park the original under `/root/vula-migration-backup` → remove the
+container and volume → recreate the volume **of the same name** with
+`--opt type=none --opt device=… --opt o=bind` → deploy from Coolify. The volume
+keeps its name, so Coolify's configuration is untouched; the volume's `_data`
+and the tree path are the same inode. A pilot store went first, including a
+deliberate second redeploy to prove the bind survives Coolify's rebuilds; two
+rehearsal apps needed one redeploy after a race with the volume swap. All 13
+verified healthy afterwards, with logins. Data: ~18 MB in total.
+
+Rolling with it:
+
+- `vula-backup.sh` mirrors the tree into `/backups/vula-app` (the old
+  `/backups/vula` renamed), skips bind-backed volumes in its legacy-volume
+  sweep, and no longer prunes the goldens (`-prune`/`-delete` cannot combine —
+  it uses `-exec rm`).
+- `vula-demo-reset.sh` restores goldens into the new paths, logs to
+  `/var/log/vula-demo-reset.log`, and was run in anger as the test (jhb matched
+  its golden exactly: 1467 orders, 2 till claims).
+- Crons staggered: backup 02:10, reset 02:17 — a same-minute race could catch
+  the reset mid-swap under a running backup.
+
+Provisioning: `coolify.ts` now emits the canonical host path
+(`vulaHostPath(kind, clientSlug, slug)`) in its result and names the exact host
+command in its warning when Coolify refuses the bind;
+`scripts/vula-bind-storage.sh` performs that step safely for any deployment,
+new or old. Fully autonomous bind creation would need the CP to hold the
+docker socket (or a mounted host tree) — deliberately not granted (tidbits).
+
+## 2026-10-07 — watch paths, so a site change stops rebuilding the fleet
+
+Every app watching a repo branch redeployed on **any** push to that branch,
+because Coolify's `watch_paths` was blank and its code says exactly that:
+blank watch paths → deploy on every push; set → deploy only when a changed
+file matches (with `!` negations, last match wins). One repo holds the site,
+the stores, the Head Offices and (separately) this control plane, so a
+marketing commit rebuilt all eleven tenant apps — and the website then queued
+behind ten builds.
+
+Now set, from the apps' real build inputs:
+
+- stores and Head Offices (11 apps, repo `vula-app`): `**` minus
+  `marketing/**`, `docs/**`, `prompts/**`, `plans/**`, `*.md` — code changes
+  still deploy, unknown paths still deploy (fail-safe), site and doc edits do
+  not.
+- the website: `marketing/**` only — store commits no longer rebuild it.
+- both control planes (repo `za-pos-control-plane`): `**` minus `prompts/**`
+  and `*.md`.
+
+Verified against Coolify's own matcher before applying, and end-to-end after:
+a marketing-only commit (`4aab8954`) queued exactly one deployment — the
+website — and no store. A marketing-only change now takes about a minute
+instead of queueing behind ten rebuilds.
+
+## 2026-10-07 — two new demo verticals, a rename, and the deployment plumbing straightened out
+
+Owner brief: *"I want to add more demo store types — Hardware / Pharmacy"*,
+*"so dont need to backup the demo stores"*, *"change the name of the
+Restaurant — myDiner is a real restuarant name"*, later *"HO: make Base URL
+clickable so can navigate to store"* and *"update all docs"*.
+
+- **Demo Hardware** (`demo-hardware.vula-app.co.za`) and **Demo Pharmacy**
+  (`demo-pharmacy.vula-app.co.za`) are live. Seeded from the dev fleet's
+  existing `builders-hardware` / `medisave-pharmacy` packs (30 and 27 product
+  lines with ~1,400 sales of history each), onboarded through the staging
+  control plane as real single-store clients (vula-demo plan, licensed 10,
+  paid through 2099), placed on the bind tree, watch paths set, goldens
+  snapshotted, and both added to the nightly reset. The wizard's missing
+  vertical (findings) had to be corrected on both by hand — PUT plus a
+  re-push.
+- **The restaurant is Demo Diner** — live database, golden, seeder, marketing
+  card and docs. All three new names read "Demo …" so they cannot collide with
+  a real business.
+- **Backups skip the demo clients** (`demo-*` / `*-demo`): they reset to
+  goldens nightly and are regenerable from the seeders, so their dailies were
+  noise. The rehearsal clients and both control planes stay covered — verified
+  by running the job and reading what it wrote.
+- **The Head Office's branch Base URL is a link** into the store (new tab,
+  hover-underline, titled) — `head-office/frontend/src/pages/StoresPage.tsx`,
+  verified in the served JavaScript bundle on both Head Offices, not just by
+  "the deploy finished".
+- **Watch paths refined per image**: stores no longer rebuild for a
+  `head-office/` change and Head Offices not for `frontend/`; `scripts/**`
+  deliberately stays watched because the production build compiles it into
+  both images. Documented in the marketing README.
+- **Coolify's deployment queue wedged for ~half an hour** — nothing deployed
+  and it first looked like missed GitHub webhooks. `horizon:terminate` left it
+  half-down; restarting the coolify container fixed it, and Coolify marked the
+  12 stuck deployments as failed. Findings and tidbits carry the diagnosis and
+  the remedy.
+- Docs swept: both deploy runbooks to the new tree, the marketing README's
+  deploy rules, the tenant deploy prompts, and this repo's planning files
+  (task plan's current phase + `## Next Step`, findings, tidbits).

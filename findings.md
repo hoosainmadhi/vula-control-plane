@@ -1,5 +1,51 @@
 # Findings
 
+## 2026-10-07 — the Coolify API cannot make the storage the owner asked for, and the queue can wedge
+
+The owner asked for the fleet's SQLite files under `/data/apps/vula-app/` in a
+per-client tree. Four things about the platform stood in the way; all are now
+known, and three are worked around.
+
+- **Coolify 4.3.23's API refuses bind mounts outright.** `POST …/storages` with
+  `type: 'bind'` answers *"The selected type is invalid"*; with `host_path` it
+  answers *"This field is not allowed"* — the same refusal the app-create
+  payload gave, which is why `coolify.ts` has its named-volume fallback. There
+  is also no server-execute endpoint (`/servers/<uuid>/execute|command|terminal`
+  all 404). **The workaround, verified end to end:** let Coolify create its
+  named volume as usual, then re-point that same-named volume at the host tree
+  with the local driver —
+  `docker volume create --driver local --opt type=none --opt device=<path>
+  --opt o=bind <volume>` — after stopping **and removing** the container (a
+  merely stopped container still counts as "in use" for `docker volume rm`, and
+  removing the volume's `_data` while the volume exists leaves the container
+  unable to start). The volume keeps its name, so Coolify's configuration is
+  untouched, the bind survives Coolify's rebuilds (proven with a deliberate
+  second deploy), and the volume's `_data` and the tree path are the **same
+  inode**. `scripts/vula-bind-storage.sh` automates it: stop → verified byte
+  copy → park the original under `/root/vula-migration-backup` → swap → leave
+  stopped for a Coolify deploy.
+- **Watch paths are an allowlist with `!` negations, last match wins** — read
+  from Coolify's own `Application::matchPaths`, and exercised against it
+  before applying. Blank means "deploy on every push", which is why a
+  marketing-only commit rebuilt eleven apps and queued the site behind them.
+  Stores and Head Offices now watch `**` minus what their images never build
+  from; the website watches `marketing/**` alone. Verified end to end: a
+  marketing-only commit queued exactly the website and no store.
+- **The onboarding wizard has no `vertical` field.** A client created through
+  `POST /clients` with a nested store gets the CP's default (`general`), and
+  the first config push stamps that onto the store — Demo Hardware and Demo
+  Pharmacy both reported `vertical: general` until `PUT /stores/:id`
+  (`vertical`) plus a re-push corrected them. A wizard that claims a store type
+  should carry it; in tidbits.
+- **The deployment queue can wedge.** Nothing deployed from 08:35 while
+  Horizon still reported "running" and no `ApplicationDeploymentJob` appeared
+  in the log. `php artisan horizon:terminate` left it half-down; `docker
+  restart coolify` fixed it — and on the way up Coolify marked the **12 stuck
+  deployments as failed**. Stuck jobs never resume; the affected apps must be
+  re-deployed. Horizon runs with `--timeout=39600` (eleven hours), which is
+  why one hung build can hold a worker for the rest of the day. It first
+  looked like missed GitHub webhook deliveries — it was not.
+
 ## 2026-10-02 (late) — the rehearsal's biggest catch: a suspended client's till traded anyway
 
 The owner rang a sale on a **suspended** client's store and it went through.

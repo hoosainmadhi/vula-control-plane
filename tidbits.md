@@ -370,3 +370,61 @@ into that plan.
 - Dev-office email default is still `admin@za-pos.local` (env default +
   docs). A later pass could move to `@vula.local`-style defaults; branding
   pass deliberately left config defaults alone.
+- **Panel branch rows have no API surface.** `branch_stores.control_plane_token`
+  / `head_office_token` can only be repaired by writing the panel's SQLite
+  database directly (the provisioning path does it in code). Found live on
+  2026-10-06 when the demo Head Office could not ping its branches — see
+  progress.md.
+- **Renaming a deployment's hostname leaves the registry behind.** When a
+  Coolify domain changes, `panels.base_url` / `stores.base_url` need the same
+  edit by hand (`PUT /api/panels/:id` re-probes the new URL); there is no bulk
+  rename. The demo panel still pointed at the retired `demo-ho` hostname until
+  a probe returned "no available server".
+- **Autonomous bind storage needs a privilege decision.** Coolify's API refuses
+  binds and has no command-exec endpoint, so the control plane cannot place a
+  new deployment's volume on the host tree by itself. Two options when it
+  matters: give the CP container the docker socket (it could pre-create the
+  bind-backed volume before the first deploy; the CP becomes root-equivalent on
+  the host), or keep the one-step host helper
+  (`scripts/vula-bind-storage.sh`). Not granted as of 2026-10-06 — the helper
+  is the documented path.
+- **`/root/vula-migration-backup/`** holds every deployment's pre-migration
+  payload (13 directories, a few MB) from the 2026-10-06 storage move — delete
+  once the new layout has run for a while.
+- **Coolify's deployment queue can wedge.** On 2026-10-07 nothing deployed from
+  ~08:35 while Horizon still reported running; `php artisan horizon:terminate`
+  left it half-down, and a `docker restart coolify` fixed it — on restart
+  Coolify marked the 12 stuck deployments as failed (they never resumed; the
+  affected apps had to be re-deployed by hand). Horizon runs with
+  `--timeout=39600` — eleven hours — so one hung build can hold a worker
+  practically forever. Symptom: a push queues nothing, or deployments sit
+  `queued` with no `started_at`. Fix: restart the coolify container, then
+  re-trigger the affected deploys. Looked at first like missed GitHub webhook
+  deliveries; it was not — check the queue before blaming the webhook.
+- **The onboarding wizard should carry `vertical`.** `POST /clients` nested
+  stores have no vertical field, so a new store defaults to `general` and the
+  first config push freezes it there (found creating Demo Hardware and Demo
+  Pharmacy, 2026-10-07). The wire already supports it — accepting `vertical`
+  in the nested store and letting the configure push apply it would remove the
+  PUT-plus-re-push trick nobody should need to know.
+- **Coolify's own Docker cleanup is the first cleaner, and it was mis-tuned for
+  this host (fixed 2026-10-08).** The server's docker-cleanup settings
+  (`GET/PATCH /api/v1/servers/<uuid>/docker-cleanup`) run **daily at 00:00**
+  with `force_docker_cleanup: true`, and every run prunes the whole build cache
+  (`docker builder prune -af`) — which is why the cache kept resetting and
+  regrowing overnight. What it never touched was **old application images**
+  (`disable_application_image_retention` was false, the rollback spare). Set to
+  **true**: the nightly run now drops unused app images too (images of stopped
+  containers are kept — it reads `docker ps -a`). Result on the first run:
+  `/data` 51 G → 16 G used, images 111 → 39, cache 0. One PATCH reverts; the
+  trade-off is the same one the weekly script already made (a rollback becomes
+  a rebuild). **Also:** `docker_cleanup_threshold: 80` measures the *root*
+  filesystem (13 % on this box), not `/data` where Docker lives — the threshold
+  never trips, so it is `force_docker_cleanup` doing the work. Don't "fix" the
+  threshold expecting it to watch /data.
+- **Commit this repo's uncommitted tree when the owner says so**: the storage
+  helper (`scripts/vula-bind-storage.sh`), the new reset-script master
+  (`scripts/vula-demo-reset.sh`), the backup change (demo clients excluded),
+  the bind paths in `src/services/coolify.ts` with their tests
+  (`vulaPaths.test.ts`, updated storage assertions), the runbook edits and the
+  planning files. CP tests **361 green (29 suites)**, typecheck clean.

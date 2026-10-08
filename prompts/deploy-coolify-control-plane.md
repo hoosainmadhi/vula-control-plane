@@ -139,11 +139,12 @@ checklist to close before cutover — see
    production CP without a key refuses to start instead of dying on its first
    licence issue.
 3. **Persistent Storage:** volume mounted at `/data` (registry DB + WAL), host
-   path `/data/apps/vula-app/cp` per the production layout. It must be owned by
-   uid 1000 before first start: the container runs as `node` and a bind mount
-   overrides the image's `chown`, so a root-owned directory stops SQLite creating
-   its WAL. (The image's entrypoint now makes a root-owned `/data` writable and
-   drops to `node`, which covers a directory that becomes root-owned later.)
+   path `/data/apps/vula-app/control-plane/<env>` per the production layout
+   (`control-plane/prod`, `control-plane/staging`). It must be owned by uid 1000
+   before first start: the container runs as `node` and a bind mount overrides
+   the image's `chown`, so a root-owned directory stops SQLite creating its WAL.
+   (The image's entrypoint now makes a root-owned `/data` writable and drops to
+   `node`, which covers a directory that becomes root-owned later.)
 4. **Domains:** `https://vula-cp-mzsza-2026.vula-app.co.za` → **Deploy**.
    Healthcheck hits `/health` (`{ status: 'ok' }`).
 5. **After the first boot — Settings.** This is configuration, not env: sign in and

@@ -14,9 +14,52 @@ container and exposes `/api/internal/*` guarded by a per-store
 `CONTROL_PLANE_TOKEN` (tenant-side workstream; contract authored here in
 CONTEXT.md "Internal API contract").
 
+## Next Step
+
+Owner: set the production office identity and SMTP in the prod control plane's
+Settings, then onboard the first real client (cutover §8). Alongside: commit
+this repo's uncommitted tree — the storage helper, the bind paths in
+`coolify.ts`, the backup/reset scripts and these planning docs — on the
+owner's word.
+
 ## Current Phase
 
-**Pass 4 of the production review — operations (2026-09-25, complete).** Owner:
+**Deployment, the demo fleet and the storage tree — live (2026-10-07).** Both
+control planes are deployed and healthy: staging
+(`staging-cp.vula-app.co.za`, the rehearsal walked end-to-end) and production
+(`vula-cp-mzsza-2026.vula-app.co.za`, clean registry — the owner's real
+identity + SMTP in Settings and the first real client are what remain, §8).
+The demo fleet is nine stores over six clients — Urban Threads (Head Office +
+three branches), Everyday Retail, Kloof Auto Spares, **Demo Diner** (renamed:
+myDiner is a real restaurant's name), **Demo Hardware** and **Demo Pharmacy** —
+every one on the agreed bind tree, licences active, settled to 2099, reset
+nightly from goldens. The marketing site is live at vula-app.co.za.
+
+Rolling with the deployment:
+
+- **The data tree is bind-backed volumes** (Coolify 4.3.23's API refuses binds
+  and has no command-exec endpoint):
+  `/data/apps/vula-app/control-plane/<env>/` ·
+  `clients/<client>/head-office/` · `clients/<client>/stores/<store>/` — each
+  leaf is the deployment's `/data`, and the volume's `_data` and the tree path
+  are the same inode. Thirteen deployments migrated with a verified
+  copy-then-swap (`scripts/vula-bind-storage.sh`, installed on the host too).
+- **Backups mirror the tree** into `/backups/vula-app` at 02:10 — the demo
+  clients are excluded by the owner's decision (their goldens protect them) —
+  and the demo reset runs at 02:17 from `/backups/vula-app/demo-golden`.
+- **Watch paths stop the fleet rebuilding for non-code pushes**: stores and
+  Head Offices ignore `marketing/**`, docs, prompts, plans, plus
+  `head-office/**` (stores) and `frontend/**` (HOs); the website watches
+  `marketing/**` alone. `scripts/**` stays watched — the production build
+  compiles it into both images.
+- **The deployment queue can wedge** (Horizon's job timeout is 11 hours): a
+  push that queues nothing, or deployments stuck `queued`, means restart the
+  coolify container and re-trigger — stuck jobs are marked failed, never
+  resumed. Findings, 2026-10-07.
+- **The Head Office's branch Base URL is a link** into the store, and the two
+  new demo verticals ship through the same onboarding path real clients will.
+
+Previous — **Pass 4 of the production review — operations (2026-09-25, complete).** Owner:
 *"go ahead with next task"*. `markOverdueInvoices` gives the `overdue` status its
 first writer; a daily billing tick (`BILLING_TICK_INTERVAL_MINUTES`, 0 disables)
 marks lapsed invoices and runs the renewal sweep, never settling anything; the
@@ -624,8 +667,14 @@ health up, config ok.
     configure push (topology wiring included, so re-pushes never clobber
     names), edit modal gains per-till inputs, roster tiles show custom names.
   - Fleet header strip — shipped 2026-09-10 (SummaryTiles + search + filter).
-- [ ] **F2 Coolify auto-provisioning** (this repo; prerequisite: the
-      vula-app.co.za DNS wildcard live + a Coolify instance)
+- [x] **F2 Coolify auto-provisioning** (this repo) — **shipped and live**: the
+      env-gated client, provision-on-create, `/data` storage, the deploy/health
+      calls and the mocked-API tests all landed across September; since
+      2026-10-01 the whole fleet, both control planes and the two new demo
+      stores have been provisioned through it. The bind target is now emitted
+      in the result (`vulaHostPath`) with the host step named in the warning,
+      because the API cannot create the bind itself (findings, 2026-10-07).
+      Original scope, kept as the record:
   - Env-gated Coolify API client (`COOLIFY_API_URL`/`COOLIFY_API_TOKEN`):
     create store → deploy the Vula image with env (PORT, DB_PATH,
     generated per-store JWT_SECRET + the registry CONTROL_PLANE_TOKEN,

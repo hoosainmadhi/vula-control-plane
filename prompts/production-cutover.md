@@ -210,48 +210,50 @@ can hold most of the data). On the Coolify host, with `sqlite3` installed:
 
 ```bash
 #!/usr/bin/env bash
-# /usr/local/bin/vula-backup.sh — run nightly from root's crontab, e.g.
-#   17 2 * * * /usr/local/bin/vula-backup.sh
+# /usr/local/bin/vula-backup.sh — nightly from root's crontab, e.g.
+#   10 2 * * * /usr/local/bin/vula-backup.sh    (before the 02:17 demo reset)
 set -euo pipefail
 STAMP=$(date +%Y%m%d-%H%M%S)
-DEST=/backups/vula                      # a second disk, or rsync'd off-host after
-mkdir -p "$DEST/cp" "$DEST/stores" "$DEST/ho" "$DEST/other"
+DEST=/backups/vula-app            # a second disk, or rsync'd off-host after
+ROOT=/data/apps/vula-app
 
-# Since Coolify 4.3.23 the API refuses bind mounts, so API-created deployments
-# keep their /data in a NAMED VOLUME under
-# /var/lib/docker/volumes/<app-uuid>-<name>/_data — the storage names carry the
-# slug, so discovery stays readable (…-vula-store-<slug>-sqlite-db, …-vula-ho-…).
-for vol in $(docker volume ls --format '{{.Name}}' | grep -- '-vula-'); do
-  for db in "/var/lib/docker/volumes/$vol/_data"/*.db; do
-    [ -e "$db" ] || continue
-    case "$vol" in
-      *-vula-cp-*)    dest="$DEST/cp";;
-      *-vula-store-*) dest="$DEST/stores";;
-      *-vula-ho-*)    dest="$DEST/ho";;
-      *)              dest="$DEST/other";;
-    esac
-    sqlite3 "$db" ".backup '$dest/$(basename "$db" .db)-${vol}-$STAMP.db'"
+# The fleet's data tree (bind-backed volumes, migrated 2026-10-06). The backup
+# mirrors the tree, so a restore is a copy back into place. The demo clients
+# (`demo-*` / `*-demo`) are skipped by the owner's decision: they reset to
+# their goldens nightly and are regenerable from the seeders, so their dailies
+# were noise — the goldens are their protection.
+backup() { # db-path relative-dest
+  local db=$1 rel=$2
+  [ -e "$db" ] || return 0
+  mkdir -p "$DEST/$rel"
+  sqlite3 "$db" ".backup '$DEST/$rel/$(basename "$db" .db)-$STAMP.db'"
+}
+for db in "$ROOT"/control-plane/*/control-plane.db; do
+  rel=${db#"$ROOT"/}; backup "$db" "${rel%/*}"
+done
+for clientdir in "$ROOT"/clients/*/; do
+  client=$(basename "$clientdir")
+  case "$client" in demo-*|*-demo) continue;; esac
+  for db in "$clientdir"head-office/*.db "$clientdir"stores/*/*.db; do
+    rel=${db#"$ROOT"/}; backup "$db" "${rel%/*}"
   done
 done
 
-# A deployment given a manual bind mount under the host tree (the UI still
-# allows those) is backed up from its path. .backup is self-contained — the
-# -wal/-shm sidecars stay behind.
-for db in /data/apps/vula-app/cp/control-plane.db \
-          /data/apps/vula-app/store/*/*-sqlite-db/za-pos.db \
-          /data/apps/vula-app/ho/*/*-sqlite-db/head-office.db; do
-  [ -e "$db" ] || continue
-  case "$db" in
-    *control-plane.db*) dest="$DEST/cp";;
-    *za-pos.db*)        dest="$DEST/stores";;
-    *)                  dest="$DEST/ho";;
-  esac
-  sqlite3 "$db" ".backup '$dest/$(basename "$db" .db)-$STAMP.db'"
+# Any deployment still on a plain named Docker volume (the API's fallback) is
+# caught here; bind-backed volumes are skipped — their `_data` is the same
+# inode as the tree path above.
+DOCKER_ROOT=$(docker info --format '{{.DockerRootDir}}')
+for vol in $(docker volume ls --format '{{.Name}}' | grep -- '-vula-' || true); do
+  [ -n "$(docker volume inspect "$vol" --format '{{index .Options "device"}}' 2>/dev/null)" ] && continue
+  for db in "$DOCKER_ROOT/volumes/$vol/_data"/*.db; do
+    [ -e "$db" ] || continue
+    backup "$db" "legacy-volumes/$vol"
+  done
 done
 
 # Off-host, then prune. Off-host is the part that survives the host.
 rsync -a --delete "$DEST/" backup@backup-host:/srv/vula-backups/
-find "$DEST" -name '*.db' -mtime +30 -delete
+find "$DEST" -path "$DEST/demo-golden" -prune -o -name '*.db' -mtime +30 -exec rm -f {} +
 ```
 
 `.backup` uses SQLite's online backup API, so it is consistent while the apps
@@ -261,15 +263,25 @@ go-live and quarterly after**: restore a copy to a scratch container, boot it,
 sign in, and confirm a client, a store and an invoice are readable — an
 unrestored backup is a hope, not a backup.
 
-**API-created volumes are named volumes (Coolify 4.3.23).** The API now refuses
-bind mounts outright — `host_path` comes back "not allowed" — so everything
-created through it (including the control plane's own provisioning, which falls
-back automatically) keeps its `/data` in a named docker volume instead. The
-database files live under `/var/lib/docker/volumes/<volume-name>/_data/` on the
-host (`docker volume ls | grep vula-` enumerates them), not under the
-`/data/apps/vula-app/...` tree the script above globs. Point the globs at the
-volumes, or create the bind mounts by hand in the UI where the API refuses
-them. Verified 2026-10-01 standing up the staging control plane.
+**Storage is a bind-backed volume in one tree.** Coolify 4.3.23's API refuses
+bind mounts outright (`host_path` → "not allowed") and exposes nothing that can
+create one, so each deployment keeps the named volume Coolify made — and that
+volume is re-pointed at the host tree with the local driver:
+
+```
+docker volume create --driver local --opt type=none \
+  --opt device=/data/apps/vula-app/clients/<client>/stores/<store> \
+  --opt o=bind <volume-name>
+```
+
+`scripts/vula-bind-storage.sh <app-uuid> <volume-name> <host-dir>` does that
+safely: stop, verify (or make) a byte-identical copy in the target, park the
+original under `/root/vula-migration-backup`, swap the volume, and leave the
+container stopped for a Coolify deploy to recreate. Run it once per newly
+provisioned deployment, then deploy. **Migrated 2026-10-06:** 11 fleet
+deployments and both control planes; the whole fleet's data is ~18 MB under
+`/data/apps/vula-app/`. Coolify's UI still shows a volume — that is the point of
+the trick; the volume's `_data` and the tree path are the same inode.
 
 ## 11. Accepted at launch (recorded, not forgotten)
 
