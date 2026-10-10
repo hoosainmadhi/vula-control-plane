@@ -124,8 +124,8 @@ describe('mid-period increases', () => {
       .set(auth())
       .send({ companyId: client.id, purpose: 'initial', includeOnboarding: false })
       .expect(201);
-    // 8 licensed terminals × R500 = R4 000.
-    expect(invoice.body.amountCents).toBe(400_000);
+    // 8 licensed terminals × R120 = R960 (the seeded vula-grow rate).
+    expect(invoice.body.amountCents).toBe(96_000);
     await request(app)
       .post(`/api/billing/invoices/${invoice.body.id}/pay`)
       .set(auth())
@@ -224,14 +224,14 @@ describe('the price a client agreed', () => {
   it('is recorded at onboarding, and a plan edit no longer re-prices them', async () => {
     const planId = await planIdByCode('vula-grow');
     const client = await makeClient({ licensedTerminalCount: 8 });
-    expect(client.subscription.recurringAmountCents).toBe(400_000);
+    expect(client.subscription.recurringAmountCents).toBe(8 * 12_000); // 8 × R120 (vula-grow)
 
     const detail = await request(app).get(`/api/clients/${client.id}`).set(auth()).expect(200);
     expect(detail.body.subscription.pricingSource).toBe('agreed');
     expect(detail.body.subscription.pricedAt).toBeTruthy();
 
-    // The office raises the plan's rate by 20%. The existing client keeps the
-    // price they agreed — this is the whole point of the snapshot.
+    // The office raises the plan's rate. The existing client keeps the price they
+    // agreed — this is the whole point of the snapshot.
     await request(app)
       .put(`/api/plans/${planId}`)
       .set(auth())
@@ -239,8 +239,8 @@ describe('the price a client agreed', () => {
       .expect(200);
 
     const after = await request(app).get(`/api/clients/${client.id}`).set(auth()).expect(200);
-    expect(after.body.subscription.rateCents).toBe(50_000);
-    expect(after.body.subscription.recurringAmountCents).toBe(400_000);
+    expect(after.body.subscription.rateCents).toBe(12_000); // what they agreed at onboarding
+    expect(after.body.subscription.recurringAmountCents).toBe(8 * 12_000);
 
     // A client onboarded after the change pays the new rate.
     const fresh = await makeClient({ name: 'Fresh Co', slug: 'fresh-co' });
@@ -262,7 +262,7 @@ describe('the price a client agreed', () => {
       .send({})
       .expect(200);
     expect(repriced.body.rateCents).toBe(60_000);
-    expect(repriced.body.previousRecurringAmountCents).toBe(400_000);
+    expect(repriced.body.previousRecurringAmountCents).toBe(96_000); // 8 × R120
     expect(repriced.body.recurringAmountCents).toBe(480_000);
 
     const entry = (await import('../config/registryDb.js'))
@@ -286,7 +286,7 @@ describe('the price a client agreed', () => {
     expect(detail.body.subscription.planId).toBe(otherPlanId);
     expect(detail.body.subscription.pricingSource).toBe('agreed');
     // Vula Network's rate, not the old plan's.
-    expect(detail.body.subscription.rateCents).toBe(50_000);
+    expect(detail.body.subscription.rateCents).toBe(10_000);
   });
 
   it('says so when a client has no agreed price, rather than implying one', async () => {

@@ -13,6 +13,12 @@ import {
   listPanelsForCompany,
   setLicensedTerminalCount,
   setSetupFeeStatus,
+  setSubscriptionAddons,
+  getSubscription,
+  planFeaturePrice,
+  planFeaturePrices,
+  subscriptionAddonPrices,
+  subscriptionFeatures,
   SETUP_FEE_STATUSES,
   getDeploymentJobById,
   listDeploymentJobsForCompany,
@@ -20,6 +26,7 @@ import {
   recordAuditLog,
   type CompanyRecord,
   type SetupFeeStatus,
+  type PlanRecord,
   type StoreRecord,
 } from '../config/registryDb.js';
 import { requireOffice } from '../middleware/auth.js';
@@ -36,9 +43,15 @@ import {
   requireTerminalCount,
   requireBaseUrl,
   optionalInt,
+  optionalStoreKind,
 } from '../utils/validate.js';
 import { assertManagedEndpoint } from '../services/storeClient.js';
-import { entitlementsFor, requireFeature } from '../services/subscriptions.js';
+import {
+  entitlementsFor,
+  requireFeature,
+  requireSellableFeature,
+} from '../services/subscriptions.js';
+import { PRICED_FEATURE_KEYS, validateFeatureKeys } from '../services/features.js';
 import { quoteForSubscription } from '../services/pricing.js';
 import {
   summariseSubscription,
@@ -86,6 +99,40 @@ clientsRouter.post(
   }),
 );
 
+/**
+ * Multi-store topology IS the Head Office add-on (2026-10-10): the feature is
+ * chargeable, so a plan either prices it or cannot offer the topology at all —
+ * and choosing multi-store BOUGHS it for the client, at the plan's price. Nobody
+ * gets Head Office free by picking a plan, and nobody is refused it for having
+ * chosen a plan that sells it.
+ */
+const buyAddons = (
+  companyId: number,
+  plan: PlanRecord | null,
+  keys: string[],
+  reason: string,
+): void => {
+  if (!plan || keys.length === 0) return;
+  const subscription = getSubscription(companyId);
+  const bought = new Set(subscriptionFeatures(subscription));
+  const prices = { ...subscriptionAddonPrices(subscription) };
+  for (const key of keys) {
+    const price = planFeaturePrice(plan, key);
+    if (price === undefined) continue; // the plan does not sell it
+    bought.add(key);
+    prices[key] = prices[key] ?? price; // an existing agreement stands
+  }
+  if (bought.size === 0) return;
+  setSubscriptionAddons(companyId, [...bought], prices);
+  recordAuditLog('office', 'subscription_addons_set', 'company', companyId, {
+    after: { features: [...bought], prices },
+    reason,
+  });
+};
+
+const buyHeadOfficeAddon = (companyId: number, plan: PlanRecord | null): void =>
+  buyAddons(companyId, plan, ['multi_store'], 'Multi-store topology purchased the Head Office add-on');
+
 // --- Nested onboarding payloads -------------------------------------------------
 
 /**
@@ -109,6 +156,8 @@ interface NestedStore {
   name: string;
   slug: string;
   baseUrl: string;
+  /** 'store' (default) or 'warehouse' — a warehouse runs no tills. */
+  kind: StoreRecord['kind'];
   terminalCount: number;
   licensedTerminalCount: number;
   adminEmail?: string;
@@ -123,11 +172,26 @@ const validateNestedStore = async (
   }
   const e = (entry ?? {}) as Record<string, unknown>;
   const suppliedUrl = e.baseUrl !== undefined && e.baseUrl !== null && e.baseUrl !== '';
-  const terminalCount = e.terminalCount === undefined ? 1 : requireTerminalCount(e);
+  const kind = optionalStoreKind(e) ?? 'store';
+  // A warehouse runs no tills: its count is 0 and it draws no licensed terminals
+  // (owner decisions, 2026-10-09). Everything that sells still needs one.
+  const terminalCount =
+    kind === 'warehouse'
+      ? e.terminalCount === undefined
+        ? 0
+        : requireTerminalCount(e, 0)
+      : e.terminalCount === undefined
+        ? 1
+        : requireTerminalCount(e);
+  if (kind === 'warehouse' && terminalCount !== 0) {
+    throw new ValidationError('A warehouse runs no tills — terminalCount must be 0');
+  }
   const licensedTerminalCount =
-    e.licensedTerminalCount === undefined
-      ? terminalCount
-      : requireInt(e, 'licensedTerminalCount', { min: 0, max: 5000 });
+    kind === 'warehouse'
+      ? 0
+      : e.licensedTerminalCount === undefined
+        ? terminalCount
+        : requireInt(e, 'licensedTerminalCount', { min: 0, max: 5000 });
   const name = e.name === undefined ? fallback.name : requireString(e, 'name');
   const slug = e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
   const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
@@ -143,6 +207,7 @@ const validateNestedStore = async (
     name,
     slug,
     baseUrl,
+    kind,
     terminalCount,
     licensedTerminalCount,
     ...(adminEmail ? { adminEmail } : {}),
@@ -214,6 +279,9 @@ export interface ClientListItem {
   allocatedTerminals: number;
   /** Licensees' recurring fee: null when pricing is custom (never guessed). */
   recurringAmountCents: number | null;
+  /** The paid add-ons held, with the price agreed for each. */
+  addons: Array<{ key: string; label: string; cents: number }>;
+  addonsCents: number;
   setupFeeCents: number;
   setupFeeStatus: SetupFeeStatus;
   latestJobStatus: string | null;
@@ -287,6 +355,8 @@ export const buildClientListItem = (company: CompanyRecord): ClientListItem => {
     licensedTerminalCount: quote.licensedTerminalCount,
     allocatedTerminals: summary.allocatedTerminalCount,
     recurringAmountCents: quote.recurringAmountCents,
+    addons: quote.addons,
+    addonsCents: quote.addonsCents,
     setupFeeCents: quote.setupFeeCents,
     setupFeeStatus: quote.setupFeeStatus,
     latestJobStatus: latestJob?.status ?? null,
@@ -342,6 +412,8 @@ clientsRouter.get(
         allocatedTerminals: sum.allocatedTerminalCount,
         unallocatedTerminals: sum.unallocatedTerminalCount,
         recurringAmountCents: quote.recurringAmountCents,
+    addons: quote.addons,
+    addonsCents: quote.addonsCents,
         initialInvoiceTotalCents: quote.initialInvoiceTotalCents,
         setupFeeCents: quote.setupFeeCents,
         setupFeeStatus: quote.setupFeeStatus,
@@ -463,10 +535,37 @@ clientsRouter.put(
       return { storeId, count };
     });
 
+    // The paid add-ons this client holds (2026-10-10). Only features the plan
+    // PRICES can be bought — a bundled feature is already theirs, and the free
+    // ones are not for sale. The price is snapshotted at purchase, like the rate.
+    const planForRequest =
+      planId !== undefined
+        ? planId
+          ? getPlanById(planId)
+          : null
+        : company.plan_id
+          ? getPlanById(company.plan_id)
+          : null;
+    const planPricesForRequest = planFeaturePrices(planForRequest);
+    const requestedFeatures =
+      body.features !== undefined
+        ? validateFeatureKeys(body.features).filter((key) => PRICED_FEATURE_KEYS.includes(key))
+        : undefined;
+    if (requestedFeatures !== undefined) {
+      const notPriced = requestedFeatures.filter((key) => !(key in planPricesForRequest));
+      if (notPriced.length > 0) {
+        throw new HttpError(
+          400,
+          `${planForRequest?.name ?? 'This plan'} does not price ${notPriced.join(', ')} — set the add-on's price on the plan first.`,
+        );
+      }
+    }
+
     const entitlementChanged =
       (planId !== undefined && planId !== company.plan_id) ||
       requestedLicensed !== undefined ||
-      allocations !== undefined;
+      allocations !== undefined ||
+      requestedFeatures !== undefined;
 
     // One logical operation, one transaction (production review, 2026-09-23):
     // the company fields, the purchased quantity and the allocations commit
@@ -488,6 +587,24 @@ clientsRouter.put(
       const effectivePlan = getPlanById((planId !== undefined ? planId : company.plan_id) ?? -1);
       if (setupFeeStatusRaw !== undefined) {
         setSetupFeeStatus(company.id, setupFeeStatusRaw as SetupFeeStatus);
+      }
+
+      if (requestedFeatures !== undefined) {
+        const existingFeatures = subscriptionFeatures(getSubscription(company.id));
+        const agreedPrices = subscriptionAddonPrices(getSubscription(company.id));
+        const nextPrices: Record<string, number> = {};
+        for (const key of requestedFeatures) {
+          // A feature the client already had keeps the price they agreed; a newly
+          // bought one is priced from the plan today.
+          nextPrices[key] = existingFeatures.includes(key)
+            ? (agreedPrices[key] ?? planPricesForRequest[key] ?? 0)
+            : (planPricesForRequest[key] ?? 0);
+        }
+        setSubscriptionAddons(company.id, requestedFeatures, nextPrices);
+        recordAuditLog('office', 'subscription_addons_set', 'company', company.id, {
+          after: { features: requestedFeatures, prices: nextPrices },
+          reason: "Changed the client's paid add-ons",
+        });
       }
       if (requestedLicensed !== undefined || allocations) {
         const ceiling = effectivePlan?.max_terminals_per_store ?? Number.MAX_SAFE_INTEGER;
@@ -635,10 +752,27 @@ clientsRouter.post(
     // without it cannot have the topology orchestrated, whatever the wizard says.
     if (deploymentType === 'multi_store') {
       const plan = planId !== null ? getPlanById(planId) : null;
-      const feature = requireFeature(plan, 'multi_store');
-      if (!feature.ok) {
-        res.status(402).json({ error: feature.reason, code: 'feature_not_in_plan' });
+      const sellable = requireSellableFeature(plan, 'multi_store');
+      if (!sellable.ok) {
+        res.status(402).json({ error: sellable.reason, code: 'feature_not_in_plan' });
         return;
+      }
+    }
+
+    // Add-ons chosen at onboarding: only what this plan sells, refused by name
+    // otherwise (an operator should learn now, not on a client's first invoice).
+    const requestedAddons = validateFeatureKeys(req.body?.features ?? []).filter((key) =>
+      PRICED_FEATURE_KEYS.includes(key),
+    );
+    if (requestedAddons.length > 0) {
+      const planAtCreation = planId !== null ? getPlanById(planId) : null;
+      const notSold = requestedAddons.filter(
+        (key) => planFeaturePrice(planAtCreation, key) === undefined,
+      );
+      if (notSold.length > 0) {
+        throw new ValidationError(
+          `${planAtCreation?.name ?? 'That plan'} does not sell ${notSold.join(', ')} — price ${notSold.length === 1 ? 'it' : 'them'} on the plan first.`,
+        );
       }
     }
 
@@ -724,6 +858,22 @@ clientsRouter.post(
       'Recorded the price agreed when the client was onboarded',
     );
 
+    // The add-ons the operator chose on the wizard's first step — the six the plan
+    // prices (2026-10-10). Bought before any store exists, so the licences that
+    // follow carry them.
+    const onboardingPlan = planId ? getPlanById(planId) : null;
+    buyAddons(
+      company.id,
+      onboardingPlan,
+      requestedAddons ?? [],
+      'Add-ons purchased at onboarding',
+    );
+    // A multi-store client has a Head Office, so it holds that add-on whether or
+    // not the operator ticked it — the topology needs the capability.
+    if (deploymentType === 'multi_store') {
+      buyHeadOfficeAddon(company.id, onboardingPlan);
+    }
+
     // 3. Format Head Office if multi_store
     let headOffice:
       { name: string; slug: string; baseUrl: string; adminEmail?: string } | undefined;
@@ -782,11 +932,14 @@ clientsRouter.post(
       : company.plan_id
         ? getPlanById(company.plan_id)
         : null;
-    const feature = requireFeature(effectivePlan, 'multi_store');
-    if (!feature.ok) {
-      res.status(402).json({ error: feature.reason, code: 'feature_not_in_plan' });
+    const sellable = requireSellableFeature(effectivePlan, 'multi_store');
+    if (!sellable.ok) {
+      res.status(402).json({ error: sellable.reason, code: 'feature_not_in_plan' });
       return;
     }
+
+    // The upgrade is the moment Head Office is bought, like the wizard.
+    buyHeadOfficeAddon(company.id, effectivePlan);
 
     const headOffice = await validateNestedHeadOffice(req.body?.headOffice, {
       name: `${company.name} Head Office`,

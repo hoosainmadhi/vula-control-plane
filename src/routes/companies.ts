@@ -19,7 +19,12 @@ import {
   licensedTerminalCount,
   setLicensedTerminalCount,
   setSetupFeeStatus,
+  setSubscriptionAddons,
   setSubscriptionPricing,
+  getSubscription,
+  planFeaturePrices,
+  subscriptionAddonPrices,
+  subscriptionFeatures,
   recordAuditLog,
   PLAN_PERIODS,
   PLAN_PRICING_MODES,
@@ -47,7 +52,13 @@ import {
   type Entitlements,
   type RegisterEnforcement,
 } from '../services/subscriptions.js';
-import { PLAN_FEATURES, validateFeatureKeys } from '../services/features.js';
+import {
+  featureCatalogue,
+  PLAN_FEATURES,
+  PRICED_FEATURE_KEYS,
+  validateFeatureKeys,
+  validateFeaturePrices,
+} from '../services/features.js';
 import { quoteForSubscription } from '../services/pricing.js';
 import { setupFeeInvoiceFor } from '../services/billing.js';
 import { summariseSubscription } from '../services/terminalLicences.js';
@@ -68,6 +79,8 @@ export interface PlanOut {
   maxStores: number;
   maxTerminalsPerStore: number;
   features: string[];
+  /** Monthly price per paid add-on on this plan, `{ multi_store: 9900, … }`. */
+  featurePrices: Record<string, number>;
   /** `per_terminal` bills rate × licensed terminals; `custom` is negotiated. */
   pricingMode: PlanPricingMode;
   /** Rate per licensed terminal per billing period (0 on a custom plan). */
@@ -91,6 +104,9 @@ export interface SubscriptionOut {
   unallocatedTerminals: number;
   /** null when the plan is custom-priced or absent — never a guessed figure. */
   recurringAmountCents: number | null;
+  /** The paid add-ons held, with the price agreed for each. */
+  addons: Array<{ key: string; label: string; cents: number }>;
+  addonsCents: number;
   rateCents: number;
   setupFeeCents: number;
   setupFeeStatus: SetupFeeStatus;
@@ -136,6 +152,8 @@ const planToOut = (plan: PlanRecord): PlanOut => ({
   maxStores: plan.max_stores,
   maxTerminalsPerStore: plan.max_terminals_per_store,
   features: planFeatures(plan),
+  // What each add-on costs on this plan — the offer the client card sells from.
+  featurePrices: planFeaturePrices(plan),
   pricingMode: plan.pricing_mode,
   terminalPriceCents: plan.terminal_price_cents,
   customAmountCents: plan.custom_amount_cents,
@@ -207,6 +225,8 @@ const companyToOut = (company: CompanyRecord): CompanyOut => {
       allocatedTerminals: summary.allocatedTerminalCount,
       unallocatedTerminals: summary.unallocatedTerminalCount,
       recurringAmountCents: quote.recurringAmountCents,
+      addons: quote.addons,
+      addonsCents: quote.addonsCents,
       rateCents: quote.rateCents,
       setupFeeCents: quote.setupFeeCents,
       setupFeeStatus: quote.setupFeeStatus,
@@ -238,7 +258,9 @@ const companyFromParams = (raw: string): CompanyRecord => {
 plansRouter.get(
   '/features',
   asyncHandler(async (_req, res) => {
-    res.json(PLAN_FEATURES);
+    // The vocabulary plus what is sold monthly and for how much: the office UI
+    // renders the included set and the add-on prices from this one answer.
+    res.json(featureCatalogue());
   }),
 );
 
@@ -342,6 +364,17 @@ plansRouter.post(
       99,
     );
     const features = validateFeatureKeys(req.body?.features ?? []);
+    // The six sold add-ons are CHARGEABLE: a plan prices them, it does not include
+    // them (owner, 2026-10-10). Refused by name so the office knows what to do.
+    const bundledSold = features.filter((key) => PRICED_FEATURE_KEYS.includes(key));
+    if (bundledSold.length > 0) {
+      throw new ValidationError(
+        `${bundledSold.join(', ')} ${bundledSold.length === 1 ? 'is' : 'are'} chargeable — price ${bundledSold.length === 1 ? 'it' : 'them'} as add-ons instead of including ${bundledSold.length === 1 ? 'it' : 'them'} in the plan.`,
+      );
+    }
+    // What each paid add-on costs on this plan. Empty is legal and means the plan
+    // sells nothing extra.
+    const featurePrices = validateFeaturePrices(req.body?.featurePrices ?? {});
     const billingPeriod = periodOf(req.body?.billingPeriod, 'monthly');
     const pricing = resolvePlanPricing((req.body ?? {}) as Record<string, unknown>);
     res.status(201).json(
@@ -352,6 +385,7 @@ plansRouter.post(
           maxStores,
           maxTerminalsPerStore,
           features,
+          featurePrices,
           pricingMode: pricing.pricingMode,
           terminalPriceCents: pricing.terminalPriceCents,
           customAmountCents: pricing.customAmountCents,
@@ -384,8 +418,24 @@ plansRouter.put(
     if (rawFeatures !== undefined && !Array.isArray(rawFeatures)) {
       throw new ValidationError('features must be an array of strings');
     }
+    const validatedFeatures =
+      rawFeatures === undefined ? undefined : validateFeatureKeys(rawFeatures);
+    if (validatedFeatures) {
+      // The six sold add-ons are CHARGEABLE: a plan prices them, it does not
+      // include them (owner, 2026-10-10). Refused by name so the office knows what
+      // to do instead.
+      const bundledSold = validatedFeatures.filter((key) => PRICED_FEATURE_KEYS.includes(key));
+      if (bundledSold.length > 0) {
+        throw new ValidationError(
+          `${bundledSold.join(', ')} ${bundledSold.length === 1 ? 'is' : 'are'} chargeable — price ${bundledSold.length === 1 ? 'it' : 'them'} as add-ons instead of including ${bundledSold.length === 1 ? 'it' : 'them'} in the plan.`,
+        );
+      }
+    }
     const pricing = resolvePlanPricing(body, existingPlan);
+    const featurePrices =
+      body.featurePrices === undefined ? undefined : validateFeaturePrices(body.featurePrices);
     const updated = updatePlan(id, {
+      ...(featurePrices !== undefined ? { featurePrices } : {}),
       ...(body.name !== undefined ? { name: requireString(body, 'name') } : {}),
       ...(body.maxStores !== undefined
         ? { maxStores: boundedInt(body.maxStores, 'maxStores', 1, 500) }
@@ -400,7 +450,7 @@ plansRouter.put(
             ),
           }
         : {}),
-      ...(rawFeatures !== undefined ? { features: validateFeatureKeys(rawFeatures) } : {}),
+      ...(validatedFeatures !== undefined ? { features: validatedFeatures } : {}),
       ...pricing,
       ...(body.billingPeriod !== undefined
         ? { billingPeriod: periodOf(body.billingPeriod, existingPlan.billing_period) }
@@ -610,6 +660,34 @@ companiesRouter.put(
         : undefined;
     let licensedChanged = false;
 
+    // The paid add-ons the client holds. Only features the plan PRICES can be
+    // bought: a plan that bundles a feature includes it, and the free ones are
+    // not for sale. An unknown key is refused by name.
+    const planAtRequest =
+      planId !== undefined
+        ? planId
+          ? getPlanById(planId)
+          : null
+        : company.plan_id
+          ? getPlanById(company.plan_id)
+          : null;
+    const planPrices = planFeaturePrices(planAtRequest);
+    const requestedFeatures =
+      body.features !== undefined
+        ? validateFeatureKeys(body.features).filter((key) =>
+            PRICED_FEATURE_KEYS.includes(key),
+          )
+        : undefined;
+    if (requestedFeatures !== undefined) {
+      const notPriced = requestedFeatures.filter((key) => !(key in planPrices));
+      if (notPriced.length > 0) {
+        throw new ValidationError(
+          `${planAtRequest?.name ?? 'This plan'} does not price ${notPriced.join(', ')} — set the add-on's price on the plan first.`,
+        );
+      }
+    }
+    let featuresChanged = false;
+
     // Moving a client to another plan IS agreeing a new price (one of the three
     // moments a price is agreed), so the plan's terms are recorded on the
     // subscription here. Editing the plan itself never does this — that is what
@@ -654,6 +732,29 @@ companiesRouter.put(
         setSetupFeeStatus(company.id, setupFeeStatusRaw as SetupFeeStatus);
       }
 
+      // Buying an add-on IS agreeing its price, so a newly bought feature is
+      // snapshotted at the plan's price today; one the client already had keeps
+      // the price they agreed (a plan edit must not re-price them); one that is
+      // dropped loses its agreed price with it.
+      if (requestedFeatures !== undefined) {
+        const existing = subscriptionFeatures(getSubscription(company.id));
+        const agreedPrices = subscriptionAddonPrices(getSubscription(company.id));
+        const nextPrices: Record<string, number> = {};
+        for (const key of requestedFeatures) {
+          nextPrices[key] = existing.includes(key)
+            ? (agreedPrices[key] ?? planPrices[key] ?? 0)
+            : (planPrices[key] ?? 0);
+        }
+        featuresChanged =
+          requestedFeatures.length !== existing.length ||
+          requestedFeatures.some((key) => !existing.includes(key));
+        setSubscriptionAddons(company.id, requestedFeatures, nextPrices);
+        recordAuditLog('office', 'subscription_addons_set', 'company', company.id, {
+          after: { features: requestedFeatures, prices: nextPrices },
+          reason: 'Changed the client\'s paid add-ons',
+        });
+      }
+
       return updatedCompany;
     });
     runEdit();
@@ -669,7 +770,8 @@ companiesRouter.put(
       (paidThrough !== undefined && paidThrough !== company.paid_through) ||
       (trialEndsAt !== undefined && trialEndsAt !== company.trial_ends_at) ||
       (status !== undefined && status !== company.status) ||
-      licensedChanged;
+      licensedChanged ||
+      featuresChanged;
     let licencePush: Awaited<ReturnType<typeof pushLicencesForCompany>> | null = null;
     if (entitlementChanged) {
       try {

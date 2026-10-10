@@ -3,12 +3,17 @@ import {
   getPlanById,
   getSubscription,
   licensedTerminalCount,
+  planFeaturePrices,
+  planFeatures,
+  subscriptionAddonPrices,
+  subscriptionFeatures,
   type CompanyRecord,
   type PlanPeriod,
   type PlanPricingMode,
   type PlanRecord,
   type SetupFeeStatus,
 } from '../config/registryDb.js';
+import { FEATURE_LABELS } from './features.js';
 
 /**
  * The one canonical recurring-subscription calculator (2026-09-13 model).
@@ -140,6 +145,13 @@ export interface SubscriptionQuote {
   unallocatedTerminalCount: number;
   /** The recurring line; null when pricing is custom or no plan is assigned. */
   recurringAmountCents: number | null;
+  /**
+   * The paid add-ons this client holds — one per bought feature, with the price
+   * agreed for it (or the plan's price where no agreement was recorded).
+   */
+  addons: Array<{ key: string; label: string; cents: number }>;
+  /** What those add-ons add to the month — part of the recurring line above. */
+  addonsCents: number;
   /** Once-off onboarding charge on the plan. */
   setupFeeCents: number;
   setupFeeStatus: SetupFeeStatus;
@@ -189,6 +201,21 @@ export function quoteForSubscription(
     : plan?.pricing_mode === 'custom'
       ? plan.custom_amount_cents
       : 0;
+  // The add-ons the client bought, priced at what was agreed when they bought
+  // them (falling back to the plan's price for a feature recorded before prices
+  // existed). Agreed terms, like the rate: editing a plan does not move them.
+  const agreedAddonPrices = subscriptionAddonPrices(subscription);
+  const planPrices = planFeaturePrices(plan);
+  const planIncluded = planFeatures(plan);
+  const addons = subscriptionFeatures(subscription)
+    .filter((key) => !planIncluded.includes(key))
+    .map((key) => ({
+      key,
+      label: FEATURE_LABELS[key] ?? key,
+      cents: agreedAddonPrices[key] ?? planPrices[key] ?? 0,
+    }));
+  const addonsCents = addons.reduce((sum, a) => sum + a.cents, 0);
+
   const recurringAmountCents =
     pricingMode === 'none'
       ? null
@@ -196,7 +223,7 @@ export function quoteForSubscription(
         ? customAmountCents > 0
           ? customAmountCents
           : null
-        : licensed * rateCents;
+        : licensed * rateCents + addonsCents;
   const setupFeeCents = agreed ? agreed.setupFeeCents : (plan?.setup_fee_cents ?? 0);
   const setupFeeDueCents = setupFeeStatus === 'not_invoiced' ? setupFeeCents : 0;
 
@@ -235,6 +262,8 @@ export function quoteForSubscription(
   return {
     pricingMode,
     pricingSource: agreed ? 'agreed' : plan ? 'plan' : 'none',
+    addons,
+    addonsCents,
     pricedAt: subscription?.priced_at ?? null,
     planCode: plan?.code ?? 'unassigned',
     planName: plan?.name ?? 'Unassigned',

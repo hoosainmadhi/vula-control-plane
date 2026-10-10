@@ -4,7 +4,7 @@ import { api, ApiError } from '../api';
 import ErrorBox from '../components/ErrorBox';
 import Modal from '../components/Modal';
 import Spinner from '../components/Spinner';
-import { FEATURE_KEYS, type Plan, type PlanPeriod, type PricingMode } from '../types';
+import type { Plan, PlanPeriod, PricingMode } from '../types';
 import { rand, toCents, toRands, perTerminalLabel, PERIOD_LABEL } from '../lib/money';
 
 /**
@@ -20,40 +20,54 @@ import { rand, toCents, toRands, perTerminalLabel, PERIOD_LABEL } from '../lib/m
  * till sessions. Only the licensed quantity is billed.
  */
 
-const FEATURE_LABELS: Record<string, string> = {
-  customer_credit: 'Customer credit (lay-bys & debtors)',
-  advanced_reports: 'Advanced reports (profit & margin)',
-  multi_store: 'Multi-store / Head Office',
-  stock_transfers: 'Inter-branch stock transfers',
-  ecommerce_bridges: 'E-commerce bridges (Woo / Shopify)',
-  ai_assistant: 'AI assistant',
-};
-
-/** Short forms for the editor (the full label rides the tooltip and the list chips). */
-const FEATURE_SHORT: Record<string, string> = {
-  customer_credit: 'Customer credit',
-  advanced_reports: 'Advanced reports',
-  ecommerce_bridges: 'E-commerce',
-  multi_store: 'Multi-store / Head Office',
-  stock_transfers: 'Inter-branch stock transfers',
-  ai_assistant: 'AI assistant',
-};
-
-/** Editor order: store features first, then the multi-store set. Any vocabulary
- *  key the list misses is appended, so the editor can never offer fewer features
- *  than the API accepts. */
-const FEATURE_PREFERRED_ORDER = [
-  'customer_credit',
-  'advanced_reports',
-  'ecommerce_bridges',
+/**
+ * Names come from the vocabulary (`GET /plans/features`), which carries the
+ * pricing page's own words — the office sells "Head Office" and "Upload invoice
+ * (AI assisted)", so those are the names it reads here, on the client card and on
+ * the invoice. A local copy is what let those drift apart (owner, 2026-10-10).
+ */
+/**
+ * Add-on display order — the pricing page's order (most expensive first, in the
+ * order the page lists them). Which features ARE add-ons comes from the
+ * vocabulary's `soldMonthly`, never from this list.
+ */
+const ADDON_ORDER = [
   'multi_store',
-  'stock_transfers',
   'ai_assistant',
-];
-const FEATURE_ORDER: readonly string[] = [
-  ...FEATURE_PREFERRED_ORDER,
-  ...FEATURE_KEYS.filter((key) => !FEATURE_PREFERRED_ORDER.includes(key)),
-];
+  'invoice_import',
+  'customer_credit',
+  'layby',
+  'ecommerce_bridges',
+] as const;
+
+/** A plan's monthly price at its own ceiling, and with every add-on it sells. */
+const planTotals = (plan: Plan): { atCeilingCents: number; addonsCents: number } => ({
+  atCeilingCents: plan.terminalPriceCents * plan.maxTerminalsPerStore,
+  addonsCents: Object.values(plan.featurePrices ?? {}).reduce((sum, c) => sum + c, 0),
+});
+
+/**
+ * What this plan costs at its own ceiling — the one total a catalogue row can
+ * state honestly, since the billable quantity belongs to each client. Rate × the
+ * plan's per-store terminal ceiling, plus its add-ons if they are all taken.
+ */
+function PlanTotalLine({ plan }: { plan: Plan }) {
+  const { atCeilingCents, addonsCents } = planTotals(plan);
+  if (plan.pricingMode !== 'per_terminal') return null;
+  return (
+    <div className="text-[11px] text-slate-500">
+      <span className="font-semibold">{rand(atCeilingCents)}</span> / month at{' '}
+      {plan.maxTerminalsPerStore}
+      {plan.maxTerminalsPerStore === 1 ? ' terminal' : ' terminals'} per store
+      {addonsCents > 0 ? (
+        <>
+          <br />+ <span className="font-semibold">{rand(addonsCents)}</span> if every add-on is
+          taken
+        </>
+      ) : null}
+    </div>
+  );
+}
 
 /** A plan code is the slug of its name: lowercase letters, digits and dashes. */
 const slugify = (value: string): string =>
@@ -65,6 +79,17 @@ const slugify = (value: string): string =>
 
 export default function PlansPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
+  /** The vocabulary: names, and which features are SOLD monthly. */
+  const [featureCatalogue, setFeatureCatalogue] = useState<
+    Array<{ key: string; label: string; soldMonthly: boolean; monthlyPriceCents: number }>
+  >([]);
+  const featureLabels = Object.fromEntries(featureCatalogue.map((f) => [f.key, f.label]));
+  /** Unsold-by-default features: what every plan includes. */
+  const includedKeys = featureCatalogue.filter((f) => !f.soldMonthly).map((f) => f.key);
+  /** The add-ons this plan sells, in the page's order. */
+  const soldKeys = ADDON_ORDER.filter((key) =>
+    featureCatalogue.some((f) => f.key === key && f.soldMonthly),
+  );
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<Plan | null>(null);
@@ -81,13 +106,30 @@ export default function PlansPage() {
   const [formPricingMode, setFormPricingMode] = useState<PricingMode>('per_terminal');
   const [formTerminalPrice, setFormTerminalPrice] = useState('500.00');
   const [formCustomAmount, setFormCustomAmount] = useState('0.00');
-  const [formSetupFee, setFormSetupFee] = useState('10000.00');
+  const [formSetupFee, setFormSetupFee] = useState('5000.00');
+  /** What each add-on costs on this plan, in rands as typed. */
+  const [formFeaturePrices, setFormFeaturePrices] = useState<Record<string, string>>({});
+  /**
+   * What this plan INCLUDES. Not a choice the operator makes: a plan includes the
+   * product's base features, and everything else is sold as an add-on, priced
+   * below (owner, 2026-10-10). Editing a plan never rewrites this, so the tiers
+   * that already bundle features for live clients keep them.
+   */
   const [formFeatures, setFormFeatures] = useState<string[]>([]);
+  /** Features this plan carries beyond the base set — shown, never chosen. */
+  const planExtras = formFeatures.filter((key) => !includedKeys.includes(key));
   const [formPeriod, setFormPeriod] = useState<PlanPeriod>('monthly');
 
   const load = useCallback(async (): Promise<void> => {
     try {
-      setPlans(await api<Plan[]>('/plans'));
+      const [planList, vocabulary] = await Promise.all([
+        api<Plan[]>('/plans'),
+        api<
+          Array<{ key: string; label: string; soldMonthly: boolean; monthlyPriceCents: number }>
+        >('/plans/features').catch(() => []),
+      ]);
+      setPlans(planList);
+      setFeatureCatalogue(vocabulary);
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof ApiError ? err.message : 'Failed to load plans');
@@ -109,10 +151,21 @@ export default function PlansPage() {
     setFormStores('1');
     setFormTerminals('10');
     setFormPricingMode('per_terminal');
-    setFormTerminalPrice('500.00');
+    // The approved pricing page: R99 a till, R5 000 assisted set-up, and the
+    // add-ons at R99/R49. The office edits any of it.
+    setFormTerminalPrice('99.00');
     setFormCustomAmount('0.00');
-    setFormSetupFee('10000.00');
-    setFormFeatures([]);
+    setFormSetupFee('5000.00');
+    // A new plan includes the base features and prices the add-ons at the
+    // vocabulary's own defaults — both read off the catalogue, not typed here.
+    setFormFeatures(includedKeys);
+    setFormFeaturePrices(
+      Object.fromEntries(
+        featureCatalogue
+          .filter((f) => f.soldMonthly)
+          .map((f) => [f.key, toRands(f.monthlyPriceCents)]),
+      ),
+    );
     setFormPeriod('monthly');
     setFormError(null);
   };
@@ -131,6 +184,11 @@ export default function PlansPage() {
     setFormCustomAmount(toRands(plan.customAmountCents));
     setFormSetupFee(toRands(plan.setupFeeCents));
     setFormFeatures(plan.features);
+    setFormFeaturePrices(
+      Object.fromEntries(
+        soldKeys.map((key) => [key, toRands(plan.featurePrices?.[key] ?? 0)]),
+      ),
+    );
     setFormError(null);
   };
 
@@ -139,9 +197,6 @@ export default function PlansPage() {
     setFormName(value);
     if (!codeEdited) setFormCode(slugify(value));
   };
-
-  const toggleFeature = (key: string): void =>
-    setFormFeatures((prev) => (prev.includes(key) ? prev.filter((f) => f !== key) : [...prev, key]));
 
   const priceMissing = formPricingMode === 'per_terminal' && toCents(formTerminalPrice) <= 0;
   /** A custom plan may bill from its agreed amount, or wait for a per-invoice figure. */
@@ -161,6 +216,13 @@ export default function PlansPage() {
       setupFeeCents: toCents(formSetupFee),
       billingPeriod: formPeriod,
       features: formFeatures,
+      // Priced only for the features this plan does NOT include: a price on an
+      // included feature would be a price nobody ever pays.
+      featurePrices: Object.fromEntries(
+        soldKeys.filter((key) => !formFeatures.includes(key))
+          .map((key) => [key, toCents(formFeaturePrices[key] ?? '0')] as const)
+          .filter(([, cents]) => cents > 0),
+      ),
     };
     try {
       if (editing) {
@@ -276,10 +338,10 @@ export default function PlansPage() {
                       {plan.features.map((f) => (
                         <span
                           key={f}
-                          title={FEATURE_LABELS[f] ?? f}
+                          title={featureLabels[f] ?? f}
                           className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600"
                         >
-                          {FEATURE_LABELS[f]?.split(' (')[0] ?? f}
+                          {featureLabels[f]?.split(' (')[0] ?? f}
                         </span>
                       ))}
                     </div>
@@ -314,6 +376,7 @@ export default function PlansPage() {
                           ? `Setup ${rand(plan.setupFeeCents)} once-off`
                           : 'No onboarding charge'}
                       </div>
+                      <PlanTotalLine plan={plan} />
                     </>
                   )}
                 </td>
@@ -622,33 +685,69 @@ export default function PlansPage() {
             </section>
 
             <section className="space-y-2 border-t border-slate-100 pt-4">
-              <h3 className="text-xs font-bold uppercase tracking-wide text-slate-400">Features</h3>
-              <div>
-                {FEATURE_ORDER.map((key) => (
-                  <label
-                    key={key}
-                    title={FEATURE_LABELS[key] ?? key}
-                    className="flex cursor-pointer items-center justify-between gap-3 py-2"
-                  >
-                    <span className="text-sm text-slate-700">{FEATURE_SHORT[key] ?? key}</span>
-                    <span className="relative inline-flex h-5 w-9 shrink-0 items-center">
-                      <input
-                        type="checkbox"
-                        className="peer sr-only"
-                        checked={formFeatures.includes(key)}
-                        onChange={() => toggleFeature(key)}
-                      />
-                      <span
-                        aria-hidden="true"
-                        className="absolute inset-0 rounded-full bg-slate-300 transition peer-checked:bg-brand-600"
-                      />
-                      <span
-                        aria-hidden="true"
-                        className="absolute left-0.5 h-4 w-4 rounded-full bg-white shadow transition peer-checked:translate-x-4"
-                      />
+              <h3 className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                Included
+              </h3>
+              <p className="text-xs text-slate-400">
+                {formFeatures.length > 0 ? (
+                  <>
+                    Granted with this plan, free:{' '}
+                    <span className="font-medium text-slate-600">
+                      {formFeatures.map((key) => featureLabels[key] ?? key).join(' · ')}
                     </span>
-                  </label>
-                ))}
+                    . A plan is not a feature picker — the base capabilities come with it.
+                  </>
+                ) : (
+                  <>This plan grants no features of its own.</>
+                )}{' '}
+                Everything else is sold as an add-on, priced below.
+              </p>
+              {planExtras.length > 0 ? (
+                <p className="text-xs text-slate-500">
+                  This plan also includes{' '}
+                  <span className="font-semibold text-slate-700">
+                    {planExtras.map((key) => featureLabels[key] ?? key).join(' · ')}
+                  </span>{' '}
+                  — its clients have these without buying them, so they are not priced below.
+                </p>
+              ) : null}
+              <div className="mt-4 border-t border-slate-200 pt-4">
+                <h4 className="text-sm font-semibold text-slate-700">Add-ons</h4>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Monthly price for the features this plan does not include — the client buys them
+                  on top of the rate. Anything switched on above is the client&apos;s already and is
+                  not priced here. A blank or zero price means this plan does not sell it.
+                </p>
+                <div className="mt-2 space-y-2">
+                  {soldKeys.filter((key) => !formFeatures.includes(key)).map((key) => (
+                    <div key={key} className="flex items-center justify-between gap-3">
+                      <label
+                        htmlFor={`plan-addon-${key}`}
+                        className="text-sm text-slate-700"
+                        title={featureLabels[key] ?? key}
+                      >
+                        {featureLabels[key] ?? key}
+                      </label>
+                      <span className="flex items-center gap-2">
+                        <span className="text-xs text-slate-400">R</span>
+                        <input
+                          id={`plan-addon-${key}`}
+                          value={formFeaturePrices[key] ?? ''}
+                          onChange={(e) =>
+                            setFormFeaturePrices((prev) => ({ ...prev, [key]: e.target.value }))
+                          }
+                          placeholder="0.00"
+                          className="w-24 rounded-lg border border-slate-300 px-2 py-1.5 text-right font-mono text-sm focus:border-brand-500 focus:outline-none"
+                        />
+                      </span>
+                    </div>
+                  ))}
+                  {soldKeys.every((key) => formFeatures.includes(key)) ? (
+                    <p className="text-xs text-slate-400">
+                      This plan includes every paid feature, so there is nothing to sell on top.
+                    </p>
+                  ) : null}
+                </div>
               </div>
             </section>
 

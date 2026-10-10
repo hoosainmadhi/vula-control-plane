@@ -409,3 +409,88 @@ describe('the intended store list reaches the Head Office', () => {
     expect(refused.body.error).toMatch(/no Head Office/i);
   });
 });
+
+/**
+ * The wizard sells add-ons (2026-10-10): the six chargeable features can be
+ * bought AT ONBOARDING, which is where an operator naturally decides them — and
+ * a multi-store deployment buys Head Office whether or not it was ticked.
+ */
+describe('add-ons bought at onboarding', () => {
+  it('buys the chosen add-ons and prices them into the subscription', async () => {
+    const planId = await multiStorePlanId();
+    const created = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send({
+        name: 'Addon Onboarding Co',
+        slug: 'addon-onboarding-co',
+        planId,
+        deploymentType: 'single_store',
+        // Two chosen, and the multi-store one is NOT among them.
+        features: ['ecommerce_bridges', 'invoice_import'],
+        stores: [
+          {
+            name: 'Addon Shop',
+            slug: 'addon-onboarding-co-1',
+            baseUrl: 'http://localhost:3245',
+            terminalCount: 2,
+          },
+        ],
+      })
+      .expect(201);
+
+    const detail = await request(app)
+      .get(`/api/clients/${created.body.client.id}`)
+      .set(auth())
+      .expect(200);
+    const subscription = detail.body.subscription as {
+      addons: Array<{ key: string; cents: number }>;
+      recurringAmountCents: number;
+      rateCents: number;
+    };
+    expect(subscription.addons).toEqual([
+      { key: 'ecommerce_bridges', label: 'E-commerce', cents: 4900 },
+      { key: 'invoice_import', label: 'Upload invoice (AI assisted)', cents: 9900 },
+    ]);
+    // Two tills at the plan's rate, plus the two add-ons.
+    expect(subscription.recurringAmountCents).toBe(
+      2 * subscription.rateCents + 4900 + 9900,
+    );
+  });
+
+  it('refuses an add-on the chosen plan does not sell, naming it', async () => {
+    const bare = await request(app)
+      .post('/api/plans')
+      .set(auth())
+      .send({
+        code: 'vula-onboarding-bare',
+        name: 'Vula Onboarding Bare',
+        maxStores: 1,
+        maxTerminalsPerStore: 2,
+        terminalPriceCents: 10_000,
+        features: ['advanced_reports'],
+        featurePrices: {},
+      })
+      .expect(201);
+
+    const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send({
+        name: 'No Addon Co',
+        slug: 'no-addon-co',
+        planId: bare.body.id,
+        deploymentType: 'single_store',
+        features: ['layby'],
+        stores: [
+          { name: 'Shop', slug: 'no-addon-co-1', baseUrl: 'http://localhost:3245', terminalCount: 1 },
+        ],
+      })
+      .expect(400);
+    expect(res.body.error).toMatch(/does not sell layby/i);
+
+    // Nothing was created: the refusal comes before the company row.
+    const list = await request(app).get('/api/clients').set(auth()).expect(200);
+    expect(list.body).toHaveLength(0);
+  });
+});

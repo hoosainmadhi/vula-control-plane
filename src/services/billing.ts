@@ -282,6 +282,27 @@ export interface InvoiceLineItem {
   amountCents: number;
 }
 
+/** The add-ons an invoice billed, from its own snapshot. */
+const parseAddons = (json: string | null): Array<{ key: string; label: string; cents: number }> => {
+  if (!json) return [];
+  try {
+    const parsed = JSON.parse(json) as Array<{ key?: unknown; label?: unknown; cents?: unknown }>;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (a) =>
+          typeof a.key === 'string' &&
+          typeof a.label === 'string' &&
+          typeof a.cents === 'number' &&
+          Number.isInteger(a.cents) &&
+          a.cents > 0,
+      )
+      .map((a) => ({ key: a.key as string, label: a.label as string, cents: a.cents as number }));
+  } catch {
+    return [];
+  }
+};
+
 export const invoiceLineItems = (invoice: InvoiceRecord): InvoiceLineItem[] => {
   const items: InvoiceLineItem[] = [];
   // The once-off leads whenever it is on the invoice (owner, 2026-09-16).
@@ -302,6 +323,14 @@ export const invoiceLineItems = (invoice: InvoiceRecord): InvoiceLineItem[] => {
         .filter(Boolean)
         .join(' · '),
       amountCents: invoice.terminal_count * invoice.terminal_price_cents,
+    });
+  }
+  // The paid add-ons, each its own line: the invoice says what the client bought.
+  for (const addon of parseAddons(invoice.addons_json)) {
+    items.push({
+      label: addon.label,
+      detail: 'Per month',
+      amountCents: addon.cents,
     });
   }
   const explained = items.reduce((sum, i) => sum + i.amountCents, 0);
@@ -437,6 +466,9 @@ export function createInvoiceForCompany(
       // amount is a flat line, so no terminal count or rate is recorded.
       terminalCount: quote.pricingMode === 'per_terminal' ? quote.licensedTerminalCount : null,
       terminalPriceCents: quote.pricingMode === 'per_terminal' ? quote.rateCents : null,
+      // The add-ons billed, with the price agreed for each — evidence for the
+      // amount, snapshotted so a later price change cannot rewrite this invoice.
+      addonsJson: quote.addons.length > 0 ? JSON.stringify(quote.addons) : null,
       setupFeeCents: chargeOnboarding ? onboardingCents : null,
       // The plan on the document, not a pointer to today's catalogue entry.
       planCode: plan?.code ?? null,

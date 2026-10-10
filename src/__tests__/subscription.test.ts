@@ -146,8 +146,10 @@ describe('a client purchases terminal licences', () => {
     expect(detail.body.subscription.licensedTerminalCount).toBe(9);
     expect(detail.body.subscription.allocatedTerminals).toBe(5);
     expect(detail.body.subscription.unallocatedTerminals).toBe(4);
-    expect(detail.body.subscription.rateCents).toBe(50_000);
-    expect(detail.body.subscription.recurringAmountCents).toBe(9 * 50_000);
+    expect(detail.body.subscription.rateCents).toBe(10_000); // R100 (vula-network)
+    expect(detail.body.subscription.recurringAmountCents).toBe(
+      9 * detail.body.subscription.rateCents,
+    );
     // The allocation list names the stores, so the office can see 3 / 2 / 4.
     const bySlug = new Map(
       (detail.body.subscription.allocations as Array<{
@@ -236,7 +238,9 @@ describe('the fee follows the purchased quantity, not device state', () => {
       (r) => r.body.store as { id: number },
     );
     const before = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
-    expect(before.body.subscription.recurringAmountCents).toBe(9 * 50_000);
+    expect(before.body.subscription.recurringAmountCents).toBe(
+      9 * before.body.subscription.rateCents,
+    );
 
     // One fewer configured till — a service change, not a commercial one.
     await request(app)
@@ -246,7 +250,9 @@ describe('the fee follows the purchased quantity, not device state', () => {
       .expect(200);
 
     const after = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
-    expect(after.body.subscription.recurringAmountCents).toBe(9 * 50_000);
+    expect(after.body.subscription.recurringAmountCents).toBe(
+      9 * after.body.subscription.rateCents,
+    );
     expect(after.body.subscription.licensedTerminalCount).toBe(9);
   });
 
@@ -267,7 +273,9 @@ describe('the fee follows the purchased quantity, not device state', () => {
     expect(storeOut.body.telemetry.terminals.open).toBeGreaterThanOrEqual(1);
 
     const client = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
-    expect(client.body.subscription.recurringAmountCents).toBe(3 * 50_000);
+    expect(client.body.subscription.recurringAmountCents).toBe(
+      3 * client.body.subscription.rateCents,
+    );
     expect(client.body.subscription.licenceQuantitySource).toBeUndefined();
   });
 

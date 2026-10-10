@@ -73,6 +73,8 @@ export default function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [data, setData] = useState<ClientDetailResponse | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
+  /** key → the name the office and the invoice use, from /plans/features. */
+  const [featureLabels, setFeatureLabels] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'head_office' | 'stores' | 'deployments'>(
     'overview',
@@ -91,6 +93,8 @@ export default function ClientDetailPage() {
   const [subPlanId, setSubPlanId] = useState('');
   const [subLicensed, setSubLicensed] = useState('0');
   const [subSetupFeeStatus, setSubSetupFeeStatus] = useState<SetupFeeStatus>('not_invoiced');
+  /** The paid add-ons the client holds — what the editor's ticks will send. */
+  const [subFeatures, setSubFeatures] = useState<string[]>([]);
   const [subAllocations, setSubAllocations] = useState<
     Array<{ storeId: number; name: string; licensed: string }>
   >([]);
@@ -149,14 +153,16 @@ export default function ClientDetailPage() {
     if (!id) return;
     setLoading(true);
     try {
-      const [res, pList, companiesList] = await Promise.all([
+      const [res, pList, companiesList, vocabulary] = await Promise.all([
         api<ClientDetailResponse>(`/clients/${id}`),
         api<Plan[]>('/plans'),
         api<Company[]>('/companies'),
+        api<Array<{ key: string; label: string }>>('/plans/features').catch(() => []),
       ]);
       setData(res);
       setPlans(pList);
       setCompanies(companiesList);
+      setFeatureLabels(Object.fromEntries(vocabulary.map((f) => [f.key, f.label])));
 
       const client = res.client;
       setUpgradeHoName(`${client.name} Head Office`);
@@ -196,6 +202,7 @@ export default function ClientDetailPage() {
     setSubPlanId(data.client.planId ? String(data.client.planId) : '');
     setSubLicensed(String(sub?.licensedTerminalCount ?? data.client.licensedTerminalCount ?? 0));
     setSubSetupFeeStatus(sub?.setupFeeStatus ?? data.client.setupFeeStatus ?? 'not_invoiced');
+    setSubFeatures((sub?.addons ?? []).map((a) => a.key));
     setSubAllocations(
       (data.stores ?? []).map((store) => {
         const allocation = sub?.allocations.find((a) => a.storeId === store.id);
@@ -209,6 +216,18 @@ export default function ClientDetailPage() {
     setSubscriptionOpen(true);
   };
 
+  /**
+   * The add-ons the editor can sell: what the plan in the form prices, minus
+   * what it already includes (a bundled feature is the client's already, so
+   * ticking it would be selling them what they have).
+   */
+  const planForEditor = plans.find((p) => String(p.id) === subPlanId);
+  const subAddonOptions = planForEditor
+    ? Object.entries(planForEditor.featurePrices ?? {})
+        .filter(([key, cents]) => cents > 0 && !planForEditor.features.includes(key))
+        .map(([key, cents]) => ({ key, cents, label: featureLabels[key] ?? key }))
+    : [];
+
   const handleSaveSubscription = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!id) return;
@@ -221,6 +240,9 @@ export default function ClientDetailPage() {
         body: {
           planId: subPlanId ? Number(subPlanId) : null,
           setupFeeStatus: subSetupFeeStatus,
+          // The paid add-ons. A feature the plan already includes is not offered
+          // below (the client has it), so this list is only what they BUY.
+          features: subFeatures,
           ...(isMulti
             ? {
                 allocations: subAllocations.map((a) => ({
@@ -777,6 +799,21 @@ export default function ClientDetailPage() {
                         : '—'}
                   </span>
                 </div>
+                {(subscription?.addons ?? []).length > 0 && (
+                  <div className="flex items-start justify-between gap-3 py-2">
+                    <span className="text-slate-500 font-medium">Add-ons:</span>
+                    <span className="text-right text-xs font-semibold text-slate-700">
+                      {(subscription?.addons ?? []).map((a) => (
+                        <span key={a.key} className="block">
+                          {a.label}{' '}
+                          <span className="font-mono font-normal text-slate-500">
+                            {rand(a.cents)}
+                          </span>
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                )}
                 <div className="flex items-start justify-between gap-3 py-2">
                   <span className="text-slate-500 font-medium">{SETUP_FEE_LABEL}:</span>
                   <span className="text-right font-semibold text-slate-800">
@@ -1350,6 +1387,8 @@ export default function ClientDetailPage() {
                   ))}
                 </select>
               </div>
+
+
               <div className="flex justify-end gap-2 pt-3">
                 <button
                   type="button"
@@ -1398,6 +1437,44 @@ export default function ClientDetailPage() {
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700">Add-ons</label>
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  Priced per month on the plan. Anything the plan already includes is the client's
+                  already and is not listed.
+                </p>
+                <div className="mt-2 space-y-1.5">
+                  {subAddonOptions.length === 0 ? (
+                    <p className="text-xs text-slate-400">This plan prices no add-ons.</p>
+                  ) : (
+                    subAddonOptions.map((option) => (
+                      <label
+                        key={option.key}
+                        className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                      >
+                        <span className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={subFeatures.includes(option.key)}
+                            onChange={(e) =>
+                              setSubFeatures((current) =>
+                                e.target.checked
+                                  ? [...current, option.key]
+                                  : current.filter((k) => k !== option.key),
+                              )
+                            }
+                          />
+                          <span className="font-medium text-slate-800">{option.label}</span>
+                        </span>
+                        <span className="font-mono text-xs text-slate-500">
+                          {rand(option.cents)} / month
+                        </span>
+                      </label>
+                    ))
+                  )}
+                </div>
               </div>
 
               {client.topology === 'multi_store' ? (

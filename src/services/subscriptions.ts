@@ -4,6 +4,8 @@ import {
   getCompanyById,
   getPlanById,
   getSubscription,
+  effectiveFeatures,
+  planFeaturePrice,
   planFeatures,
   countStoresForCompany,
   type CompanyRecord,
@@ -169,7 +171,9 @@ export function entitlementsFor(
     companyName: company.name,
     planCode: plan?.code ?? 'unassigned',
     planName: plan?.name ?? 'Unassigned',
-    features: planFeatures(plan),
+    // What the client actually has: the plan's included features plus the paid
+    // add-ons on its subscription. This list is what the signed licence carries.
+    features: effectiveFeatures(plan, subscription),
     maxStores: plan?.max_stores ?? 1,
     maxTerminalsPerStore: plan?.max_terminals_per_store ?? 1,
     licensedTerminalCount,
@@ -277,6 +281,17 @@ export const registerEnforcementFor = (
  * 402 shape the applications use. Pass the plan that will be in force when the
  * capability lands: the company's current plan, or the one an action upgrades to.
  */
+export function requireSellableFeature(plan: PlanRecord | null, key: string): CapCheck {
+  const price = planFeaturePrice(plan, key);
+  if (price === undefined) {
+    return {
+      ok: false,
+      reason: `The ${plan?.name ?? 'assigned'} plan does not offer "${key}" as an add-on. Give the plan a price for it first.`,
+    };
+  }
+  return { ok: true };
+}
+
 export function requireFeature(plan: PlanRecord | null, key: string): CapCheck {
   const features = planFeatures(plan);
   if (!features.includes(key)) {

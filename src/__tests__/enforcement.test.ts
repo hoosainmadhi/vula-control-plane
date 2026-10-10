@@ -104,9 +104,12 @@ const makeStore = (over: Record<string, unknown> = {}) => {
 };
 
 describe('feature vocabulary', () => {
-  it('serves the six curated keys with labels', async () => {
+  it('serves the curated keys with labels', async () => {
     const res = await request(app).get('/api/plans/features').set(auth()).expect(200);
     const keys = (res.body as Array<{ key: string }>).map((f) => f.key);
+    // `layby` and `invoice_import` joined the vocabulary on 2026-10-10: both were
+    // implied by other keys (lay-bys by credit, the invoice importer by nothing at
+    // all), and each is now sold and switched off on its own.
     expect(keys).toEqual([
       'customer_credit',
       'advanced_reports',
@@ -114,6 +117,8 @@ describe('feature vocabulary', () => {
       'stock_transfers',
       'ecommerce_bridges',
       'ai_assistant',
+      'layby',
+      'invoice_import',
     ]);
     expect(res.body[0]).toMatchObject({ label: expect.any(String), enforcedBy: expect.any(Array) });
   });
@@ -142,17 +147,68 @@ describe('feature vocabulary', () => {
     const res = await request(app)
       .put(`/api/plans/${planId}`)
       .set(auth())
-      .send({ features: ['advanced_reports', 'customer_credit'] })
+      .send({ features: ['advanced_reports'] })
       .expect(200);
     // Stored in vocabulary order, so licences carry a deterministic feature list.
-    expect(res.body.features).toEqual(['customer_credit', 'advanced_reports']);
+    expect(res.body.features).toEqual(['advanced_reports']);
+
+    // A chargeable feature cannot be bundled back into a plan: it is priced, and
+    // the refusal says so by name (owner, 2026-10-10).
+    const bundled = await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ features: ['customer_credit'] })
+      .expect(400);
+    expect(bundled.body.error).toMatch(/chargeable/i);
+    expect(bundled.body.error).toContain('customer_credit');
   });
 });
 
 describe('multi-store feature gate', () => {
-  it('refuses multi-store onboarding for a plan without multi_store (402 feature_not_in_plan)', async () => {
-    const starterId = await planIdByCode('vula-start');
+  it('refuses multi-store onboarding when the plan does not SELL Head Office', async () => {
+    // A plan that prices nothing cannot offer the topology: Head Office is a
+    // chargeable add-on, and choosing multi-store buys it (2026-10-10).
+    const bare = await request(app)
+      .post('/api/plans')
+      .set(auth())
+      .send({
+        code: 'vula-no-addons',
+        name: 'Vula No Add-ons',
+        maxStores: 1,
+        maxTerminalsPerStore: 2,
+        pricingMode: 'per_terminal',
+        terminalPriceCents: 10_000,
+        features: ['advanced_reports'],
+        featurePrices: {},
+      })
+      .expect(201);
+
     const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send({
+        name: 'Tiny Shop',
+        slug: 'tiny-shop',
+        planId: bare.body.id,
+        deploymentType: 'multi_store',
+        headOffice: { name: 'Tiny HO', slug: 'tiny-shop-ho', baseUrl: 'http://localhost:3260' },
+        stores: [{ slug: 'tiny-shop-1', baseUrl: 'http://localhost:3245' }],
+        autoDeploy: false,
+      })
+      .expect(402);
+    expect(res.body.code).toBe('feature_not_in_plan');
+    expect(res.body.error).toContain('does not offer');
+
+    // The refusal happens before anything is created.
+    const list = await request(app).get('/api/clients').set(auth()).expect(200);
+    expect(list.body).toHaveLength(0);
+  });
+
+  it('lets a plan that SELLS Head Office have the topology, and buys the add-on', async () => {
+    // Every seeded plan prices the six (R99/R49), so multi-store is available on
+    // each — and the client ends up HOLDING the add-on rather than getting it free.
+    const starterId = await planIdByCode('vula-start');
+    const created = await request(app)
       .post('/api/clients')
       .set(auth())
       .send({
@@ -164,13 +220,22 @@ describe('multi-store feature gate', () => {
         stores: [{ slug: 'tiny-shop-1', baseUrl: 'http://localhost:3245' }],
         autoDeploy: false,
       })
-      .expect(402);
-    expect(res.body.code).toBe('feature_not_in_plan');
-    expect(res.body.error).toContain('multi_store');
+      .expect(201);
 
-    // The refusal happens before anything is created.
-    const list = await request(app).get('/api/clients').set(auth()).expect(200);
-    expect(list.body).toHaveLength(0);
+    const detail = await request(app)
+      .get(`/api/clients/${created.body.client.id}`)
+      .set(auth())
+      .expect(200);
+    expect(detail.body.subscription.addons).toEqual([
+      { key: 'multi_store', label: 'Head Office', cents: 9900 },
+    ]);
+    // …and the entitlement follows: the licence this client's stores receive
+    // carries Head Office because it was BOUGHT, not because the plan bundled it.
+    const { getCompanyById } = await import('../config/registryDb.js');
+    const { entitlementsFor } = await import('../services/subscriptions.js');
+    expect(entitlementsFor(getCompanyById(created.body.client.id)!).features).toContain(
+      'multi_store',
+    );
   });
 
   it('refuses a no-plan company upgrading to multi-store, then allows it with the plan upgrade', async () => {

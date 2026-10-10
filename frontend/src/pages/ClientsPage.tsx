@@ -101,6 +101,12 @@ export default function ClientsPage() {
   const [billingEmail, setBillingEmail] = useState('');
   const [planId, setPlanId] = useState<string>('');
   const [vertical, setVertical] = useState<StoreVertical>('general');
+  /** Add-ons bought at onboarding — the six the plan prices (2026-10-10). */
+  const [addons, setAddons] = useState<string[]>([]);
+  /** The vocabulary: names, and which features are sold monthly. */
+  const [catalogue, setCatalogue] = useState<
+    Array<{ key: string; label: string; soldMonthly: boolean }>
+  >([]);
   const [deploymentType, setDeploymentType] = useState<'single_store' | 'multi_store'>(
     'single_store',
   );
@@ -124,12 +130,16 @@ export default function ClientsPage() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [cList, pList] = await Promise.all([
+      const [cList, pList, vocabulary] = await Promise.all([
         api<ClientListItem[]>('/clients'),
         api<Plan[]>('/plans'),
+        api<Array<{ key: string; label: string; soldMonthly: boolean }>>('/plans/features').catch(
+          () => [],
+        ),
       ]);
       setClients(cList);
       setPlans(pList);
+      setCatalogue(vocabulary);
       if (pList.length > 0 && !planId) {
         setPlanId(String(pList[0].id));
       }
@@ -185,6 +195,9 @@ export default function ClientsPage() {
         planId: planId ? Number(planId) : null,
         vertical,
         deploymentType,
+        // Only what the operator chose; a multi-store deployment adds Head Office
+        // server-side even if it was missed here.
+        features: addons,
       };
 
       if (deploymentType === 'single_store') {
@@ -253,6 +266,20 @@ export default function ClientsPage() {
   const totalTills = clients.reduce((acc, c) => acc + c.totalTills, 0);
   const licensedTotal = clients.reduce((acc, c) => acc + (c.licensedTerminalCount ?? 0), 0);
   const selectedPlan = plans.find((p) => String(p.id) === planId);
+
+  /** The add-ons the chosen plan SELLS. Head Office shows as forced when the
+   *  deployment is multi-store: the topology buys it either way. */
+  const addonOptions = catalogue
+    .filter((f) => f.soldMonthly && selectedPlan?.featurePrices?.[f.key])
+    .map((f) => ({
+      key: f.key,
+      label: f.label,
+      cents: selectedPlan?.featurePrices?.[f.key] ?? 0,
+      forced: f.key === 'multi_store' && deploymentType === 'multi_store',
+    }));
+
+  const toggleAddon = (key: string): void =>
+    setAddons((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
 
   const filteredClients = clients.filter((c) => {
     if (!searchQuery.trim()) return true;
@@ -612,6 +639,40 @@ export default function ClientsPage() {
                     </select>
                   </div>
                 </div>
+
+                {addonOptions.length > 0 ? (
+                  <div className="mt-4">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Add-ons <span className="font-normal text-slate-400">(monthly, per plan)</span>
+                    </label>
+                    <p className="mt-0.5 text-[11px] text-slate-400">
+                      What this client buys on top of the per-till rate. Unticked can be added
+                      later from the client's subscription.
+                    </p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {addonOptions.map((option) => (
+                        <label
+                          key={option.key}
+                          className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                        >
+                          <span className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={option.forced || addons.includes(option.key)}
+                              disabled={option.forced}
+                              onChange={() => toggleAddon(option.key)}
+                            />
+                            <span className="font-medium text-slate-800">{option.label}</span>
+                          </span>
+                          <span className="font-mono text-xs text-slate-500">
+                            {rand(option.cents)} / month
+                            {option.forced ? ' · with Head Office' : ''}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
 
                 <div className="flex justify-end pt-4">
                   <button

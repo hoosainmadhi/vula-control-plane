@@ -2,6 +2,7 @@ import request from 'supertest';
 import { createApp } from '../app.js';
 import { resetRegistryDb } from '../config/registryDb.js';
 import { jsonResponse, loginAsOffice, authHeader } from './helpers.js';
+import { PLAN_FEATURE_KEYS } from '../services/features.js';
 
 /**
  * Companies, plans, panels and the privacy boundary.
@@ -97,14 +98,15 @@ describe('plans', () => {
   it('seeds eight editable tiers, ordered, with codes derived from their names', async () => {
     const res = await request(app).get('/api/plans').set(auth()).expect(200);
     const codes = (res.body as Array<{ code: string }>).map((p) => p.code);
+    // Ordered by sort_order, which the office rearranged on the Plans page.
     expect(codes).toEqual([
       'vula-start',
       'vula-grow',
-      'vula-branch',
       'vula-network',
+      'vula-market-enterprise',
+      'vula-branch',
       'vula-market',
       'vula-market-plus',
-      'vula-market-enterprise',
       'vula-spares-network',
     ]);
   });
@@ -117,6 +119,7 @@ describe('plans', () => {
         maxStores: number;
         maxTerminalsPerStore: number;
         features: string[];
+        featurePrices: Record<string, number>;
         pricingMode: string;
         terminalPriceCents: number;
         setupFeeCents: number;
@@ -125,12 +128,15 @@ describe('plans', () => {
     ).find((p) => p.code === 'vula-network')!;
     expect(multi.maxStores).toBe(5);
     expect(multi.maxTerminalsPerStore).toBe(3);
-    expect(multi.features).toContain('multi_store');
-    expect(multi.features).toContain('stock_transfers');
-    // R500 per licensed terminal per month, R10,000 once-off onboarding.
+    // The base set is what a plan INCLUDES; the six chargeable features are
+    // priced as add-ons, never bundled (owner, 2026-10-10).
+    expect(multi.features).toEqual(['advanced_reports', 'stock_transfers']);
+    expect(multi.featurePrices).toMatchObject({ multi_store: 9900, layby: 4900 });
+    // R100 per licensed terminal per month, R5 000 once-off onboarding — the
+    // prices on the approved pricing page and in the live registry (2026-10-09).
     expect(multi.pricingMode).toBe('per_terminal');
-    expect(multi.terminalPriceCents).toBe(50_000);
-    expect(multi.setupFeeCents).toBe(1_000_000);
+    expect(multi.terminalPriceCents).toBe(10_000);
+    expect(multi.setupFeeCents).toBe(500_000);
     expect(multi.billingPeriod).toBe('monthly');
   });
 
@@ -203,7 +209,7 @@ describe('plans', () => {
         terminalPriceCents: 65_000,
         setupFeeCents: 1_500_000,
         billingPeriod: 'monthly',
-        features: ['customer_credit'],
+        features: ['advanced_reports'],
       })
       .expect(201);
     expect(res.body.terminalPriceCents).toBe(65_000);
@@ -412,6 +418,87 @@ describe('store caps', () => {
   });
 });
 
+/**
+ * A warehouse holds stock and transfers it out; it does not sell (owner
+ * decisions, 2026-10-09). Two consequences, both pinned here: it does not
+ * consume the plan's store allowance, and it runs no tills — so its configured
+ * count is 0 and it draws no licensed terminals from the client's purchase.
+ */
+describe('warehouses', () => {
+  it('creates a warehouse with no tills and pushes a zero-terminal configure', async () => {
+    const company = await makeCompany({ licensedTerminalCount: 4 });
+    const res = await makeStore({ slug: 'central-dc', kind: 'warehouse', companyId: company.id, terminalCount: undefined });
+    expect(res.status).toBe(201);
+    expect(res.body.store).toMatchObject({
+      kind: 'warehouse',
+      terminalCount: 0,
+      licensedTerminalCount: 0,
+    });
+
+    // The store is told to run no tills, and its own allowance says the same.
+    const configure = fetchMock.mock.calls.find((c) =>
+      String(c[0]).endsWith('/api/internal/configure'),
+    );
+    expect(configure).toBeDefined();
+    const [, init] = configure as [string, { body: string }];
+    expect(JSON.parse(init.body)).toMatchObject({ terminalCount: 0, terminals: [] });
+  });
+
+  it('refuses a warehouse with tills, and a store with none', async () => {
+    const company = await makeCompany({ licensedTerminalCount: 4 });
+    const withTills = await makeStore({ slug: 'dc-with-tills', kind: 'warehouse', companyId: company.id, terminalCount: 2 });
+    expect(withTills.status).toBe(400);
+    expect(withTills.body.error).toMatch(/warehouse runs no tills/i);
+
+    const bareStore = await makeStore({ slug: 'shop-no-tills', kind: 'store', companyId: company.id, terminalCount: 0 });
+    expect(bareStore.status).toBe(400);
+    expect(bareStore.body.error).toMatch(/between 1 and 99/i);
+  });
+
+  it('does not consume the plan’s store allowance', async () => {
+    const planId = await planIdByCode('vula-grow'); // 1 store, 3 tills
+    const company = await makeCompany({ name: 'Spaza', slug: 'spaza', planId, licensedTerminalCount: 3 });
+    const shop = await makeStore({ slug: 'the-shop', terminalCount: 2, companyId: company.id });
+    expect(shop.status).toBe(201);
+
+    // The plan is full: a second SHOP is refused…
+    const secondShop = await makeStore({ slug: 'second-shop', terminalCount: 1, companyId: company.id });
+    expect(secondShop.status).toBe(402);
+    expect(secondShop.body.code).toBe('store_cap_reached');
+
+    // …while the client's own back-of-house does not cost them a shop, and asks
+    // for no terminal licences (the purchase is spent on tills that sell).
+    const warehouse = await makeStore({ slug: 'back-of-house', kind: 'warehouse', companyId: company.id, terminalCount: undefined });
+    expect(warehouse.status).toBe(201);
+    expect(warehouse.body.store).toMatchObject({ kind: 'warehouse', terminalCount: 0 });
+
+    const { summariseSubscription } = await import('../services/terminalLicences.js');
+    expect(summariseSubscription(company.id).licensedTerminalCount).toBe(3);
+    expect(summariseSubscription(company.id).allocatedTerminalCount).toBe(2);
+  });
+
+  it('clears the tills when a store becomes a warehouse, and gives one back on the way out', async () => {
+    const company = await makeCompany({ licensedTerminalCount: 4 });
+    const created = await makeStore({ slug: 'switcher', terminalCount: 2, companyId: company.id });
+    const storeId = created.body.store.id;
+
+    const toWarehouse = await request(app)
+      .put(`/api/stores/${storeId}`)
+      .set(auth())
+      .send({ kind: 'warehouse' });
+    expect(toWarehouse.status).toBe(200);
+    expect(toWarehouse.body).toMatchObject({ kind: 'warehouse', terminalCount: 0 });
+
+    const backToStore = await request(app)
+      .put(`/api/stores/${storeId}`)
+      .set(auth())
+      .send({ kind: 'store' });
+    expect(backToStore.status).toBe(200);
+    expect(backToStore.body).toMatchObject({ kind: 'store', terminalCount: 1 });
+  });
+});
+
+
 describe('licence claims carry the company and plan', () => {
   it('signs the company, plan and features onto the store licence', async () => {
     const company = await makeCompany({ paidThrough: '2027-01-31' });
@@ -430,7 +517,10 @@ describe('licence claims carry the company and plan', () => {
     expect(claims.companyId).toBe(company.id);
     expect(claims.companyName).toBe('Urban Threads Retail Group');
     expect(claims.planCode).toBe('vula-network');
-    expect(claims.features).toContain('multi_store');
+    // The plan's base set… and the add-on this client bought, which is how a
+    // chargeable feature reaches a licence now.
+    expect(claims.features).toContain('advanced_reports');
+    expect(claims.features).toContain('stock_transfers');
     expect(claims.maxStores).toBe(5);
     // The store's own licence: 3 terminals (the allocation created with it), and
     // the plan's per-store ceiling beside it.
@@ -440,7 +530,8 @@ describe('licence claims carry the company and plan', () => {
     // The quantity is what the client purchased — the licence never derives it
     // from configured tills alone.
     expect(company.subscription.licensedTerminalCount).toBe(25);
-    expect(company.subscription.recurringAmountCents).toBe(25 * 50_000);
+    // The quantity is the client's; the rate is the plan's own (R100 — vula-network).
+    expect(company.subscription.recurringAmountCents).toBe(25 * 10_000);
   });
 
   it('still issues an unassigned licence when no company is set', async () => {
@@ -553,7 +644,12 @@ describe('privacy boundary', () => {
   };
 
   const assertNoBusinessData = (payload: unknown): void => {
+    // The add-on price map is keyed by the CAPABILITY vocabulary, and one of
+    // those names is `invoice_import`. A capability is not merchant content, and
+    // the keys are public in the office UI; everything else still has to pass.
+    const capabilityKeys = new Set(PLAN_FEATURE_KEYS);
     for (const key of collectKeys(payload)) {
+      if (capabilityKeys.has(key)) continue;
       expect(key).not.toMatch(FORBIDDEN_KEY);
     }
   };
@@ -891,5 +987,194 @@ describe('updating a client (presence-flag semantics)', () => {
 
     const res2 = await request(app).get(`/api/companies/${company.id}`).set(auth()).expect(200);
     expect(res2.body.name).toBe('Urban Threads Retail Group');
+  });
+});
+
+/**
+ * The add-on model (2026-10-10). Until today a plan's `features_json` was a list
+ * with no prices, so an entitlement could be granted but never billed. Now a plan
+ * also prices its add-ons, a subscription records what the client BOUGHT, the
+ * invoice carries a line for each, and the licence carries what was bought —
+ * priced at the moment of purchase, because buying an add-on is agreeing a price.
+ */
+describe('paid add-ons', () => {
+  it('every seeded plan prices the six add-ons and grants the split keys', async () => {
+    const res = await request(app).get('/api/plans').set(auth()).expect(200);
+    const plans = res.body as Array<{
+      code: string;
+      features: string[];
+      featurePrices: Record<string, number>;
+    }>;
+    const network = plans.find((p) => p.code === 'vula-network')!;
+    expect(network.featurePrices).toMatchObject({
+      multi_store: 9900,
+      ai_assistant: 9900,
+      invoice_import: 9900,
+      customer_credit: 4900,
+      layby: 4900,
+      ecommerce_bridges: 4900,
+    });
+    // The split keys travel with the parents a plan already had, so a client
+    // onboarded today is never missing the lay-bys or the invoice importer.
+    for (const plan of plans) {
+      if (plan.features.includes('customer_credit')) expect(plan.features).toContain('layby');
+      if (plan.features.includes('ai_assistant')) expect(plan.features).toContain('invoice_import');
+    }
+  });
+
+  it('prices a plan through the API, refusing junk', async () => {
+    const planId = await planIdByCode('vula-grow');
+    const updated = await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ featurePrices: { layby: 5900, multi_store: 0 } })
+      .expect(200);
+    expect(updated.body.featurePrices).toEqual({ layby: 5900 });
+    // A zero price means "not sold on this plan", so it is dropped rather than
+    // stored as a free add-on.
+
+    await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ featurePrices: { not_a_feature: 100 } })
+      .expect(400);
+    await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ featurePrices: { layby: -100 } })
+      .expect(400);
+    await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ featurePrices: { layby: 12.5 } })
+      .expect(400);
+  });
+
+  it('bills what the client bought, and snapshots the price at purchase', async () => {
+    // On a plan that bundles NOTHING (Vula Start): an add-on the plan already
+    // includes is not billed, because the client is not buying it twice.
+    const planId = await planIdByCode('vula-start'); // R150 per till, no features
+    const company = await makeCompany({ name: 'Addon Co', slug: 'addon-co', planId, licensedTerminalCount: 4 });
+    const bought = await request(app)
+      .put(`/api/companies/${company.id}`)
+      .set(auth())
+      .send({ features: ['multi_store', 'layby'] })
+      .expect(200);
+
+    // The monthly is the tills plus the add-ons, and the licence says so.
+    const subscription = bought.body.subscription as {
+      recurringAmountCents: number;
+      addons: Array<{ key: string; label: string; cents: number }>;
+      addonsCents: number;
+    };
+    expect(subscription.addons).toEqual([
+      { key: 'multi_store', label: 'Head Office', cents: 9900 },
+      { key: 'layby', label: 'Lay-by', cents: 4900 },
+    ]);
+    expect(subscription.addonsCents).toBe(14800);
+    expect(subscription.recurringAmountCents).toBe(4 * 15_000 + 14_800); // 4 × R150 + R99 + R49
+
+    const ent = await import('../services/subscriptions.js');
+    const companyRow = (await import('../config/registryDb.js')).getCompanyById(company.id)!;
+    expect(ent.entitlementsFor(companyRow).features).toEqual(
+      expect.arrayContaining(['multi_store', 'layby']),
+    );
+
+    // The invoice itemises them, and its total includes them.
+    const invoice = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'renewal', includeOnboarding: false })
+      .expect(201);
+    expect(invoice.body.amountCents).toBe(4 * 15_000 + 14_800);
+    // The invoice DOCUMENT itemises them — the same lines the PDF and the email
+    // print, which is what the client sees.
+    const { getInvoiceById } = await import('../config/registryDb.js');
+    const { invoiceLineItems } = await import('../services/billing.js');
+    const lines = invoiceLineItems(getInvoiceById(invoice.body.id)!);
+    const labels = lines.map((l) => l.label);
+    expect(labels).toContain('Head Office');
+    expect(labels).toContain('Lay-by');
+    const addonLines = lines.filter((l) => l.label === 'Head Office' || l.label === 'Lay-by');
+    expect(addonLines.reduce((sum, l) => sum + l.amountCents, 0)).toBe(14_800);
+
+    // Editing the plan's price does not move what this client agreed to pay.
+    await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ featurePrices: { layby: 9900, multi_store: 9900 } })
+      .expect(200);
+    const after = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+    expect(after.body.subscription.recurringAmountCents).toBe(4 * 15_000 + 14_800);
+    expect(after.body.subscription.addons).toEqual([
+      { key: 'multi_store', label: 'Head Office', cents: 9900 },
+      { key: 'layby', label: 'Lay-by', cents: 4900 },
+    ]);
+  });
+
+  it('a NEW plan carries the add-on prices it was created with', async () => {
+    const created = await request(app)
+      .post('/api/plans')
+      .set(auth())
+      .send({
+        code: 'vula-custom-addons',
+        name: 'Vula Custom Addons',
+        maxStores: 2,
+        maxTerminalsPerStore: 4,
+        terminalPriceCents: 12_500,
+        setupFeeCents: 250_000,
+        features: ['advanced_reports'],
+        featurePrices: { multi_store: 9900, layby: 4900, multi_store_typo: 100 },
+      })
+      .expect(400);
+    // An unknown key is refused by name, not silently stored.
+    expect(created.body.error).toMatch(/unknown feature key/i);
+
+    const ok = await request(app)
+      .post('/api/plans')
+      .set(auth())
+      .send({
+        code: 'vula-custom-addons',
+        name: 'Vula Custom Addons',
+        maxStores: 2,
+        maxTerminalsPerStore: 4,
+        terminalPriceCents: 12_500,
+        setupFeeCents: 250_000,
+        features: ['advanced_reports'],
+        featurePrices: { multi_store: 9900, layby: 4900 },
+      })
+      .expect(201);
+    expect(ok.body.featurePrices).toEqual({ multi_store: 9900, layby: 4900 });
+
+    // A plan that prices nothing is legal — it bundles everything it offers.
+    const bare = await request(app)
+      .post('/api/plans')
+      .set(auth())
+      .send({
+        code: 'vula-bare',
+        name: 'Vula Bare',
+        maxStores: 1,
+        maxTerminalsPerStore: 2,
+        terminalPriceCents: 10_000,
+        // The base set only: this plan sells nothing on top (the chargeable
+        // features are priced, not bundled — so it may not include them).
+        features: ['advanced_reports'],
+      })
+      .expect(201);
+    expect(bare.body.featurePrices).toEqual({});
+  });
+
+  it('refuses an add-on the client’s plan does not sell', async () => {
+    const planId = await planIdByCode('vula-grow');
+    // Price nothing on the plan: there is then nothing to buy.
+    await request(app).put(`/api/plans/${planId}`).set(auth()).send({ featurePrices: {} }).expect(200);
+    const company = await makeCompany({ name: 'No Addons', slug: 'no-addons', planId });
+
+    const res = await request(app)
+      .put(`/api/companies/${company.id}`)
+      .set(auth())
+      .send({ features: ['layby'] })
+      .expect(400);
+    expect(res.body.error).toMatch(/does not price layby/i);
   });
 });
