@@ -498,3 +498,33 @@ into that plan.
   hostname that was never going to answer, while the app itself was
   `running:healthy` the whole time. Look the FQDN up (`GET /api/v1/applications/<uuid>`
   carries it) before concluding a deploy failed.
+- **A live end-to-end mail test must use an unroutable address (2026-10-10).** Verifying the
+  quote form in a browser sent a real message through the local control plane's SMTP account to
+  `thandi@cornermotors.co.za` — a domain that may exist and is not ours. `example.com` is the
+  address for this; a plausible-looking made-up domain is not, because the message really leaves.
+- **The local control plane still holds a Gmail app password (2026-10-10).** `office_settings`
+  in the dev registry carries `smtp.gmail.com` with `hoosain.madhi@gmail.com` and a 16-character
+  app password, and it authenticates — so it is not the credential revoked earlier that day.
+  Setting `RESEND_API_KEY` on this deployment is what makes it unnecessary (SMTP is only used
+  when the office has configured a mailbox), and it should then be cleared from Settings.
+- **Resend has two record schemes, and the dashboard decides which one a domain uses
+  (2026-10-10).** Mirroring the working optimed zone was wrong for vula: optimed's domain was set up
+  under the older Amazon-SES scheme (`MX send → feedback-smtp.eu-west-1.amazonses.com` priority 10
+  plus `TXT send → v=spf1 include:amazonses.com ~all`), while Resend's dashboard for vula-app.co.za
+  now asks for **two CNAMEs** — `send → send.forge.rmta.net` and `rsend → rsend-euw1.forge.rmta.net`
+  — and no MX at all. Read the dashboard per domain; a sibling domain's zone is only a hint.
+  Consequences worth knowing: a **CNAME cannot coexist with any other record at the same name**, so
+  the `TXT send` added on the older advice has to be deleted before the CNAME can take that name;
+  `Enable Receiving` (Resend inbound) stays off — hello@ is Zoho's and replies go to the visitor;
+  and the region shows up in the record name itself (`rsend-euw1`, EU West, matching the account's
+  `feedback-smtp.eu-west-1` in the other scheme). DKIM (`TXT resend._domainkey`, `p=MIGf…`, no
+  `v=DKIM1; k=rsa;` prefix) is the one record both schemes share, and it verified first.
+
+  The rest of the zone, for the next person: apex mail is Zoho (`mx.zoho.com` + `mail.vula-app.co.za`)
+  with SPF `include:zohomail.com include:spf.aserv.co.za +a +mx -all` and DMARC
+  `p=none; adkim=s; aspf=s`; `*.vula-app.co.za` is a wildcard to the deploy host 145.241.101.1, so
+  `send.` already answers an A record and a provider UI may object that the name exists (it is fine —
+  a CNAME at a name with wildcard-derived A records is normal for subdomain setups, but the provider
+  may still refuse, in which case the wildcard has to be scoped); and there is a stray
+  `v=DKIM1; k=rsa; p=…` TXT at the apex, byte-identical to `zmail._domainkey` — Zoho's key published
+  without a selector, doing nothing, safe to delete.

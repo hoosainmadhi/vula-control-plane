@@ -2772,3 +2772,52 @@ then released and each serves the exact chunk hashes built here.
 One operational trap recorded in tidb: the merchant panel's host is
 `demo-urban-threads-ho.vula-app.co.za`; `demo-ho.vula-app.co.za` is an unknown host
 and Coolify answers it with a 503 that reads like a dead deployment.
+
+## 2026-10-10 — Resend, and a form that actually sends
+
+Owner: *"we can use resend as we do for Optimed — I need to set up resend for vula-app"*. So the
+quote request is no longer a `mailto:` that cannot send anything: the site has a form, and the
+control plane sends it through **the same delivery optimed uses** — the office's SMTP mailbox
+when it has one, otherwise Resend's HTTP API, no SDK, `RESEND_API_KEY` + `RESEND_FROM` read at
+call time so a sender change needs a restart and never a rebuild.
+
+- **The mailer grew a transport** (`services/mailer.ts`). `sendMail` picks SMTP when
+  `isSmtpConfigured()`, else Resend, else the honest `smtp_not_configured` refusal; the private
+  `send` became that shared entry point, so invoices, the SMTP test and the quote request all go
+  through one place. `activeEmailTransport()` is reported by `GET /api/settings`, so the office
+  is not told "SMTP is not configured" while mail is leaving through Resend. Attachments are
+  mapped (base64) and `replyTo` becomes `reply_to`, which is what keeps a reply going to the
+  visitor rather than to us.
+- **`POST /api/public/quote-request`** is the control plane's first open surface. It is built to
+  be treated as hostile: the office address is config (`QUOTE_TO`, default hello@) and the
+  visitor's is one they typed — there is **no recipient field on the wire**, so it cannot be
+  pointed at a third party to relay through our domain; it is rate-limited per source address
+  (five an hour); it carries a honeypot that answers `ok` and sends nothing when filled; and
+  every field is length-capped and shape-checked before composition. CORS allows
+  `vula-app.co.za` (and the site's local dev servers) and nothing else.
+- **The page grew a form** where the dead mailto was, and it collects a lead rather than a
+  shrug (owner: "we can collect information regard Business name / email / Mobile number etc"):
+  **business name, email and mobile number required**, contact name, the trade from the
+  product's own vocabulary, a free note, the honeypot, and the quote attached from the builder's
+  own state. The email the office receives leads with those fields — Business, Contact, Email,
+  Mobile, Trade — then the quote, and replies go to the visitor. A failed
+  post opens the visitor's mail app with the same quote instead, so the worst case is what the
+  old button did. With JavaScript off the form's action *is* that mailto, carrying the default
+  quote, which is how the page already treats every other figure.
+
+Verified: 9 new endpoint tests (payload to both addresses with `reply_to` the visitor; QUOTE_TO
+overriding; a `to` in the body ignored; honeypot; validation; a transport refusal surfacing as
+502 `quote_send_failed`; no-transport answering the same way so the endpoint never says whether
+our mail is set up; CORS allow/deny; and the limiter refusing the sixth request without sending).
+Control plane 386 tests, typecheck clean. Then end to end in a browser against the local stack:
+the form posted to the local control plane, the mailer resolved its transport, the message went
+out, and the page confirmed with the visitor's address in the reply.
+
+**Two things this turned up, both worth acting on.** The local control plane's office settings
+still hold a **Gmail app password** (`smtp.gmail.com`, `hoosain.madhi@gmail.com`, 16 characters)
+— and it still authenticates, so it is not the one revoked earlier. Configuring Resend is what
+retires it: with `RESEND_API_KEY` set, the office mailbox is only used when the office has
+actually configured one. And my browser test used `thandi@cornermotors.co.za` as the visitor
+address, which is a domain that may exist — one stray message went to it through that SMTP
+account. A test address should have been `example.com`; recorded in tidbits so the next live
+test uses one.
