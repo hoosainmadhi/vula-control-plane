@@ -3,6 +3,7 @@ import path from 'path';
 import { createHash } from 'crypto';
 import Database from 'better-sqlite3';
 import { env, logger } from './env.js';
+import { DEFAULT_FEATURE_PRICES } from '../services/features.js';
 
 export type StoreStatus = 'active' | 'paused';
 export type ConfigStatus = 'pending' | 'ok' | 'failed';
@@ -35,11 +36,15 @@ export const STORE_ENVIRONMENTS: readonly StoreEnvironment[] = [
   'development',
 ];
 
+/** A store sells; a warehouse only holds stock and transfers it out. */
+export type StoreKind = 'store' | 'warehouse';
+
 export interface StoreRecord {
   id: number;
   slug: string;
   name: string;
   vertical: StoreVertical;
+  kind: StoreKind;
   terminal_count: number;
   base_url: string;
   control_plane_token: string;
@@ -88,8 +93,13 @@ const STORES_DDL = `
     slug                   TEXT    NOT NULL UNIQUE,
     name                   TEXT    NOT NULL,
     vertical               TEXT    NOT NULL DEFAULT 'general',
+    -- 'store' sells; 'warehouse' only holds stock and transfers it out. A
+    -- warehouse does not consume the plan's store allowance and runs no tills
+    -- (owner decisions, 2026-10-09) — which is why terminal_count may be 0.
+    kind                   TEXT    NOT NULL DEFAULT 'store'
+      CHECK (kind IN ('store', 'warehouse')),
     terminal_count         INTEGER NOT NULL DEFAULT 1
-      CHECK (terminal_count BETWEEN 1 AND 99),
+      CHECK (terminal_count BETWEEN 0 AND 99),
     base_url               TEXT    NOT NULL
       CHECK (base_url LIKE 'http://%' OR base_url LIKE 'https://%'),
     control_plane_token    TEXT    NOT NULL,
@@ -117,7 +127,19 @@ const STORES_DDL = `
     volume_name            TEXT,
     admin_email            TEXT,
     created_at             TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at             TEXT    NOT NULL DEFAULT (datetime('now'))
+    updated_at             TEXT    NOT NULL DEFAULT (datetime('now')),
+    -- The rest arrived as additive migrations; they live here too so this DDL
+    -- describes the whole table — the rebuild below copies the LIVE column list
+    -- into it, and a definition that lagged behind would drop what it forgot.
+    licence_sequence       INTEGER NOT NULL DEFAULT 0,
+    licence_issued_at      TEXT,
+    app_version            TEXT,
+    schema_version         INTEGER,
+    last_heartbeat_at      TEXT,
+    last_telemetry_json    TEXT,
+    desired_config_version INTEGER NOT NULL DEFAULT 1,
+    applied_config_version INTEGER NOT NULL DEFAULT 0,
+    latency_ms             INTEGER
   )`;
 
 /**
@@ -137,6 +159,7 @@ const INVOICES_DDL = `
     terminal_count       INTEGER,
     terminal_price_cents INTEGER,
     setup_fee_cents      INTEGER,
+    addons_json          TEXT,
     description          TEXT,
     -- What the invoice was raised for. Persisted since 2026-09-25: settlement
     -- extends the paid period only for 'initial'/'renewal', so the document has
@@ -335,6 +358,7 @@ const PLANS_DDL = `
     max_stores              INTEGER NOT NULL DEFAULT 1,
     max_terminals_per_store INTEGER NOT NULL DEFAULT 2,
     features_json           TEXT    NOT NULL DEFAULT '[]',
+    feature_prices_json     TEXT    NOT NULL DEFAULT '{}',
     pricing_mode            TEXT    NOT NULL DEFAULT 'per_terminal'
       CHECK (pricing_mode IN ('per_terminal', 'custom')),
     terminal_price_cents    INTEGER NOT NULL DEFAULT 0 CHECK (terminal_price_cents >= 0),
@@ -398,6 +422,10 @@ const COMPANY_SUBSCRIPTIONS_DDL = `
     licensed_terminal_count INTEGER NOT NULL DEFAULT 0 CHECK (licensed_terminal_count >= 0),
     setup_fee_status        TEXT    NOT NULL DEFAULT 'not_invoiced'
       CHECK (setup_fee_status IN ('not_invoiced', 'invoiced', 'paid', 'waived')),
+    -- Bought add-ons, and the price agreed for each. Prices are snapshots for the
+    -- same reason the rate is: editing a plan must not re-price a client.
+    features_json           TEXT    NOT NULL DEFAULT '[]',
+    addon_prices_json       TEXT    NOT NULL DEFAULT '{}',
     -- THE AGREED PRICE TERMS (2026-09-16). Copied from the plan when the client is
     -- onboarded, when the office moves them to another plan, or when the office
     -- explicitly re-prices them — never re-read from the plan afterwards, so
@@ -471,6 +499,16 @@ const PANELS_DDL = `
  * Enterprise tier is `custom`, so the control plane never invents a figure for a
  * negotiated deal. Every value is editable from the control plane.
  */
+/**
+ * The plan catalogue a FRESH registry is seeded with.
+ *
+ * These rates and setup fees are the prices on the approved pricing page, kept in
+ * step with the live registry's plan rows (2026-10-09). They had drifted to
+ * R500/till and R10 000 once-off, so a fresh install priced differently from
+ * production. `refreshSeedPlanDefaults` deliberately only fills plans that are
+ * still unpriced, so changing these numbers never reprices a live client — the
+ * Plans page is how an existing client's price is changed.
+ */
 const SEED_PLANS: Array<{
   code: string;
   name: string;
@@ -489,10 +527,10 @@ const SEED_PLANS: Array<{
     name: 'Vula Start',
     maxStores: 1,
     maxTerminals: 1,
-    features: [],
+    features: ['advanced_reports', 'stock_transfers'],
     pricingMode: 'per_terminal',
-    terminalPriceCents: 50_000,
-    setupFeeCents: 1_000_000,
+    terminalPriceCents: 15_000,
+    setupFeeCents: 300_000,
     sortOrder: 1,
   },
   {
@@ -500,10 +538,10 @@ const SEED_PLANS: Array<{
     name: 'Vula Grow',
     maxStores: 1,
     maxTerminals: 3,
-    features: ['customer_credit', 'advanced_reports'],
+    features: ['advanced_reports', 'stock_transfers'],
     pricingMode: 'per_terminal',
-    terminalPriceCents: 50_000,
-    setupFeeCents: 1_000_000,
+    terminalPriceCents: 12_000,
+    setupFeeCents: 300_000,
     sortOrder: 2,
   },
   {
@@ -511,78 +549,65 @@ const SEED_PLANS: Array<{
     name: 'Vula Branch',
     maxStores: 3,
     maxTerminals: 2,
-    features: ['customer_credit', 'advanced_reports', 'multi_store'],
+    features: ['advanced_reports', 'stock_transfers'],
     pricingMode: 'per_terminal',
-    terminalPriceCents: 50_000,
-    setupFeeCents: 1_000_000,
-    sortOrder: 3,
+    terminalPriceCents: 15_000,
+    setupFeeCents: 300_000,
+    sortOrder: 5,
   },
   {
     code: 'vula-network',
     name: 'Vula Network',
     maxStores: 5,
     maxTerminals: 3,
-    features: ['customer_credit', 'advanced_reports', 'multi_store', 'stock_transfers'],
+    features: ['advanced_reports', 'stock_transfers'],
     pricingMode: 'per_terminal',
-    terminalPriceCents: 50_000,
-    setupFeeCents: 1_000_000,
-    sortOrder: 4,
+    terminalPriceCents: 10_000,
+    setupFeeCents: 500_000,
+    sortOrder: 3,
   },
   {
     code: 'vula-market',
     name: 'Vula Market',
     maxStores: 1,
     maxTerminals: 10,
-    features: ['customer_credit', 'advanced_reports', 'ecommerce_bridges'],
+    features: ['advanced_reports', 'stock_transfers'],
     pricingMode: 'per_terminal',
-    terminalPriceCents: 50_000,
-    setupFeeCents: 1_000_000,
-    sortOrder: 5,
+    terminalPriceCents: 10_000,
+    setupFeeCents: 300_000,
+    sortOrder: 6,
   },
   {
     code: 'vula-market-plus',
     name: 'Vula Market Plus',
     maxStores: 10,
     maxTerminals: 15,
-    features: [
-      'customer_credit',
-      'advanced_reports',
-      'multi_store',
-      'stock_transfers',
-      'ecommerce_bridges',
-    ],
+    features: ['advanced_reports', 'stock_transfers'],
     pricingMode: 'per_terminal',
-    terminalPriceCents: 50_000,
-    setupFeeCents: 1_000_000,
-    sortOrder: 6,
+    terminalPriceCents: 10_000,
+    setupFeeCents: 600_000,
+    sortOrder: 7,
   },
   {
     code: 'vula-market-enterprise',
     name: 'Vula Market Enterprise',
     maxStores: 50,
     maxTerminals: 20,
-    features: [
-      'customer_credit',
-      'advanced_reports',
-      'multi_store',
-      'stock_transfers',
-      'ecommerce_bridges',
-      'ai_assistant',
-    ],
+    features: ['advanced_reports', 'stock_transfers'],
     pricingMode: 'per_terminal',
-    terminalPriceCents: 50_000,
-    setupFeeCents: 1_000_000,
-    sortOrder: 7,
+    terminalPriceCents: 10_000,
+    setupFeeCents: 600_000,
+    sortOrder: 4,
   },
   {
     code: 'vula-spares-network',
     name: 'Vula Spares Network',
     maxStores: 50,
     maxTerminals: 5,
-    features: ['customer_credit', 'advanced_reports', 'multi_store', 'stock_transfers'],
+    features: ['advanced_reports', 'stock_transfers'],
     pricingMode: 'per_terminal',
-    terminalPriceCents: 50_000,
-    setupFeeCents: 1_000_000,
+    terminalPriceCents: 15_000,
+    setupFeeCents: 600_000,
     sortOrder: 8,
   },
 ];
@@ -645,6 +670,29 @@ export const getRegistryDb = (): Database.Database => {
     db.exec('ALTER TABLE stores DROP COLUMN vat_reg_no');
   }
   addColumn('vertical', "vertical TEXT NOT NULL DEFAULT 'general'");
+  // 'store' | 'warehouse' (owner decisions, 2026-10-09): a warehouse holds stock
+  // and transfers it out, does not consume the plan's store allowance and runs no
+  // tills. Existing rows are stores, which is the default.
+  addColumn('kind', "kind TEXT NOT NULL DEFAULT 'store'");
+
+  // --- Plans ------------------------------------------------------------------
+  // `addColumn` above guards on the STORES table, so a plans column needs its own
+  // adder — using the store one silently ALTERed `stores` instead (caught by
+  // rehearsing the migration against a copy of the live registry, 2026-10-10).
+  const planCols = db.prepare('PRAGMA table_info(plans)').all() as Array<{ name: string }>;
+  const addPlanColumn = (name: string, ddl: string) => {
+    if (!planCols.some((c) => c.name === name)) db.exec(`ALTER TABLE plans ADD COLUMN ${ddl}`);
+  };
+  // What each paid feature costs per month on THIS plan (2026-10-10). The
+  // approved prices are seeded onto every plan; the Plans page edits them.
+  addPlanColumn('feature_prices_json', "feature_prices_json TEXT NOT NULL DEFAULT '{}'");
+  // The stray column that bug left behind: any database that ran that build has
+  // an empty `stores.feature_prices_json` and nothing reads it. Dropped here so
+  // no one has to wonder what a plan-price column is doing on a store row —
+  // the same treatment `vat_reg_no` got when it stopped belonging there.
+  if (storeCols.some((c) => c.name === 'feature_prices_json')) {
+    db.exec('ALTER TABLE stores DROP COLUMN feature_prices_json');
+  }
   addColumn('control_plane_token', `control_plane_token TEXT NOT NULL DEFAULT ''`);
   // Per-branch Head Office credential — distinct from the vendor CP token.
   addColumn('head_office_token', 'head_office_token TEXT');
@@ -718,6 +766,14 @@ export const getRegistryDb = (): Database.Database => {
   addInvoiceColumn('subtotal_cents', 'subtotal_cents INTEGER');
   addInvoiceColumn('vat_cents', 'vat_cents INTEGER');
   addInvoiceColumn('vat_rate', 'vat_rate INTEGER');
+  // The add-ons bought at the time of issue, with the prices agreed then,
+  // snapshotted onto the document (2026-10-10). It must be a column migration and
+  // not only a DDL line: the invoice writer always names it, so a registry that
+  // predates the add-on model fails on its next invoice with "no column named
+  // addons_json" — a fresh test database never sees it, which is exactly how this
+  // slipped through (found on the live dev registry, 2026-10-10). NULL on
+  // invoices raised before it existed: they had no add-on lines to state.
+  addInvoiceColumn('addons_json', 'addons_json TEXT');
 
   const subCols = db.prepare('PRAGMA table_info(company_subscriptions)').all() as Array<{
     name: string;
@@ -737,6 +793,11 @@ export const getRegistryDb = (): Database.Database => {
   addSubColumn('setup_fee_cents', 'setup_fee_cents INTEGER');
   addSubColumn('billing_period', 'billing_period TEXT');
   addSubColumn('priced_at', 'priced_at TEXT');
+  // The add-on model (2026-10-10): what the client bought, and what they agreed
+  // to pay for it. Empty by default — a legacy client's features live on its
+  // plan, and the migration only ADDS the keys split out of their parents.
+  addSubColumn('features_json', "features_json TEXT NOT NULL DEFAULT '[]'");
+  addSubColumn('addon_prices_json', "addon_prices_json TEXT NOT NULL DEFAULT '{}'");
 
   const officeCols = db.prepare('PRAGMA table_info(office_settings)').all() as Array<{
     name: string;
@@ -770,6 +831,18 @@ export const getRegistryDb = (): Database.Database => {
   );
   migrateSubscriptions(db);
   migrateBillingSettingsToPerCompany(db);
+  // After the additive pass, so `kind` exists in the table being copied.
+  allowWarehouseTerminalCount(db);
+  const splitGranted = grantSplitFeatureKeys(db);
+  // After the split, so `layby`/`invoice_import` are priced before anything moves.
+  const bundledMoved = moveBundledFeaturesToAddons(db);
+  // Both migrations change what a client is entitled to, which means the licences
+  // already delivered say the wrong thing. Nothing else re-issues them in time:
+  // the health sweep refreshes only a failed delivery or one half its offline
+  // window old (seven of fourteen days). Without this, a fleet released after the
+  // migration would refuse the features the client is paying for until the
+  // following week (found planning the 2026-10-10 release).
+  if (splitGranted || bundledMoved) markLicencesForRedelivery(db, 'entitlements changed');
   return registry;
 };
 
@@ -778,7 +851,7 @@ export const getRegistryDb = (): Database.Database => {
  * rebuild cannot silently drop a column.
  */
 const PLAN_COLUMNS =
-  'id, code, name, max_stores, max_terminals_per_store, features_json, pricing_mode, terminal_price_cents, custom_amount_cents, setup_fee_cents, billing_period, is_active, sort_order, created_at, updated_at';
+  'id, code, name, max_stores, max_terminals_per_store, features_json, feature_prices_json, pricing_mode, terminal_price_cents, custom_amount_cents, setup_fee_cents, billing_period, is_active, sort_order, created_at, updated_at';
 const COMPANY_COLUMNS =
   'id, name, slug, billing_email, plan_id, paid_through, trial_ends_at, status, created_at, updated_at';
 
@@ -787,8 +860,9 @@ const seedPlans = (db: Database.Database): void => {
   const has = db.prepare('SELECT id FROM plans WHERE code = ?');
   const insert = db.prepare(
     `INSERT INTO plans (code, name, max_stores, max_terminals_per_store, features_json,
+                        feature_prices_json,
                         pricing_mode, terminal_price_cents, setup_fee_cents, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const seed = db.transaction(() => {
     for (const plan of SEED_PLANS) {
@@ -799,6 +873,7 @@ const seedPlans = (db: Database.Database): void => {
         plan.maxStores,
         plan.maxTerminals,
         JSON.stringify(plan.features),
+        JSON.stringify(DEFAULT_FEATURE_PRICES),
         plan.pricingMode,
         plan.terminalPriceCents,
         plan.setupFeeCents,
@@ -950,6 +1025,8 @@ const restructurePlans = (db: Database.Database): void => {
     'max_stores',
     'max_terminals_per_store',
     'features_json',
+    // Present after the additive pass above; a legacy shape arrives with '{}'.
+    cols.has('feature_prices_json') ? 'feature_prices_json' : `'{}'`,
     modeExpr,
     rateExpr,
     // Present on any database that has already booted this build (the additive
@@ -1124,6 +1201,130 @@ const widenPlanBillingPeriod = (db: Database.Database): void => {
  * Only renames when the target code is absent, so a registry that has already
  * been reseeded is left alone.
  */
+/**
+ * The six priced features are CHARGEABLE (owner, 2026-10-10) — a plan includes the
+ * base set and SELLS the rest, or the pricing page and the invoice tell different
+ * stories. Every tier here bundled some of them, from before add-ons existed, so
+ * those clients were getting paid features for nothing.
+ *
+ * Each bundled feature moves to the client as a PURCHASED add-on at the plan's own
+ * price: nobody loses a feature, and the client starts paying for what the page
+ * sells. Idempotent — a plan that bundles nothing chargeable has nothing to move —
+ * and the API then refuses to put one back into a plan's included list.
+ */
+const moveBundledFeaturesToAddons = (db: Database.Database): boolean => {
+  if (!tableExists(db, 'plans')) return false;
+  const plans = db.prepare('SELECT * FROM plans').all() as PlanRecord[];
+  let changed = false;
+  for (const plan of plans) {
+    const priced = planFeaturePrices(plan);
+    const features = planFeatures(plan);
+    const bundled = features.filter((key) => key in priced);
+    if (bundled.length === 0) continue;
+    changed = true;
+
+    const prices = Object.fromEntries(bundled.map((key) => [key, priced[key]]));
+    const clients = db
+      .prepare('SELECT id FROM companies WHERE plan_id = ?')
+      .all(plan.id) as Array<{ id: number }>;
+
+    const run = db.transaction(() => {
+      for (const client of clients) {
+        const subscription = getSubscription(client.id);
+        setSubscriptionAddons(
+          client.id,
+          [...new Set([...subscriptionFeatures(subscription), ...bundled])],
+          // A feature the client already bought keeps the price they agreed; a
+          // bundled one is priced at what this plan charges for it.
+          { ...subscriptionAddonPrices(subscription), ...prices },
+        );
+      }
+      db.prepare('UPDATE plans SET features_json = ? WHERE id = ?').run(
+        JSON.stringify(features.filter((key) => !(key in priced))),
+        plan.id,
+      );
+      logger.info(
+        `Bundled features became paid add-ons on ${plan.code}: ${bundled.join(', ')} (${clients.length} client${clients.length === 1 ? '' : 's'})`,
+      );
+    });
+    run();
+  }
+  return changed;
+};
+
+/**
+ * A warehouse runs no tills, so `terminal_count` may be 0 for it (owner
+ * decision, 2026-10-09). SQLite cannot alter a CHECK, so a database whose
+ * `stores` DDL still says `BETWEEN 1 AND 99` is rebuilt once — with the LIVE
+ * column list as both source and target, so a column can never be dropped — into
+ * the current `STORES_DDL`. The `kind` column is added by the additive pass,
+ * which runs before this.
+ */
+const allowWarehouseTerminalCount = (db: Database.Database): void => {
+  if (!storedDdl(db, 'stores')?.includes('BETWEEN 1 AND 99')) return;
+  rebuildTable(db, 'stores', [...tableColumns(db, 'stores')].join(', '), STORES_DDL);
+};
+
+/**
+ * The add-on split (2026-10-10). Two features became their own keys —
+ * `layby` (was implied by `customer_credit`) and `invoice_import` (was gated on
+ * nothing, and rode with `ai_assistant`) — and every plan that already granted
+ * the parent keeps granting the child, or a client would lose lay-bys and the
+ * invoice importer the moment a licence is re-pushed.
+ *
+ * Idempotent, and it only ever ADDS: a plan's own feature list is otherwise left
+ * exactly as the office set it. Existing plans also get the approved add-on
+ * prices where they have none, so the Plans page has something to edit.
+ */
+const grantSplitFeatureKeys = (db: Database.Database): boolean => {
+  if (!tableExists(db, 'plans')) return false;
+  const rows = db.prepare('SELECT * FROM plans').all() as PlanRecord[];
+  const setFeatures = db.prepare('UPDATE plans SET features_json = ? WHERE id = ?');
+  const setPrices = db.prepare('UPDATE plans SET feature_prices_json = ? WHERE id = ?');
+  let granted = false;
+  const run = db.transaction(() => {
+    for (const plan of rows) {
+      const features = planFeatures(plan);
+      const next = new Set(features);
+      if (next.has('customer_credit')) next.add('layby');
+      if (next.has('ai_assistant')) next.add('invoice_import');
+      if (next.size !== features.length) {
+        setFeatures.run(JSON.stringify([...next]), plan.id);
+        granted = true;
+      }
+      if (Object.keys(planFeaturePrices(plan)).length === 0) {
+        setPrices.run(JSON.stringify(DEFAULT_FEATURE_PRICES), plan.id);
+      }
+    }
+  });
+  run();
+  return granted;
+};
+
+/**
+ * Mark every delivered licence for re-delivery.
+ *
+ * A migration that rewrites what a client is entitled to leaves the licences
+ * already delivered saying the old thing, and the health sweep will not correct
+ * them in time: it refreshes a licence only when the last delivery failed or the
+ * licence is half its offline window old (seven of fourteen days). Left alone,
+ * the fleet trades for a week on entitlements the control plane no longer agrees
+ * with — and a store deployed in that window refuses features the client is
+ * paying for, which is exactly how the split keys would have behaved in the
+ * 2026-10-10 release. The next sweep (ten minutes by default) delivers them.
+ */
+const markLicencesForRedelivery = (db: Database.Database, reason: string): void => {
+  const stores = db.prepare("UPDATE stores SET licence_push_status = 'pending'").run().changes;
+  const panels = tableExists(db, 'panels')
+    ? db.prepare("UPDATE panels SET licence_push_status = 'pending'").run().changes
+    : 0;
+  if (stores + panels > 0) {
+    logger.info(
+      `Licences queued for re-delivery (${reason}): ${stores} store(s), ${panels} panel(s)`,
+    );
+  }
+};
+
 const renamePlansToNameCodes = (db: Database.Database): void => {
   if (!tableExists(db, 'plans')) return;
   const has = db.prepare('SELECT 1 FROM plans WHERE code = ?');
@@ -1203,6 +1404,8 @@ export interface CreateStoreInput {
   name: string;
   slug: string;
   vertical?: StoreVertical;
+  /** Defaults to 'store' — a warehouse is a deliberate choice. */
+  kind?: StoreKind;
   terminalCount: number;
   baseUrl: string;
   environment?: StoreEnvironment;
@@ -1215,13 +1418,14 @@ export const createStore = (input: CreateStoreInput, controlPlaneToken: string):
   const insert = db.transaction(() => {
     const info = db
       .prepare(
-        `INSERT INTO stores (name, slug, vertical, terminal_count, base_url, control_plane_token, environment, admin_email)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO stores (name, slug, vertical, kind, terminal_count, base_url, control_plane_token, environment, admin_email)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.name,
         input.slug,
         input.vertical ?? 'general',
+        input.kind ?? 'store',
         input.terminalCount,
         input.baseUrl,
         controlPlaneToken,
@@ -1237,6 +1441,7 @@ export const createStore = (input: CreateStoreInput, controlPlaneToken: string):
 export interface UpdateStoreInput {
   name?: string;
   vertical?: StoreVertical;
+  kind?: StoreKind;
   terminalCount?: number;
   baseUrl?: string;
   environment?: StoreEnvironment;
@@ -1258,6 +1463,7 @@ export const updateStore = (id: number, input: UpdateStoreInput): StoreRecord | 
     `UPDATE stores SET
        name = COALESCE(?, name),
        vertical = COALESCE(?, vertical),
+       kind = COALESCE(?, kind),
        terminal_count = COALESCE(?, terminal_count),
        base_url = COALESCE(?, base_url),
        environment = COALESCE(?, environment),
@@ -1268,6 +1474,7 @@ export const updateStore = (id: number, input: UpdateStoreInput): StoreRecord | 
   ).run(
     input.name ?? null,
     input.vertical ?? null,
+    input.kind ?? null,
     input.terminalCount ?? null,
     input.baseUrl ?? null,
     input.environment ?? null,
@@ -1534,6 +1741,54 @@ export type PlanPricingMode = 'per_terminal' | 'custom';
 
 export const PLAN_PRICING_MODES: readonly PlanPricingMode[] = ['per_terminal', 'custom'];
 
+/**
+ * The paid feature vocabulary lives in `services/features.ts` — it is the
+ * cross-application contract, and the parsers below are the only part the schema
+ * needs. A plan's `feature_prices_json` holds what each add-on costs on THAT
+ * plan; a subscription's `features_json` holds what the client bought.
+ */
+/** The features a subscription has BOUGHT (the add-ons the client pays for). */
+export const subscriptionFeatures = (
+  subscription: CompanySubscriptionRecord | null,
+): string[] => {
+  if (!subscription?.features_json) return [];
+  try {
+    const parsed = JSON.parse(subscription.features_json);
+    return Array.isArray(parsed) ? parsed.filter((f): f is string => typeof f === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+
+/** The agreed price per bought feature, parsed. */
+export const subscriptionAddonPrices = (
+  subscription: CompanySubscriptionRecord | null,
+): Record<string, number> => {
+  if (!subscription?.addon_prices_json) return {};
+  try {
+    const parsed = JSON.parse(subscription.addon_prices_json) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed ?? {})) {
+      if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+};
+
+/**
+ * Everything this client is entitled to: what its plan includes plus what it
+ * bought. This is the list the signed licence carries, and the only place the
+ * two sources are combined.
+ */
+export const effectiveFeatures = (
+  plan: PlanRecord | null,
+  subscription: CompanySubscriptionRecord | null,
+): string[] => [
+  ...new Set([...planFeatures(plan), ...subscriptionFeatures(subscription)]),
+];
+
 export interface PlanRecord {
   id: number;
   code: string;
@@ -1541,6 +1796,8 @@ export interface PlanRecord {
   max_stores: number;
   max_terminals_per_store: number;
   features_json: string;
+  /** Prices for the paid features, `{ "multi_store": 9900, … }`. */
+  feature_prices_json: string;
   pricing_mode: PlanPricingMode;
   /** Rate per licensed terminal per billing period (0 on a custom plan). */
   terminal_price_cents: number;
@@ -1570,6 +1827,8 @@ export interface PlanInput {
   maxStores: number;
   maxTerminalsPerStore: number;
   features: string[];
+  /** What each paid add-on costs on this plan, `{ multi_store: 9900, … }`. */
+  featurePrices?: Record<string, number>;
   pricingMode?: PlanPricingMode;
   terminalPriceCents?: number;
   customAmountCents?: number;
@@ -1584,9 +1843,10 @@ export const createPlan = (input: PlanInput): PlanRecord => {
   const info = db
     .prepare(
       `INSERT INTO plans (code, name, max_stores, max_terminals_per_store, features_json,
+                          feature_prices_json,
                           pricing_mode, terminal_price_cents, custom_amount_cents, setup_fee_cents,
                           billing_period, sort_order)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) + 1 FROM plans), 1))`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) + 1 FROM plans), 1))`,
     )
     .run(
       input.code,
@@ -1594,6 +1854,7 @@ export const createPlan = (input: PlanInput): PlanRecord => {
       input.maxStores,
       input.maxTerminalsPerStore,
       JSON.stringify(input.features),
+      JSON.stringify(input.featurePrices ?? {}),
       input.pricingMode ?? 'per_terminal',
       input.terminalPriceCents ?? 0,
       input.customAmountCents ?? 0,
@@ -1618,6 +1879,7 @@ export const updatePlan = (
          max_stores = COALESCE(?, max_stores),
          max_terminals_per_store = COALESCE(?, max_terminals_per_store),
          features_json = COALESCE(?, features_json),
+         feature_prices_json = COALESCE(?, feature_prices_json),
          pricing_mode = COALESCE(?, pricing_mode),
          terminal_price_cents = COALESCE(?, terminal_price_cents),
          custom_amount_cents = COALESCE(?, custom_amount_cents),
@@ -1632,6 +1894,7 @@ export const updatePlan = (
       input.maxStores ?? null,
       input.maxTerminalsPerStore ?? null,
       input.features ? JSON.stringify(input.features) : null,
+      input.featurePrices ? JSON.stringify(input.featurePrices) : null,
       input.pricingMode ?? null,
       input.terminalPriceCents ?? null,
       input.customAmountCents ?? null,
@@ -1672,6 +1935,33 @@ export const planFeatures = (plan: PlanRecord | null): string[] => {
   }
 };
 
+/**
+ * What THIS plan charges for one add-on, or undefined when it does not sell it.
+ * `undefined` is the important case: a plan that does not price a feature cannot
+ * offer it, which is how a chargeable feature stays chargeable.
+ */
+export const planFeaturePrice = (plan: PlanRecord | null, key: string): number | undefined =>
+  planFeaturePrices(plan)[key];
+
+/**
+ * What each add-on costs per month on THIS plan. Unknown keys and bad values are
+ * dropped rather than refused here: the parse must never be the thing that
+ * breaks a licence, and writes are validated at the API (`validateFeaturePrices`).
+ */
+export const planFeaturePrices = (plan: PlanRecord | null): Record<string, number> => {
+  if (!plan?.feature_prices_json) return {};
+  try {
+    const parsed = JSON.parse(plan.feature_prices_json) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed ?? {})) {
+      if (typeof value === 'number' && Number.isInteger(value) && value >= 0) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+};
+
 // --- Companies ---------------------------------------------------------------
 
 export interface CompanyRecord {
@@ -1698,6 +1988,11 @@ export interface InvoiceRecord {
   terminal_price_cents: number | null;
   /** Once-off onboarding charge, when this invoice carried it. Never on renewals. */
   setup_fee_cents: number | null;
+  /**
+   * The paid add-ons this invoice billed, as `[{key,label,cents}]` — evidence for
+   * the amount, snapshotted at issue like the terminal rate beside it.
+   */
+  addons_json: string | null;
   /** What the charge is for. Required on a manually-priced invoice. */
   description: string | null;
   /** What the invoice was raised for — a snapshot at issue. Settlement extends
@@ -1756,10 +2051,18 @@ export const getCompanyBySlug = (slug: string): CompanyRecord | null =>
   (getRegistryDb().prepare('SELECT * FROM companies WHERE slug = ?').get(slug) as CompanyRecord) ??
   null;
 
+/**
+ * How many of the plan's stores this company uses.
+ *
+ * A warehouse does not consume the allowance (owner decision, 2026-10-09): it is
+ * not a retail location, it does not sell, and charging for it would make a
+ * client's own back-of-house cost them a shop. It still gets a licence and is
+ * still registered, listed and healthy-checked like any store.
+ */
 export const countStoresForCompany = (companyId: number): number =>
   (
     getRegistryDb()
-      .prepare('SELECT COUNT(*) AS c FROM stores WHERE company_id = ?')
+      .prepare("SELECT COUNT(*) AS c FROM stores WHERE company_id = ? AND kind = 'store'")
       .get(companyId) as {
       c: number;
     }
@@ -1845,6 +2148,10 @@ export interface CompanySubscriptionRecord {
   company_id: number;
   licensed_terminal_count: number;
   setup_fee_status: SetupFeeStatus;
+  /** The paid add-ons this client has bought, as a JSON array of feature keys. */
+  features_json: string;
+  /** The price agreed for each of them, snapshotted when it was bought. */
+  addon_prices_json: string;
   /** The agreed terms; all NULL until an agreement is recorded (`priced_at`). */
   pricing_mode: PlanPricingMode | null;
   rate_cents: number | null;
@@ -1926,6 +2233,30 @@ export const setLicensedTerminalCount = (
         WHERE company_id = ?`,
     )
     .run(licensedTerminalCount, companyId);
+  return getSubscription(companyId)!;
+};
+
+/**
+ * The add-ons a client has bought, and what they agreed to pay for each.
+ *
+ * `prices` is written as given: the caller snapshots newly bought features from
+ * the plan and carries the existing agreement forward for the ones kept — the
+ * same rule the terminal rate follows, so editing a plan's prices never moves
+ * what an existing client pays.
+ */
+export const setSubscriptionAddons = (
+  companyId: number,
+  features: string[],
+  prices: Record<string, number>,
+): CompanySubscriptionRecord => {
+  ensureSubscription(companyId);
+  getRegistryDb()
+    .prepare(
+      `UPDATE company_subscriptions
+          SET features_json = ?, addon_prices_json = ?, updated_at = datetime('now')
+        WHERE company_id = ?`,
+    )
+    .run(JSON.stringify([...new Set(features)]), JSON.stringify(prices), companyId);
   return getSubscription(companyId)!;
 };
 
@@ -2292,6 +2623,8 @@ export interface InvoiceLines {
   terminalCount?: number | null;
   terminalPriceCents?: number | null;
   setupFeeCents?: number | null;
+  /** The paid add-ons billed, as JSON `[{key,label,cents}]`. */
+  addonsJson?: string | null;
   /** Human-readable label for the charge; see `createInvoiceForCompany`. */
   description?: string | null;
   /** The plan the subscription was on, snapshotted onto the document. */
@@ -2361,10 +2694,11 @@ export const createInvoice = (
   const info = db
     .prepare(
       `INSERT INTO invoices (company_id, invoice_number, amount_cents, due_date, status,
-                             terminal_count, terminal_price_cents, setup_fee_cents, description,
+                             terminal_count, terminal_price_cents, setup_fee_cents, addons_json,
+                             description,
                              purpose, plan_code, plan_name, pro_rata_period,
                              subtotal_cents, vat_cents, vat_rate)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       companyId,
@@ -2376,6 +2710,7 @@ export const createInvoice = (
       lines?.terminalCount ?? null,
       lines?.terminalPriceCents ?? null,
       lines?.setupFeeCents ?? null,
+      lines?.addonsJson ?? null,
       lines?.description ?? null,
       lines?.purpose ?? 'initial',
       lines?.planCode ?? null,

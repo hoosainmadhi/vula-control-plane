@@ -3,7 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { env } from '../config/env.js';
-import { getRegistryDb, resetRegistryDb } from '../config/registryDb.js';
+import {
+  createInvoice,
+  getInvoiceById,
+  getRegistryDb,
+  resetRegistryDb,
+} from '../config/registryDb.js';
 
 /**
  * Migration regression: widening plans.billing_period must not damage the tables
@@ -480,8 +485,8 @@ describe('licensed-terminal pricing migration', () => {
     // The never-priced seeded tier picks up the recommended model.
     const starter = rows.find((r) => r.code === 'vula-start')!;
     expect(starter.pricing_mode).toBe('per_terminal');
-    expect(starter.terminal_price_cents).toBe(50_000);
-    expect(starter.setup_fee_cents).toBe(1_000_000);
+    expect(starter.terminal_price_cents).toBe(15_000);
+    expect(starter.setup_fee_cents).toBe(300_000);
 
     // The dead bundled columns are gone.
     const planColumns = (db.prepare('PRAGMA table_info(plans)').all() as Array<{ name: string }>).map(
@@ -584,5 +589,199 @@ describe('licensed-terminal pricing migration', () => {
     expect(columns).toContain('terminal_price_cents');
     expect(columns).not.toContain('price_cents');
     expect(columns).not.toContain('extra_terminal_price_cents');
+  });
+});
+
+/**
+ * The add-on model put `addons_json` on `invoices` — in the DDL, and (after the
+ * defect below was found) in the column migrations. A DDL line only reaches a
+ * database that does not have the table yet; every registry created before the
+ * add-on model keeps its old `invoices` and is migrated in place. For a while
+ * there was no `addInvoiceColumn('addons_json', …)` line, and because the invoice
+ * writer names the column unconditionally, an existing registry failed its next
+ * invoice with "no column named addons_json" — while the whole suite stayed green,
+ * because a fresh test database takes the shape from the DDL. Found on the live
+ * dev registry, 2026-10-10; this is the regression.
+ */
+describe('invoices.addons_json migration', () => {
+  let dbFile: string;
+  const originalDbPath = env.dbPath;
+
+  /** invoices as it was BEFORE the add-on model: no addons_json column. */
+  const OLD_INVOICES = `
+    CREATE TABLE companies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL UNIQUE,
+      billing_email TEXT NOT NULL DEFAULT '',
+      paid_through TEXT,
+      trial_ends_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE invoices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      company_id INTEGER NOT NULL,
+      invoice_number TEXT NOT NULL UNIQUE,
+      amount_cents INTEGER NOT NULL,
+      terminal_count INTEGER,
+      terminal_price_cents INTEGER,
+      setup_fee_cents INTEGER,
+      status TEXT NOT NULL DEFAULT 'pending',
+      due_date TEXT NOT NULL,
+      paid_date TEXT,
+      description TEXT,
+      purpose TEXT NOT NULL DEFAULT 'initial',
+      plan_code TEXT,
+      plan_name TEXT,
+      pro_rata_period TEXT,
+      subtotal_cents INTEGER,
+      vat_cents INTEGER,
+      vat_rate INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `;
+
+  beforeEach(() => {
+    dbFile = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'vula-cp-invoice-migration-')),
+      'registry.db',
+    );
+
+    const seed = new Database(dbFile);
+    seed.exec(OLD_INVOICES);
+    seed
+      .prepare("INSERT INTO companies (id, name, slug) VALUES (1, 'Urban Threads Retail Group', 'urban-threads')")
+      .run();
+    // A document raised before the add-on model existed.
+    seed
+      .prepare(
+        `INSERT INTO invoices (id, company_id, invoice_number, amount_cents, status, due_date, purpose)
+         VALUES (1, 1, 'VULA-2026-000001', 134400, 'paid', '2026-09-30', 'renewal')`,
+      )
+      .run();
+    seed.close();
+
+    (env as { dbPath: string }).dbPath = dbFile;
+    resetRegistryDb();
+  });
+
+  afterEach(() => {
+    resetRegistryDb();
+    (env as { dbPath: string }).dbPath = originalDbPath;
+    fs.rmSync(path.dirname(dbFile), { recursive: true, force: true });
+  });
+
+  it('adds the column to a registry that predates the add-on model', () => {
+    const columns = (
+      getRegistryDb().prepare('PRAGMA table_info(invoices)').all() as Array<{ name: string }>
+    ).map((c) => c.name);
+    expect(columns).toContain('addons_json');
+  });
+
+  it('raises an invoice with its add-on lines on a migrated registry', () => {
+    const addonsJson = JSON.stringify([
+      { key: 'invoice_import', label: 'Upload invoice (AI assisted)', cents: 9900 },
+    ]);
+    const invoice = createInvoice(1, 134400, new Date('2026-10-31T00:00:00.000Z'), 'VULA-2026-000002', {
+      addonsJson,
+      purpose: 'renewal',
+      description: 'Subscription renewal',
+    });
+
+    const stored = getInvoiceById(invoice.id);
+    expect(stored?.addons_json).toBe(addonsJson);
+  });
+
+  it('leaves a pre-add-on document alone rather than inventing lines for it', () => {
+    const old = getInvoiceById(1);
+    expect(old?.addons_json).toBeNull();
+    expect(old?.amount_cents).toBe(134400);
+    expect(old?.purpose).toBe('renewal');
+  });
+});
+
+/**
+ * A migration that rewrites entitlements must invalidate the licences already
+ * delivered. The health sweep only refreshes a licence whose delivery failed or
+ * that is half its offline window old (seven of fourteen days), so without this
+ * the fleet would trade for a week on entitlements the control plane no longer
+ * agrees with — and a store released in that window refuses features the client
+ * pays for. That is exactly how the split keys would have reached the demo fleet
+ * in the 2026-10-10 release: days late.
+ */
+describe('licence re-delivery after an entitlement migration', () => {
+  let dbFile: string;
+  const originalDbPath = env.dbPath;
+
+  beforeEach(() => {
+    dbFile = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'vula-cp-redelivery-')),
+      'registry.db',
+    );
+    (env as { dbPath: string }).dbPath = dbFile;
+    resetRegistryDb();
+    // A registry at the current schema — no old shape needed: what this test
+    // recreates is a PLAN that still bundles a chargeable feature, which is what
+    // every client's plan looked like before the unbundling.
+    const db = getRegistryDb();
+    db.prepare(
+      `INSERT INTO plans (code, name, max_stores, max_terminals_per_store, features_json,
+                          feature_prices_json, pricing_mode, terminal_price_cents,
+                          custom_amount_cents, setup_fee_cents, billing_period, sort_order)
+       VALUES ('bundled-tier', 'Bundled Tier', 5, 3,
+               '["advanced_reports","customer_credit","multi_store"]', '{}',
+               'per_terminal', 10000, 0, 300000, 'monthly', 1)`,
+    ).run();
+    db.prepare(
+      "INSERT INTO companies (id, name, slug, plan_id, paid_through, status) VALUES (1, 'Client', 'client', 1, '2030-01-01', 'active')",
+    ).run();
+    db.prepare(
+      `INSERT INTO stores (slug, name, vertical, kind, terminal_count, base_url, control_plane_token, company_id, licence_push_status)
+       VALUES ('branch', 'Branch', 'general', 'store', 2, 'http://branch.localhost:3299', 'tok', 1, 'ok')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO panels (company_id, slug, name, base_url, control_plane_token, licence_push_status)
+       VALUES (1, 'client-ho', 'Client Head Office', 'http://ho.localhost:3260', 'tok', 'ok')`,
+    ).run();
+  });
+
+  afterEach(() => {
+    resetRegistryDb();
+    (env as { dbPath: string }).dbPath = originalDbPath;
+    fs.rmSync(path.dirname(dbFile), { recursive: true, force: true });
+  });
+
+  it('queues the store and panel licences for delivery, then settles', () => {
+    // Restart against the populated registry: the split grant fires (the plan
+    // grants `customer_credit`, so it must grant `layby` too) and the bundled
+    // feature moves to the client as a paid add-on.
+    resetRegistryDb();
+    const db = getRegistryDb();
+    expect(
+      (db.prepare('SELECT licence_push_status AS s FROM stores WHERE slug = ?').get('branch') as
+        { s: string }).s,
+    ).toBe('pending');
+    expect(
+      (db.prepare('SELECT licence_push_status AS s FROM panels WHERE slug = ?').get('client-ho') as
+        { s: string }).s,
+    ).toBe('pending');
+
+    // The sweep delivers both and marks them ok. A second restart must not put
+    // them back in the queue: the migrations are no-ops once applied.
+    db.prepare("UPDATE stores SET licence_push_status = 'ok'").run();
+    db.prepare("UPDATE panels SET licence_push_status = 'ok'").run();
+    resetRegistryDb();
+    const again = getRegistryDb();
+    expect(
+      (again.prepare('SELECT licence_push_status AS s FROM stores WHERE slug = ?').get('branch') as
+        { s: string }).s,
+    ).toBe('ok');
+    expect(
+      (again.prepare('SELECT licence_push_status AS s FROM panels WHERE slug = ?').get('client-ho') as
+        { s: string }).s,
+    ).toBe('ok');
   });
 });
