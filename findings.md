@@ -1489,3 +1489,78 @@ future column needs a CHECK change, mirror optimed's rebuild choreography.
   a cross-reference in its task_plan.md so the workstream isn't lost.
 - **Uncommitted tree:** frontend components + CONTEXT.md batch in this
   repo — settle before F1 starts.
+
+## A warehouse is not a store with fewer tills (2026-10-09)
+
+Two traps, one caught by a test and one by reading the code it would have run.
+
+**The store cap must be skipped, not just uncounted.** Excluding warehouses from
+`countStoresForCompany` reads like the whole change, and it is not: `canAddStore` refuses when
+`storesUsed >= plan.max_stores`, so a client whose one allowed store exists would still have
+been refused a warehouse — the count would say 1 of 1 whether or not the warehouse was counted.
+The check now sits inside the store branch of the create route, with a comment saying why it is
+absent for warehouses. The test that caught it creates a shop on a one-store plan, asserts a
+second shop is refused, and then adds the warehouse.
+
+**`replaceTerminals([])` built invalid SQL.** On the tenant, replacing the terminal set ends by
+deleting device claims on tills that no longer exist:
+`DELETE FROM device_bindings WHERE till NOT IN (${placeholders})`. With zero terminals the
+placeholder list is empty, and `NOT IN ()` is a syntax error — so a warehouse's very first
+configure would have failed inside the transaction and rolled back, and the failure would have
+looked like a broken control plane. No tills at all means no claim can still be valid, so that
+case deletes every binding instead. Found by reading the call path, pinned by a tenant test
+(`internal.test.ts` — "clears the tills and their claims when a store becomes a warehouse").
+
+## A seed that drifted where no test could see it (2026-10-09)
+
+`SEED_PLANS` is what a fresh registry comes up with; the live registry's `plans` rows are what the
+office edited by hand on the Plans page. Those two had diverged — the seed said R500/till and
+R10 000 once-off, production says R100–R150/till with R3 000–R6 000 setup — and no test could
+have caught it, because every pricing test reads the *registry* rather than the seed, and
+`refreshSeedPlanDefaults` deliberately only fills plans whose rate is still 0. So the divergence
+was invisible until someone compared the two lists by eye.
+
+That design is right (re-pricing a live client is a commercial act, not a code deploy), and it has
+a consequence worth remembering: **when the price list changes, the seed must be changed too, by
+hand, in the same breath.** Seeding is the one path where the code and the selling price can drift
+apart silently. The fix is the numbers; the lesson is that they need a deliberate owner, and both
+now say so in a comment.
+
+## Two ways a feature can be free (2026-10-10)
+
+**The importer was never gated.** `src/routes/invoice-import.ts` mounted
+`authenticate, requireAdmin` and nothing else: with `AI_*` configured, every store had the
+supplier-invoice importer regardless of what its client pays — while the pricing page sells
+"Upload invoice (AI assisted)" at R99 a month. It is now `invoice_import`, its own key. Nothing
+was exploited and nothing broke; it simply grew without a gate because its sibling
+(`ai_assistant`) was gated and the route's own file never was. The lesson is the cheap one: a
+route that reads a capability's config is not thereby an entitled feature.
+
+**And a helper that looked generic was not.** The additive-migration pass builds `addColumn` from
+`PRAGMA table_info(stores)`; it is a *store* helper wearing a generic name. Adding a plans column
+with it ALTERed `stores` — the migration "succeeded", the wrong table grew a column, and the
+failure surfaced a step later as "table plans has no column named feature_prices_json". Caught by
+rehearsing against a copy of the live registry, which is the only reason it did not reach a boot
+loop. Plans now have `addPlanColumn`, and every database that ran the bad build drops the stray
+column. Worth remembering when the next column is added to a table that is not `stores`: read the
+guard, not the name.
+
+**A fresh test database is not a migrated one, and only the second kind can fail.** `addons_json`
+went onto `invoices` in the DDL and into the add-on model's writer, and every test stayed green — the
+in-memory schema is built from the DDL, so the column was simply there. Every registry in the wild is
+the *other* shape, and it takes the column migrations (`addInvoiceColumn`, guarded by
+`PRAGMA table_info`), which had no line for this column. The failure mode is worth remembering
+precisely because it is silent by construction: nothing fails at boot, nothing fails in tests, and the
+first symptom is an operator staring at "SQLITE_ERROR: table invoices has no column named
+addons_json" while trying to bill a client. The guard to keep: for every column added to a table that
+already exists in production, there must be an `addXColumn` line **and** a migration test that builds
+the pre-change shape by hand.
+
+**The roster is not the activation, and the field only travelled on one of them.** Wiring a branch
+runs `/configure` (pairing) → `POST /api/internal/branches` (activation) → `/branches/roster`
+(intended list). `kind` was on the roster payload only, and activation lands first, so the merchant's
+panel recorded a warehouse as a store — no error anywhere, just a shop-shaped row in the list the
+transfers screen sorts by. The same class as the earlier `addColumn`-on-the-wrong-table bug: a field
+that "obviously" travels with the store did not, because two payloads describe the same thing and only
+one was updated. Both now carry it, and the panel treats an absent kind as "leave the row alone"
+rather than "it is a shop".

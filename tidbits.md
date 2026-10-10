@@ -438,3 +438,56 @@ into that plan.
   the bind paths in `src/services/coolify.ts` with their tests
   (`vulaPaths.test.ts`, updated storage assertions), the runbook edits and the
   planning files. CP tests **361 green (29 suites)**, typecheck clean.
+- **The add-on model — one call left (owner, 2026-10-09).** The approved pricing page sells six
+  monthly add-ons (Head Office R99, AI Copilot R99, Upload invoice R99, Credit accounts R49,
+  Lay-by R49, E-commerce R49). The product can grant features from a plan's `features_json` but
+  cannot *price* one, so the billing half needs: per-feature prices on `plans`, the purchased set
+  on `company_subscriptions`, one invoice line per add-on, and the licence's `features[]` derived
+  from what the client bought. The call: **Lay-by and Credit accounts share `customer_credit`,
+  and Upload invoice and AI Copilot share `ai_assistant`** — the store's routes gate `laybys.ts`
+  and the AI router on those keys, so today four priced items are two entitlements. Either grow
+  `layby` and `invoice_import` as real keys (with a migration that grants them to every client
+  that already has the parent key, so no one loses a feature — and the store's routes move to the
+  new keys), or group the pairs on the page and price them as one. Recommended: split the keys —
+  a page that prices four things separately should be able to switch them off separately — but it
+  touches entitlements, so it is the owner's call, not a detail to slip in.
+- **Add-ons are not pro-rated (2026-10-10).** A terminal increase mid-period is charged for the
+  days left (`proRataForIncrease`); buying an add-on mid-period is not — it takes effect on the
+  next invoice. Deliberate for now (the pro-rata path is terminal-specific and the amounts are
+  small), but it means an add-on bought on the 2nd costs nothing until the next period, which an
+  operator may notice. Add it to `proRataForIncrease` when the office asks.
+- **The fleet's plans still BUNDLE features.** `vula-network` and friends include
+  `multi_store`, `customer_credit`, `layby` and so on at no extra cost, so a client on one cannot
+  be sold those as add-ons — the offer correctly hides what the plan already gives. The pricing
+  page's model is one rate plus add-ons, which means plans that bundle *nothing*; moving the fleet
+  there is a commercial decision per plan (strip the included features, let clients buy them), and
+  the mechanism now supports either shape. Worth doing deliberately before the next client is
+  onboarded on a bundled tier.
+- **A warehouse is exactly what Upload invoice is for (owner, 2026-10-10).** The owner asked whether
+  a Head Office could read supplier invoices; the honest answer is that the panel cannot (it holds no
+  stock) — but the **warehouse can, and that is the point of it**: a warehouse is a store, so it has
+  Purchasing, goods receiving, supplier returns and POs, and the importer is gated the same way there
+  as anywhere (`admin` + `invoice_import`, with nothing till- or session-shaped in the way — the only
+  `hasTerminals()` checks in the store are the register's PIN switch and the cash-up). The full flow
+  is therefore: read the supplier invoice at the warehouse → GRV (stock lands in the warehouse) →
+  inter-branch transfer to the branches. And because the add-on is bought once per CLIENT and its
+  licence reaches every store of that client, one tick covers the warehouse *and* every branch — which
+  is the strongest argument for pricing it per client rather than per branch.
+- **The roster push can mint head-office tokens the deployments never learn (2026-10-10).**
+  `pushStoreListToPanel` mints a `head_office_token` for any of the company's stores that lacks one,
+  with the comment "the branch picks it up on its next configure push". It does not: only
+  `wireStoreToHeadOffice` sends the `headOffice` block, and a roster push does not call it. Standing up
+  the warehouse minted fresh tokens for Kloof's three branches, whose deployments and panel rows hold
+  older, working ones — harmless today, but **registering a branch from that roster records a token its
+  store does not hold** (the "healthy branch shows Offline" failure), and nothing in the API can
+  reconcile a store's head-office credential *from* its deployment the way `PUT /stores/:id` reconciles
+  `controlPlaneToken`. Two options before the next fleet reseed: mint only inside the wiring path, or
+  add the reconcile input. Do not simply re-wire those branches as a "repair" — that would rotate the
+  tokens the panel's registered rows are using.
+- **A demo client that has never paid cannot sell, on purpose (2026-10-10).** The state machine is
+  deliberate ("never paid anything, with no trial, is not active"), and it means the local fleet's
+  stores refuse new sales the moment they hold a real licence — which is why the demo looked fine
+  while six of them were unknowingly unlicensed (fail-open). The dev registry's companies 1–6, 8 and 9
+  now each carry a paid renewal invoice and `paid_through` 2026-11-10. Worth keeping in mind before
+  demoing "a client who has not been billed yet": their stores will not ring a sale, and that is the
+  product working.

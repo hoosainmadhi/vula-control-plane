@@ -762,3 +762,30 @@ run as the tenant workstream in parallel.
       CP-vs-HO token isolation suites. *Partially covered:* the new
       orchestration suite covers fail-truthfully, UUID persistence +
       retry-without-duplicates, two-way wiring, and warnings-not-fake-success.
+
+## Phase set (2026-10-10): the add-on model, complete
+
+Owner: *"split the keys"*, then *"but all of these are chargable"* — the plans sell features per
+month, nothing chargeable is bundled, and what a client buys is snapshotted at the price agreed.
+
+- [x] **A1 The three-layer entitlement model.** `plans.features_json` (included),
+      `plans.feature_prices_json` (what this plan sells an add-on for),
+      `company_subscriptions.features_json` + `addon_prices_json` (what the client bought, at the
+      price agreed then). `effectiveFeatures(plan, subscription)` is the one derivation, and it is
+      what every licence carries.
+- [x] **A2 Eight keys, six chargeable.** `layby` and `invoice_import` split out of their parents and
+      granted by migration to every client that already had the parent (verified against a snapshot:
+      all eleven clients' entitlement sets unchanged). A chargeable feature may not be bundled by a
+      plan — refused by name at both plan write paths.
+- [x] **A3 Billing follows the client, not the plan.** One invoice line per add-on, prices
+      snapshotted, editing a plan re-prices nobody, `requireSellableFeature` gates multi-store on
+      buying the Head Office add-on.
+- [x] **A4 The office sells them in both UIs.** Plans page: an **Add-ons** price block (only what the
+      plan does not include) and an *Included* statement. Clients wizard and the subscription editor:
+      the add-on ticks, with the plan's prices, forced Head Office for multi-store.
+- [x] **A5 Two defects found by using it (2026-10-10, warehouse demo).**
+      `invoices.addons_json` had a DDL line and no column migration — every existing registry failed
+      its next invoice; fixed with the migration and three tests against a pre-add-on shape. And
+      `kind` travelled on the roster but not on branch activation, so the panel filed a warehouse as a
+      shop; both payloads carry it now, with the panel leaving an absent kind alone.
+      CP 376 tests, panel 97, store 656.

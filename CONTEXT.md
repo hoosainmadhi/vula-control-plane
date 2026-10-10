@@ -23,7 +23,8 @@ implementation `~/apps/optimed-control-plane`. Vocabulary here is _store_
 | store               | One fleet member: a deployed Vula instance with its own DB, reachable at its `base_url`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | slug                | URL-safe unique store id: `^[a-z0-9][a-z0-9-]*$`, ≤ 40 chars, lowercase. Immutable after creation (it names the deployment, so renaming would orphan the store's identity)                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | terminal / Till N   | A register device at a store. Terminal N is configured by a successful push that covers `till N`. V1 terminals are generated `Till 1..N` (names may later become custom)                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| terminal_count      | Desired terminal count, 1–99. Owned by the control plane; pushed to the store via `/api/internal/configure`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| kind                | `store` (default) · `warehouse`. A warehouse holds stock and transfers it out; it **does not consume the plan's store allowance** and runs **no tills** (`terminal_count` 0), so it draws no licensed terminals. Owner decisions, 2026-10-09. Additive column on `stores`; the store's own deployment learns it on every configure |
+| terminal_count      | Desired terminal count, 0–99. Owned by the control plane; pushed to the store via `/api/internal/configure`. The minimum is 1 for a store and 0 for a warehouse (a CHECK enforces 0–99; the API enforces which kind may use which)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | vertical            | Store type: `general` (default) · `clothing` · `spares` · `hardware` · `pharmacy` · `restaurant`. Tenant vocabulary (`settings.vertical` on the store — same values in `~/apps/za-pos/src/services/vertical.ts`). Owned by the control plane; pushed on every configure and applied by the store (which seeds the type's starter category pack). 2026-09-03: `supermarket` merged into `general`; `hardware` added. 2026-09-04: `pharmacy` added (starter pack only on the tenant — schedule-grouped categories). 2026-09-11: `restaurant` added (starter pack only on the tenant — menu categories; tables/KDS are P5–P7) |
 | push                | The CP → store call that applies the terminal configuration. Create attempts a **first push**; afterwards pushes are explicit only (PUT edits never auto-push)                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | config snapshot     | The store's response body from the last successful push, stored as `last_config_snapshot_json`; drives the "configured" ticks in the terminal preview                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -373,7 +374,7 @@ advertise the surface.
 
 | Endpoint                         | CP client fn    | Request                                                                                                                                                                           | Response (2xx)                                                                                                                               |
 | -------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/internal/configure`   | `pushTerminals` | `{ terminalCount: N, vertical: "general"\|"clothing"\|"spares"\|"hardware"\|"pharmacy"\|"restaurant"\|"custom", terminals: [{ till: 1, name: "Till 1" }, …, { till: N, name: "Till N" }], name: "<store display name>" }` — the `name` (2026-10-02) is the CP's registry name for the store; the store applies it to its own `store_name` so the register header and receipts show the trading name instead of the tenant's factory default | `{ ok: true, applied: { terminalCount: N, terminals: [...] } }` — full body is stored as the config snapshot                                 |
+| `POST /api/internal/configure`   | `pushTerminals` | `{ terminalCount: N, vertical: "general"\|"clothing"\|"spares"\|"hardware"\|"pharmacy"\|"restaurant"\|"custom", kind: "store"\|"warehouse", terminals: [{ till: 1, name: "Till 1" }, …, { till: N, name: "Till N" }], name: "<store display name>" }` — the `name` (2026-10-02) is the CP's registry name for the store; the store applies it to its own `store_name` so the register header and receipts show the trading name instead of the tenant's factory default. `kind` (2026-10-09) tells the store whether a zero terminal count is a warehouse or a mistake: the tenant accepts 0 **only** when the deployment says `warehouse`, and refuses it otherwise | `{ ok: true, applied: { terminalCount: N, terminals: [...] } }` — full body is stored as the config snapshot                                 |
 | `GET /api/internal/status`       | `ping`          | —                                                                                                                                                                                 | any JSON describing the app, e.g. `{ ok, storeName, vertical, version, terminalCount, terminals }` — **no `vatRegNo` since 2026-09-12**: merchant tax data never leaves the merchant plane (§40). **Two licence-technical fields are read by the CP since 2026-09-16** (neither is merchant data): a store reports the licence it holds as `subscription: { sequence, … }`, a Head Office as `licence: { sequence, … }`. Nothing else in this payload is parsed |
 
 `POST /api/internal/configure` also accepts an optional `headOffice` block:
@@ -449,10 +450,36 @@ and push _outcomes_ are recorded on the registry row regardless.
 
 `plans` — the catalogue (source of truth for the DDL is `src/config/registryDb.ts`):
 `code` (unique, immutable), `name`, `max_stores`, `max_terminals_per_store`,
-`features_json`, `pricing_mode` (`per_terminal` | `custom`), `terminal_price_cents`,
-`setup_fee_cents`, `billing_period`, `is_active`, `sort_order`, timestamps. All
-money is integer cents with a `>= 0` CHECK; a `per_terminal` plan must carry a rate
-above zero (refused at the API).
+`features_json` (what the plan INCLUDES at no extra cost), `feature_prices_json`
+(what each paid add-on costs per month on this plan), `pricing_mode`
+(`per_terminal` | `custom`), `terminal_price_cents`, `setup_fee_cents`,
+`billing_period`, `is_active`, `sort_order`, timestamps. All money is integer cents
+with a `>= 0` CHECK; a `per_terminal` plan must carry a rate above zero (refused at
+the API).
+
+### The add-on model (2026-10-10)
+
+The pricing page sells a per-till rate plus six monthly add-ons, so entitlement and
+**price** are now separate facts:
+
+- **`services/features.ts` owns the vocabulary** — eight keys, and the contract both
+  applications read: `customer_credit`, `layby`, `advanced_reports`, `multi_store`,
+  `stock_transfers`, `ecommerce_bridges`, `ai_assistant`, `invoice_import`.
+  `layby` and `invoice_import` were split out on 2026-10-10: lay-bys were implied by
+  `customer_credit`, and the importer had **no gate at all** on the store.
+- **A plan includes some features and prices others.** A feature the plan lists in
+  `features_json` is the client's already and is never billed again; a feature in
+  `feature_prices_json` is an add-on the office can sell on that plan. A price of 0
+  means "not sold here" and is dropped rather than stored as free.
+- **A subscription records what was BOUGHT** (`company_subscriptions.features_json`)
+  with the price agreed for each (`addon_prices_json`). Buying an add-on is agreeing
+  a price, so the price is snapshotted at that moment — like the terminal rate,
+  editing the plan afterwards re-prices nobody.
+- **The licence carries the union** (`effectiveFeatures`): plan-included features plus
+  what the client bought. That list is the only thing the applications gate on.
+- **The invoice itemises it**: one line per add-on (label, price), snapshotted onto
+  the invoice as `addons_json`; the recurring total is terminals × rate + the add-ons.
+  Add-ons are not pro-rated mid-period (see `tidbits.md`).
 
 `company_subscriptions` — one row per client: `company_id` (UNIQUE),
 `licensed_terminal_count` (>= 0), `setup_fee_status`

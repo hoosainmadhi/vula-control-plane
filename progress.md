@@ -2450,3 +2450,298 @@ command, Coolify still builds four at a time, and the rebuild happens when
 someone chooses it. Verified: `vula-website` reads `auto_deploy=true`, the
 stores and Head Office read `false`, and the push carrying this note queued
 nothing.
+
+## 2026-10-09 — warehouses: a store that doesn't sell
+
+Owner question ("HO: IBT should we have warehouse to branch transfer"), then the two
+decisions that shape it: a warehouse **does not consume the plan's store allowance**, and it
+**runs no tills**. The transfer machinery never needed them — a transfer's two ends are
+`stores` rows and the branch-side dispatch works on the *calling* store's own catalogue by SKU
+(decrement with an oversell refusal) — so the work was the label and its consequences, not the
+movement.
+
+**Schema.** `stores.kind` (`'store' | 'warehouse'`, default `'store'`) as an additive column,
+with the DDL updated too. `terminal_count`'s CHECK relaxed from `BETWEEN 1 AND 99` to
+`BETWEEN 0 AND 99` — SQLite cannot alter a CHECK, so the existing `rebuildTable` helper does a
+guarded one-off rebuild (probed from `sqlite_master`, copying the **live** column list into the
+now-complete `STORES_DDL`). Rehearsed against a `.backup` copy of the live registry before
+anything else: 64 stores in, 64 out, identical row checksum, 64 terminal licences intact,
+`foreign_key_check` silent, every column present, and 0 accepted while 100 and -1 are still
+refused.
+
+**Rules.** `countStoresForCompany` counts `kind = 'store'` only; the store-cap check is
+**skipped** (not merely satisfied) for a warehouse, because a plan whose selling stores have
+used the allowance would otherwise refuse the client's own back-of-house; a warehouse draws no
+terminal allocation; `checkConfiguredTerminals` accepts 0 for a warehouse and nothing but ≥1
+elsewhere; the orchestrator deploys a warehouse with `terminalCount: 0` (its `|| 1` would have
+handed it a till); the store form offers Store/Warehouse and hides the terminal count; and the
+configure payload carries `kind` on the wire — a tenant contract change, flagged for `za-pos`
+below. The branch roster carries `kind` too, so the merchant's panel takes the label from the
+control plane rather than asking for it again.
+
+**Tenant side (flagged, done the same day in `~/apps/za-pos`):** `/api/internal/configure`
+accepts `terminalCount: 0` **only** when the payload says `kind: "warehouse"` — a store
+configured with no tills would quietly drop the device-claim enforcement — and the panel's
+branch row, Stores badge and Transfers source list gained the same idea. `CONTEXT.md` documents
+both (§glossary `kind`, the configure contract row).
+
+Tests: 365 backend (+4 warehouse rules) and 24 UI (+2 form), typecheck clean.
+
+## 2026-10-09 — the plan seed catches up with the prices we actually charge
+
+The plan catalogue in code had drifted from the catalogue we sell: `SEED_PLANS` still seeded
+every tier at **R500/till and R10 000 once-off**, while the live registry's rows — priced by
+hand on the Plans page — say **R100–R150/till with R3 000–R6 000 setup**. Nothing broke, and
+that is the point of the finding below: `refreshSeedPlanDefaults` only fills plans that are still
+*unpriced*, so a fresh registry would have come up quoting R500/till to a new client while
+production says R100–R150.
+
+`SEED_PLANS` now carries the live rates, setup fees and the operator's sort order, with a comment
+naming the rule: these numbers are the approved prices, and the Plans page (not this seed) is how
+an existing client's price changes — a live client's price is a snapshot, never a re-derivation.
+
+Repricing the seed moved 20 assertions across five suites (billing, pricing, subscription,
+companies, migration), which is the measure of how deeply the old figures were baked in. Where a
+test is about the *arithmetic* (quantity × rate, the once-off added once) it now derives from the
+payload's own `rateCents`/`setupFeeCents`, so the next price change touches one place — the seed —
+instead of five files; where a test pins a *price*, it states the new number with the plan it came
+from. 365 tests green, typecheck clean.
+
+**Still to do — the add-on model (owner picked it, one call outstanding).** The approved pricing
+page sells six monthly add-ons, and the product can only *grant*, not *bill*, features: a plan's
+`features_json` is a list with no price, so an invoice has no line for "Head Office R99". Adding
+that means per-feature prices on the plan, the purchased set on the client's subscription, a line
+per add-on on the invoice, and the licence's `features[]` coming from what was bought. The one
+call: two of the six add-ons have **no distinct entitlement** behind them today —
+`laybys.ts` gates on `customer_credit` (so "Lay-by" and "Credit accounts" are one key) and the AI
+routes gate on `ai_assistant` (so "Upload invoice" and "AI Copilot" are one key). Either the
+product grows `layby` and `invoice_import` keys — with a migration granting them to every client
+that already has the parent key, so nobody loses a feature they have — or the page groups those
+pairs into one priced item. Recorded in `tidbits.md`.
+
+## 2026-10-10 — the keys are split, and the add-ons can be sold
+
+Owner: **"split the keys"** — the call I asked for. The pricing page sells six monthly add-ons, and
+the product could only *grant* features: a plan's `features_json` was a list with no prices, so an
+invoice had no line for "Head Office R99". Two of those six had no entitlement of their own —
+lay-bys were gated on `customer_credit`, and the supplier-invoice importer was gated on **nothing
+at all** (with an AI key configured, anyone had it, while the page sold it at R99).
+
+**The vocabulary grew to eight keys.** `layby` and `invoice_import` join `services/features.ts` —
+the curated contract both applications read — with labels, descriptions and where each is
+enforced. Every plan that already granted the parent keeps granting the child: the migration only
+ever ADDS, so no client loses a feature, and a plan's own list is otherwise left exactly as the
+office set it.
+
+**A plan now prices its add-ons** (`feature_prices_json`, seeded from the approved page: R99 for
+Head Office / AI Copilot / Upload invoice, R49 for Credit accounts / Lay-by / E-commerce), and the
+Plans page edits them via `PUT /api/plans/:id`. **A subscription records what the client bought**
+(`features_json` + an agreed-price snapshot in `addon_prices_json`), bought through the client
+editor (`PUT /clients/:id` and `/companies/:id`) — each add-on listed with its price, ticking one
+snapshots the price at that moment, because buying an add-on IS agreeing a price. **An invoice
+itemises them** (`addons_json` on the invoice, one line each in the PDF and the email) and the
+recurring total includes them, since every money path reads `quoteForSubscription`. **The licence
+carries the union** — plan-included features plus what was bought — through the one place the two
+are combined (`effectiveFeatures`).
+
+The office's client card shows the add-ons and their monthly cost, and the subscription editor
+offers the ones the plan prices but does not already include — selling a client what they already
+have is not a thing the UI should offer.
+
+**Two things the rehearsal caught, which is why it is run.** The additive pass's `addColumn`
+helper guards on `PRAGMA table_info(stores)` — it is store-specific — so using it for a *plans*
+column silently ALTERed `stores` instead, and the next boot failed with "table plans has no column
+named feature_prices_json". Plans now have their own adder, and any database that ran the bad
+build drops the stray column on boot (the treatment `vat_reg_no` got when it stopped belonging on
+a store row). Rehearsed against a `.backup` copy of the live registry — which was itself
+half-migrated, because the dev control plane's watch mode had already applied the earlier edits:
+all 8 plans end up priced, every credit plan gains `layby`, the two AI plans gain
+`invoice_import`, rates are untouched, and all 11 subscriptions keep exactly what they had.
+
+**Tenant side (done in `~/apps/za-pos` the same day):** `laybys.ts` gates on `layby`,
+`invoice-import.ts` on `invoice_import` (it had no gate), the register's nav gates Lay-buys on
+`layby`, and `CONTEXT.md` records the vocabulary. CP tests 369 (+4), UI 24, typecheck clean.
+
+**Same day — the plan form was missing its half.** The owner went to create a new plan and found no
+Add-ons block: the price fields existed on the *client's* subscription editor, but a plan could not
+be given prices through the UI at all, and `POST /api/plans` did not read or store them either
+(`createPlan` had no `feature_prices_json` in its INSERT). A plan's add-on prices could therefore
+only be set by editing an *existing* plan. Fixed on both paths: create now validates and stores
+`featurePrices` (an unknown key is refused by name), and the form has an **Add-ons** section
+listing the six priced features with a price each — hiding any feature the plan already includes,
+because a price on an included feature is a price nobody ever pays. A new plan also now starts from
+the approved prices rather than the retired seed's (R99 a till, R5 000 assisted set-up, R99/R49
+add-ons), and a plan that prices nothing is legal — it bundles everything it offers.
+
+Verified through the UI on the local control plane: created a plan, confirmed the six prices in the
+registry, deleted it again (8 plans, as before). CP 370 tests (+1) and 24 UI, typecheck clean.
+
+**Same day — the office speaks the page's language now.** Owner, looking at the Plans form: *"cp and
+marketing dont match... upload invoice should have ai assisted"*. Two separate faults behind one
+symptom:
+
+- **The names disagreed.** The CP named the same six features "Customer credit", "Multi-store",
+  "E-commerce bridges", "AI assistant", "Stock transfers", "Invoice import" — while the pricing page
+  (and the invoice lines, which already used those words) said "Credit accounts", "Head Office",
+  "E-commerce", "AI Copilot", "Inter-branch transfers", "Upload invoice **(AI assisted)**". A
+  client reading an invoice saw one name and the office setting the price saw another. The
+  vocabulary's labels now ARE the page's words, and `FEATURE_LABELS` (the invoice/quote map) is
+  *derived* from them, so the two can never drift again.
+- **The plan form's own feature toggles listed only six keys** — a static `FEATURE_KEYS` in the
+  frontend predating `layby` and `invoice_import` — so the office could not mark a plan as
+  including either, and the toggles were the last place a hand-maintained vocabulary lived. Both
+  keys are listed now, and the form's names are fetched from `GET /plans/features` instead of a
+  local copy; the local maps are deleted. One source, eight keys, page words.
+
+Verified in the running UI: the form's toggles read Credit accounts · Advanced reports ·
+E-commerce · Head Office · Inter-branch transfers · AI Copilot · Lay-by · Upload invoice (AI
+assisted), and the add-on rows read Head Office · AI Copilot · Upload invoice (AI assisted) ·
+Credit accounts · Lay-by · E-commerce — the last four words identical to the pricing page. CP 370
+tests + 24 UI green, typecheck clean.
+
+**The same afternoon — three more from the owner's read of the Plans screen.** *"is marketing updated
+as well: Upload invoice AI assisted / should CP plan not also show total price / features included in
+plan should be separated and not something to choose."*
+
+1. **The page now uses the same words as the office** — "Upload invoice (AI assisted)" in the add-on
+   card *and* in the quote builder's toggle (the builder reads its lines from `data-label`, so the
+   quote a customer receives says it too). It had said "Upload invoice" with a separate "AI assisted"
+   chip, which is the same mismatch the vocabulary change was about, one turned the other way.
+2. **A plan row states its total.** Rate and once-off were there; now the row adds the one total a
+   catalogue row can state honestly — the plan at ITS OWN ceiling, since the billable quantity
+   belongs to each client: *"R 150,00 / month at 1 terminal per store · + R 444,00 if every add-on is
+   taken"*. Both figures are arithmetic on the plan's own fields (`PlanTotalLine`).
+3. **Features are a statement, not a picker.** The per-plan toggle list is gone. The form now reads
+   *"Every plan includes Advanced reports · Inter-branch transfers — the product's own capabilities,
+   not a per-plan choice"*, and for a tier that bundles — Vula Start is one — *"This plan also
+   includes Credit accounts · E-commerce · Lay-by — its clients have these without buying them, so
+   they are not priced below"*. Nothing is chosen; what a plan SELLS is the Add-ons block. Which keys
+   are add-ons now comes from the vocabulary's `soldMonthly` (served by `GET /plans/features`), so the
+   frontend's last hand-kept feature list is gone. A new plan is created including the base set and
+   pricing the six add-ons at the vocabulary's defaults; **editing a plan never rewrites its features**,
+   so the tiers that bundle keep doing so for the clients already on them.
+
+Verified in the running UI: Vula Start's row shows the new total line; its edit form shows the three
+included bundles and offers add-ons for the three it does not include; a new plan shows the base set
+and all six add-ons. CP 370 tests + 24 UI green, typecheck clean, marketing rebuilt.
+
+**Evening — the six are chargeable, so no plan may bundle them.** Owner, reading the page: *"but all
+of these are chargeable"* with the six add-on cards. He was right, and the CP was the side that
+disagreed: **every tier bundled three to six of them** (Vula Network all six, Vula Start three), so
+its clients were getting Credit accounts, Lay-by, E-commerce, Head Office, AI Copilot and Upload
+invoice for nothing while the page sells them at R49/R99 a month. Nothing bought a single add-on
+(`bought=[]` on all eleven clients).
+
+Three changes, and a rule behind them:
+
+- **A plan may not include a chargeable feature.** Refused by name at both plan write paths —
+  *"customer_credit is chargeable — price it as an add-on instead of including it in the plan"* —
+  so the office cannot reintroduce a bundle. A plan's `features_json` is the product's base set;
+  what it SELLS is `feature_prices_json`.
+- **The existing bundles became PURCHASED add-ons.** The migration moves each plan's bundled
+  chargeable features onto each of its clients as add-ons at the plan's own price, then strips them
+  from the plan. Nobody loses a feature; the client starts paying for what the page sells.
+  **Verified against a snapshot taken before it ran: all eleven clients' entitlement sets are
+  identical before and after**, and the monthly consequence is now explicit — Urban Threads +R444
+  (all six), Cresta Grocers and Street Gym +R246, four clients +R197, three +R147, Builders Hardware
+  +R98.
+- **Multi-store topology IS the Head Office add-on** — the deep end of this change. The wizard's
+  and the upgrade's gate was "does the plan include `multi_store`", which is now "does the plan SELL
+  it", and choosing multi-store **buys** it for the client (at the plan's price, audited) *before*
+  its stores and Head Office exist, so the licences that follow carry it. A plan that prices nothing
+  cannot offer the topology at all.
+
+New plans are created including the base set and pricing the six at the vocabulary's defaults, and
+editing a plan never rewrites its features — so the tiers that were mid-life keep their clients
+whole through the migration above.
+
+Tests updated to the new model (six assertions across three suites: what a plan includes, what a
+licence carries, what a new plan may be created with), plus a test that a chargeable feature cannot
+be bundled and its refusal says so. CP 371 tests (+1) and 24 UI green, typecheck clean, UI rebuilt.
+
+**Same evening — choosing an add-on, and the wizard was missing it.** The owner, testing: *"now i can
+choose an addon?"* and *"i cant choose plgin when creating a new client"*. Two answers, one of them a
+bug of mine.
+
+- **Where you choose one:** the client, not the plan — *Clients → a client → Edit subscription →
+  Add-ons*, six ticked rows priced from that client's plan. Verified in the UI: HM Spares shows R297
+  a month with its three migrated add-ons ticked (Credit accounts, Lay-by, E-commerce).
+- **A bug found while checking:** the add-on block had been inserted into the **Edit Client** modal
+  instead of the **subscription editor** (my anchor matched the wrong `<select>`), and the Edit
+  Client modal never sends `features` — so ticking there looked like it worked and did nothing. Moved
+  to the subscription editor, where the state is seeded from the client's add-ons and the save sends
+  them.
+- **The wizard now sells add-ons too.** *New Client → step 1* offers the six the chosen plan prices,
+  and `POST /api/clients` accepts them: bought before any store exists, so the licences that follow
+  carry them. A multi-store deployment buys Head Office whether or not it was ticked — the topology
+  needs the capability — and the wizard shows that row forced. An add-on the plan does not sell is
+  refused by name *before* the company row is created.
+
+CP 373 tests (+2: the onboarding purchase and the refusal) and 24 UI green, typecheck clean, UI
+rebuilt.
+
+**Where the two AI add-ons actually live (owner's question, 2026-10-10):** *"is there AI copilot or
+similar for single stores - not upload invoice / is there upload invoice Ai assisted for HO?"*
+
+Checked the code rather than assume, and the answer is a useful pair of facts:
+
+- **AI Copilot is a STORE capability, and single stores have it.** It is the store's own assistant —
+  *Dashboard → Ask AI* → `/api/ai/*`, admin-only, gated on `ai_assistant` — answering from that shop's
+  own figures, and it needs no Head Office. It is its own key, separate from the importer, so a client
+  can buy the assistant without Upload invoice (the distinction the owner was drawing). One extra
+  thing worth knowing: the **same key lights the panel's "Executive Retail AI Copilot"** (the panel
+  has its own `/ai/ask`, which asks across branches), so for a group client one R99 add-on gives both
+  surfaces. The vocabulary's `enforcedBy` said `store` only for `ai_assistant` — corrected to include
+  `head-office`, since that gate is real.
+- **Upload invoice is a BRANCH capability, and a Head Office cannot use it — by design.** The importer
+  drafts a **goods receipt**; stock lives in each branch's own database and the panel holds none (it
+  reads branches live), so the panel has nothing to receive into and has no such screen. The panel's
+  licence does carry the key (it holds the client's entitlements), but nothing consumes it there.
+  Commercially the useful part: it is bought **once per client**, not per branch — the licence reaches
+  every store of that client, so one tick enables the importer in each of their branches' Purchasing
+  screens.
+
+Both descriptions in the vocabulary now say this, so the office reads the same thing.
+
+## 2026-10-10 — the warehouse demo, and two defects it walked straight into
+
+Standing up the `central-dc` warehouse instance (store repo's `progress.md` has the demo side) put
+the first real invoice through this registry in days — and it failed. Two defects, both fixed and
+pinned:
+
+- **`invoices.addons_json` was in the DDL and in no column migration.** The invoice writer names the
+  column unconditionally, so an existing registry (every real installation, including the live dev
+  one) failed with "no column named addons_json" on its *next* invoice; only fresh test databases had
+  it, which is why 373 green tests said nothing. `addInvoiceColumn('addons_json', …)` plus three
+  migration tests that boot against a **pre-add-on** database shape — including that a document raised
+  before the model keeps `NULL` rather than being given invented add-on lines.
+- **A warehouse was filed as a shop when it was activated in its panel.** The kind travelled on the
+  roster push but not on `POST /api/internal/branches` (activation), which runs first — so Central DC
+  arrived in the Kloof panel as `kind: store`, and the transfers screen sorts sources by exactly that.
+  `registerBranchWithPanel` now sends it (with `wireStoreToHeadOffice` passing `store.kind`), and the
+  panel stores it, keeping the existing kind when an older control plane omits the field.
+
+Then the demo itself: the company's three Kloof branches and the new warehouse all hold a verified
+**active** licence, `invoice_import` was bought for the client (one tick, R99, snapshot at the agreed
+price, one invoice line), and the importer read a real supplier PDF — four lines, each matched to a
+catalogue product by SKU. Registered as store 69: `kind: warehouse`, `terminalCount: 0`, no terminal
+allocation, `headOfficeWiring: wired` on the first try once the deployment was up.
+
+Also repaired on the live dev registry, because licensing could not be trusted without it: companies
+1–6, 8 and 9 had never paid and had no trial, so their state was `suspended` **by design** — meaning
+the moment their stores held a real licence they would refuse to sell. Each now has a paid renewal
+invoice (plan rate, add-ons at agreed prices, setup fee where still unbilled) and `paid_through`
+2026-11-10. CP backend 376 tests (+3), typecheck clean.
+
+One more thing fell out of planning the release itself. The two entitlement
+migrations change what clients are entitled to, and **nothing re-delivered the
+licences they had already been given**: the health sweep refreshes a licence only
+when the last delivery failed or the licence is half its offline window old
+(seven of fourteen days). So the split keys would have reached the demo fleet's
+registers about a week after the stores were deployed, and a store released in
+that window would refuse features its client is paying for. The migrations now
+queue the delivered licences (`licence_push_status = 'pending'` on every store and
+panel), which puts them in the next sweep — ten minutes — and settles once
+applied, so a second boot does not re-queue a delivered licence. Pinned by a
+migration test that seeds a plan still bundling a chargeable feature, restarts
+against it and asserts both the queueing and the settling.
