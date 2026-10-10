@@ -37,6 +37,7 @@ export function StoreFormModal({ modal, saving, error, companies, onClose, onSub
           name: editing.name,
           slug: editing.slug,
           vertical: editing.vertical,
+          kind: editing.kind ?? 'store',
           baseUrl: editing.baseUrl,
           terminalCount: String(editing.terminalCount),
           tillNames: editing.terminalNames ?? [],
@@ -148,23 +149,50 @@ export function StoreFormModal({ modal, saving, error, companies, onClose, onSub
           </select>
         </div>
         <div>
-          <label className={labelCls}>Configured terminals (1–99)</label>
-          <input
-            required
-            type="number"
-            min={1}
-            max={99}
-            value={form.terminalCount}
-            onChange={(e) => setForm({ ...form, terminalCount: e.target.value })}
+          <label className={labelCls}>What this location is</label>
+          <select
+            value={form.kind}
+            onChange={(e) =>
+              setForm({
+                ...form,
+                kind: e.target.value as 'store' | 'warehouse',
+                // A warehouse runs no tills, and the API refuses any other
+                // number — so the form stops asking (owner decision, 2026-10-09).
+                terminalCount: e.target.value === 'warehouse' ? '0' : form.terminalCount === '0' ? '1' : form.terminalCount,
+              })
+            }
             className={inputCls}
-          />
-          <p className="mt-1 text-xs text-slate-400">
-            The till slots this store runs (pushed as Till 1..N).{' '}
-            {editing && editing.licensedTerminalCount !== undefined
-              ? `Bounded by the store's ${editing.licensedTerminalCount} licensed terminal${editing.licensedTerminalCount === 1 ? '' : 's'} — raise the licence on the client's subscription first.`
-              : "For a client-owned store this cannot exceed its licensed terminals."}
-          </p>
+          >
+            <option value="store">Store — sells at the till</option>
+            <option value="warehouse">Warehouse — holds stock, transfers it out, no tills</option>
+          </select>
+          {form.kind === 'warehouse' ? (
+            <p className="mt-1 text-xs text-slate-400">
+              A warehouse does not use up the client's store allowance and runs no tills.
+              Stock enters by goods receiving and leaves by inter-branch transfer.
+            </p>
+          ) : null}
         </div>
+        {form.kind === 'warehouse' ? null : (
+          <div>
+            <label className={labelCls}>Configured terminals (1–99)</label>
+            <input
+              required
+              type="number"
+              min={1}
+              max={99}
+              value={form.terminalCount}
+              onChange={(e) => setForm({ ...form, terminalCount: e.target.value })}
+              className={inputCls}
+            />
+            <p className="mt-1 text-xs text-slate-400">
+              The till slots this store runs (pushed as Till 1..N).{' '}
+              {editing && editing.licensedTerminalCount !== undefined
+                ? `Bounded by the store's ${editing.licensedTerminalCount} licensed terminal${editing.licensedTerminalCount === 1 ? '' : 's'} — raise the licence on the client's subscription first.`
+                : "For a client-owned store this cannot exceed its licensed terminals."}
+            </p>
+          </div>
+        )}
         {editing && (
           <div>
             <label className={labelCls}>

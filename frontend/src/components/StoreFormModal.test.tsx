@@ -108,6 +108,35 @@ describe('StoreFormModal — editing an existing store', () => {
   });
 });
 
+describe('StoreFormModal — a warehouse runs no tills (owner decision, 2026-10-09)', () => {
+  it('hides the terminal count and sends zero when the kind is warehouse', () => {
+    const { onSubmit } = renderModal();
+
+    fireEvent.change(screen.getByDisplayValue('Store — sells at the till'), {
+      target: { value: 'warehouse' },
+    });
+    // The field is gone: the API refuses any count but 0 for a warehouse, so the
+    // form stops asking rather than offering a value that will be rejected.
+    expect(screen.queryByRole('spinbutton')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    const values = onSubmit.mock.calls[0][0];
+    expect(values.kind).toBe('warehouse');
+    expect(values.terminalCount).toBe('0');
+  });
+
+  it('gives a till back when a warehouse becomes a store', () => {
+    const { onSubmit } = renderModal();
+    const select = screen.getByDisplayValue('Store — sells at the till');
+
+    fireEvent.change(select, { target: { value: 'warehouse' } });
+    fireEvent.change(select, { target: { value: 'store' } });
+    expect((screen.getByRole('spinbutton') as HTMLInputElement).value).toBe('1');
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(onSubmit.mock.calls[0][0].terminalCount).toBe('1');
+  });
+});
+
 describe('StoreFormModal — creating a store', () => {
   it('offers the token field, since a new row has none on record yet', () => {
     renderModal({ modal: { mode: 'create' } });

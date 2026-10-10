@@ -13,6 +13,7 @@ export const EMPTY_FORM: StoreFormValues = {
   name: '',
   slug: '',
   vertical: 'general',
+  kind: 'store',
   baseUrl: '',
   terminalCount: '1',
   environment: undefined as unknown as StoreEnvironment,

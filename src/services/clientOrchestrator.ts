@@ -22,6 +22,7 @@ import {
   type CompanyRecord,
   type DeploymentJobRecord,
   type DeploymentJobStepRecord,
+  type StoreKind,
 } from '../config/registryDb.js';
 import {
   isCoolifyConfigured,
@@ -48,6 +49,12 @@ export interface StoreDeploymentInput {
   name: string;
   slug: string;
   baseUrl: string;
+  /**
+   * 'store' (default) or 'warehouse'. A warehouse runs no tills and draws no
+   * terminal licences (owner decisions, 2026-10-09), so it is deployed with a
+   * terminal count of 0 whatever the caller sent.
+   */
+  kind?: StoreKind;
   /** Terminal slots the POS is configured to run (pushed as Till 1..N). */
   terminalCount: number;
   /**
@@ -262,7 +269,9 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
               name: meta.name,
               slug: meta.slug,
               baseUrl: meta.baseUrl,
-              terminalCount: meta.terminalCount || 1,
+              kind: meta.kind ?? 'store',
+              // `|| 1` would turn a warehouse's 0 into a till it must not have.
+              terminalCount: meta.kind === 'warehouse' ? 0 : meta.terminalCount || 1,
               adminEmail: meta.adminEmail ?? null,
             },
             token,
@@ -276,12 +285,18 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
         // every configure push and licence the store receives is bounded by this
         // allowance, and a store with no allocation would fall back to its
         // configured count instead of the purchased quantity.
-        const allocation = meta.licensedTerminalCount ?? meta.terminalCount ?? 1;
-        const allocationCheck = checkAllocation(company, store.id, allocation);
-        if (!allocationCheck.ok) {
-          throw new Error(allocationCheck.reason ?? 'Terminal allocation refused');
+        // A warehouse runs no tills, so it draws no terminal licences — the
+        // client's purchased quantity is spent on shops (owner decision,
+        // 2026-10-09). Skipped rather than allocated 0: `checkAllocation` refuses
+        // a count below 1, and a warehouse needs no allocation row at all.
+        if (store.kind !== 'warehouse') {
+          const allocation = meta.licensedTerminalCount ?? meta.terminalCount ?? 1;
+          const allocationCheck = checkAllocation(company, store.id, allocation);
+          if (!allocationCheck.ok) {
+            throw new Error(allocationCheck.reason ?? 'Terminal allocation refused');
+          }
+          allocateTerminals(company, store.id, allocation);
         }
-        allocateTerminals(company, store.id, allocation);
 
         // Coolify container deployment — REQUIRED. Idempotent: an application
         // that already exists is never created twice.

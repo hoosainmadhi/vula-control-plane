@@ -40,6 +40,9 @@ export const pushStoreListToPanel = async (
       name: store.name,
       baseUrl: store.base_url,
       vertical: store.vertical,
+      // Travels so the panel can label the row and offer a warehouse first as a
+      // transfer source (owner decision, 2026-10-09).
+      kind: store.kind,
       headOfficeToken: store.head_office_token,
     })),
   );
@@ -87,6 +90,11 @@ export const wireStoreToHeadOffice = async (store: StoreRecord): Promise<WiringO
     baseUrl: store.base_url,
     headOfficeToken,
     vertical: store.vertical,
+    // The kind travels on activation, not only on the roster push below: this
+    // call happens first, so a panel that only read the kind from the roster
+    // registered a warehouse as a shop (found standing up the central-dc demo,
+    // 2026-10-10).
+    kind: store.kind,
   });
 
   // And refresh the intended list, so a branch the control plane has but the

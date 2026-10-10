@@ -15,6 +15,7 @@ const store = {
   vertical: 'general',
   terminal_names_json: null,
   name: 'Store Example',
+  kind: 'store',
 } as const;
 
 interface FetchInit {
@@ -71,6 +72,7 @@ describe('pushTerminals', () => {
     expect(JSON.parse(init?.body as string)).toEqual({
       terminalCount: 2,
       vertical: 'general',
+      kind: 'store',
       terminals: [
         { till: 1, name: 'Till 1' },
         { till: 2, name: 'Till 2' },

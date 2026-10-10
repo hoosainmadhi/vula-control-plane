@@ -177,9 +177,22 @@ export function allocateTerminals(
  */
 export function checkConfiguredTerminals(
   company: CompanyRecord | null,
-  store: Pick<StoreRecord, 'id' | 'company_id' | 'terminal_count'>,
+  store: Pick<StoreRecord, 'id' | 'company_id' | 'kind' | 'terminal_count'>,
   count: number,
 ): AllocationCheck {
+  // A warehouse runs no tills: 0 is the only valid count for it, and it draws no
+  // terminal licences (owner decisions, 2026-10-09). A store that sells still
+  // needs at least one — that rule is unchanged.
+  if (store.kind === 'warehouse') {
+    return count === 0
+      ? { ok: true }
+      : {
+          ok: false,
+          code: 'terminal_cap_exceeded',
+          reason:
+            'A warehouse runs no tills — the terminal count must be 0. Mark it as a store if it sells.',
+        };
+  }
   if (!Number.isInteger(count) || count < 1) {
     return { ok: false, code: 'terminal_cap_exceeded', reason: 'The terminal count must be a whole number of 1 or more.' };
   }

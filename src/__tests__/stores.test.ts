@@ -106,6 +106,9 @@ describe('POST /api/stores — create + first push', () => {
     expect(JSON.parse(init?.body as string)).toEqual({
       terminalCount: 3,
       vertical: 'general',
+      // Additive (2026-10-09): the store must be able to tell "no tills because
+      // this is a warehouse" from a store configured with none.
+      kind: 'store',
       terminals: [
         { till: 1, name: 'Till 1' },
         { till: 2, name: 'Till 2' },
@@ -752,8 +755,33 @@ describe('Head Office wiring on create', () => {
     const branch = JSON.parse((branchesInit as { body: string }).body) as {
       slug: string;
       headOfficeToken: string;
+      kind: string;
     };
     expect(branch.slug).toBe('gardens-mall');
     expect(branch.headOfficeToken).toBe(configureBody.headOffice!.token);
+    // The kind travels on activation, not only on the roster push that follows
+    // it: a panel that learned it only from the roster filed a warehouse as a
+    // shop (found standing up the central-dc warehouse demo, 2026-10-10).
+    expect(branch.kind).toBe('store');
+
+    fetchMock.mockClear();
+    const dc = await request(app)
+      .post('/api/stores')
+      .set(auth())
+      .send(
+        createPayload({
+          name: 'Central DC',
+          slug: 'central-dc',
+          kind: 'warehouse',
+          terminalCount: 0,
+          baseUrl: 'http://localhost:3298/',
+          companyId,
+        }),
+      );
+    expect(dc.status).toBe(201);
+    const [, dcInit] = fetchTo('/api/internal/branches');
+    const dcBranch = JSON.parse((dcInit as { body: string }).body) as { slug: string; kind: string };
+    expect(dcBranch.slug).toBe('central-dc');
+    expect(dcBranch.kind).toBe('warehouse');
   });
 });

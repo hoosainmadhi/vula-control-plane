@@ -128,7 +128,13 @@ const request = async (
 export const pushTerminals = async (
   store: Pick<
     StoreRecord,
-    'base_url' | 'control_plane_token' | 'terminal_count' | 'vertical' | 'terminal_names_json' | 'name'
+    | 'base_url'
+    | 'control_plane_token'
+    | 'terminal_count'
+    | 'vertical'
+    | 'terminal_names_json'
+    | 'name'
+    | 'kind'
   >,
   options: CallOptions = {},
   extra: Record<string, unknown> = {},
@@ -140,6 +146,11 @@ export const pushTerminals = async (
     {
       terminalCount: store.terminal_count,
       vertical: store.vertical,
+      // The kind travels so the store can tell "this deployment runs no tills
+      // because it is a warehouse" from a store configured with none — the
+      // second is a mistake that would quietly drop till enforcement. Additive:
+      // a store that does not know the field ignores it.
+      kind: store.kind ?? 'store',
       terminals: terminalRoster(store),
       // The registry name is the store's trading name — pushed on every
       // configure so the register header and receipts stop showing the
@@ -375,6 +386,13 @@ export const registerBranchWithPanel = async (
     baseUrl: string;
     headOfficeToken: string | null;
     vertical?: string;
+    /**
+     * 'store' | 'warehouse'. Travels on activation as well as on the roster:
+     * activation can run before the roster is pushed (a new branch is wired the
+     * moment it is created), so a panel that only learned the kind from the
+     * roster filed a warehouse as a shop until someone re-registered it.
+     */
+    kind?: string;
   },
   options: CallOptions = {},
 ): Promise<unknown> => {
@@ -388,6 +406,7 @@ export const registerBranchWithPanel = async (
       baseUrl: branch.baseUrl,
       headOfficeToken: branch.headOfficeToken,
       vertical: branch.vertical,
+      kind: branch.kind,
     },
     options,
   );
@@ -410,6 +429,8 @@ export const pushBranchRosterToPanel = async (
     name: string;
     baseUrl: string;
     vertical?: string;
+    /** 'store' | 'warehouse' — the panel labels it and sorts transfers by it. */
+    kind?: string;
     headOfficeToken: string | null;
   }>,
   options: CallOptions = {},

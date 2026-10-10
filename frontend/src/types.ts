@@ -19,7 +19,10 @@ export interface Plan {
   maxStores: number;
   /** Entitlement limit per store — NOT a configured/claimed till count. */
   maxTerminalsPerStore: number;
+  /** Features this plan includes at no extra cost. */
   features: string[];
+  /** Monthly price per paid add-on on this plan, `{ multi_store: 9900, … }`. */
+  featurePrices: Record<string, number>;
   pricingMode: PricingMode;
   /** Rate per licensed terminal per billing period (0 on a custom plan). */
   terminalPriceCents: number;
@@ -45,6 +48,9 @@ export interface Subscription {
   unallocatedTerminals: number;
   /** null when the plan is custom-priced (or absent) — never a guessed figure. */
   recurringAmountCents: number | null;
+  /** The paid add-ons this client holds, with the price agreed for each. */
+  addons: Array<{ key: string; label: string; cents: number }>;
+  addonsCents: number;
   rateCents: number;
   setupFeeCents: number;
   setupFeeStatus: SetupFeeStatus;
@@ -100,6 +106,8 @@ export const FEATURE_KEYS = [
   'stock_transfers',
   'ecommerce_bridges',
   'ai_assistant',
+  'layby',
+  'invoice_import',
 ] as const;
 
 export interface Panel {
@@ -156,6 +164,8 @@ export interface Store {
   id: number;
   slug: string;
   name: string;
+  /** 'store' sells; 'warehouse' holds stock and transfers it out, running no tills. */
+  kind: 'store' | 'warehouse';
   terminalNames: string[];
   lastConfigError?: string | null;
   lastHealthError?: string | null;
@@ -260,6 +270,8 @@ export interface StoreFormValues {
   name: string;
   slug: string;
   vertical: StoreVertical;
+  /** 'store' sells; 'warehouse' holds stock and transfers it out, running no tills. */
+  kind: 'store' | 'warehouse';
   environment?: StoreEnvironment;
   /** Per-till names; '' reverts that till to its "Till N" default. */
   tillNames?: string[];
@@ -450,6 +462,9 @@ export interface ClientSubscriptionDetail {
     /** The invoice already carrying it for this period, if any. */
     billedOn: string | null;
   } | null;
+  /** The paid add-ons this client holds, with the price agreed for each. */
+  addons: Array<{ key: string; label: string; cents: number }>;
+  addonsCents: number;
   note: string;
   allocations: Array<{
     storeId: number;

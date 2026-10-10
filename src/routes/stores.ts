@@ -75,6 +75,7 @@ import {
   requireBaseUrl,
   requireSlug,
   requireString,
+  optionalStoreKind,
   requireTerminalCount,
 } from '../utils/validate.js';
 
@@ -88,6 +89,8 @@ export interface StoreOut {
   slug: string;
   name: string;
   vertical: StoreVertical;
+  /** 'store' sells; 'warehouse' holds stock and transfers it out. */
+  kind: StoreRecord['kind'];
   /** Terminal slots this store is configured to run (pushed as Till 1..N). */
   terminalCount: number;
   /**
@@ -184,6 +187,7 @@ export const storeToOut = (store: StoreRecord): StoreOut => {
   slug: store.slug,
   name: store.name,
   vertical: store.vertical,
+  kind: store.kind,
   terminalCount: store.terminal_count,
   licensedTerminalCount: ent.maxTerminals ?? terminalAllowance(store).count,
   baseUrl: store.base_url,
@@ -390,7 +394,20 @@ storesRouter.post(
     const name = requireString(req.body, 'name');
     const slug = requireSlug(req.body);
     const vertical = optionalVertical(req.body);
-    const terminalCount = requireTerminalCount(req.body);
+    const kind = optionalStoreKind(req.body) ?? 'store';
+    // A warehouse runs no tills, so its terminal count is 0 — omitted means 0,
+    // and any other number is refused rather than quietly stored (owner
+    // decision, 2026-10-09). A store that sells needs at least one, unchanged.
+    const rawCount = (req.body as Record<string, unknown> | undefined)?.['terminalCount'];
+    const terminalCount =
+      kind === 'warehouse'
+        ? rawCount === undefined || rawCount === null
+          ? 0
+          : requireTerminalCount(req.body, 0)
+        : requireTerminalCount(req.body);
+    if (kind === 'warehouse' && terminalCount !== 0) {
+      throw new ValidationError('A warehouse runs no tills — terminalCount must be 0');
+    }
     const baseUrl = requireBaseUrl(req.body);
     // Default the store's environment to the control plane's own (SPOG §5).
     const environment =
@@ -458,28 +475,40 @@ storesRouter.post(
         });
         return;
       }
-      const addOk = canAddStore(company);
-      if (!addOk.ok) {
-        res.status(402).json({ error: addOk.reason, code: 'store_cap_reached' });
-        return;
+      // A warehouse is not a retail location: it does not consume the plan's
+      // store allowance and draws no terminal licences, because it runs no tills
+      // (owner decisions, 2026-10-09). Both checks below are for stores that
+      // sell — and both must be SKIPPED for a warehouse, not merely satisfied:
+      // `countStoresForCompany` ignoring warehouses is not enough on a plan whose
+      // allowance the selling stores have already used.
+      if (kind === 'warehouse') {
+        companyId = company.id;
+        allocation = null;
+      } else {
+        const addOk = canAddStore(company);
+        if (!addOk.ok) {
+          res.status(402).json({ error: addOk.reason, code: 'store_cap_reached' });
+          return;
+        }
+        // Terminal licences are a purchased quantity: the store must be allocated
+        // its terminals out of what the client pays for (`terminalCount`, unless
+        // the caller allocates a different number). A client with no licensed
+        // terminals is refused rather than silently given capacity.
+        const requestedAllocation =
+          optionalInt(req.body, 'licensedTerminalCount') ?? terminalCount;
+        const termOk = checkNewStoreAllocation(company, requestedAllocation);
+        if (!termOk.ok) {
+          res.status(402).json({ error: termOk.reason, code: termOk.code });
+          return;
+        }
+        const ceilingOk = checkNewStoreAllocation(company, terminalCount);
+        if (!ceilingOk.ok) {
+          res.status(402).json({ error: ceilingOk.reason, code: ceilingOk.code });
+          return;
+        }
+        allocation = { company, count: requestedAllocation };
+        companyId = company.id;
       }
-      // Terminal licences are a purchased quantity: the store must be allocated
-      // its terminals out of what the client pays for (`terminalCount`, unless
-      // the caller allocates a different number). A client with no licensed
-      // terminals is refused rather than silently given capacity.
-      const requestedAllocation = optionalInt(req.body, 'licensedTerminalCount') ?? terminalCount;
-      const termOk = checkNewStoreAllocation(company, requestedAllocation);
-      if (!termOk.ok) {
-        res.status(402).json({ error: termOk.reason, code: termOk.code });
-        return;
-      }
-      const ceilingOk = checkNewStoreAllocation(company, terminalCount);
-      if (!ceilingOk.ok) {
-        res.status(402).json({ error: ceilingOk.reason, code: ceilingOk.code });
-        return;
-      }
-      allocation = { company, count: requestedAllocation };
-      companyId = company.id;
     }
 
     const adminEmail =
@@ -488,7 +517,7 @@ storesRouter.post(
         : null;
 
     const store = createStore(
-      { name, slug, vertical, terminalCount, baseUrl, environment, adminEmail },
+      { name, slug, vertical, kind, terminalCount, baseUrl, environment, adminEmail },
       controlPlaneToken,
     );
     if (companyId !== null) setStoreCompany(store.id, companyId);
@@ -578,6 +607,7 @@ storesRouter.put(
     const input: {
       name?: string;
       vertical?: StoreVertical;
+      kind?: StoreRecord['kind'];
       terminalCount?: number;
       baseUrl?: string;
       environment?: StoreEnvironment;
@@ -587,7 +617,25 @@ storesRouter.put(
     const body = req.body as Record<string, unknown>;
     if (body['name'] !== undefined) input.name = requireString(body, 'name');
     if (body['vertical'] !== undefined) input.vertical = optionalVertical(body);
-    if (body['terminalCount'] !== undefined) input.terminalCount = requireTerminalCount(body);
+    if (body['kind'] !== undefined) input.kind = optionalStoreKind(body);
+    // The kind that will hold AFTER this edit: the terminal rules are about the
+    // store's job, not about which fields the request happened to carry.
+    const nextKind = input.kind ?? store.kind;
+    if (body['terminalCount'] !== undefined) {
+      input.terminalCount = requireTerminalCount(body, nextKind === 'warehouse' ? 0 : 1);
+    }
+    // A warehouse runs no tills. Turning a store into one clears its slots (a
+    // warehouse holding till slots would be told to run registers it has no
+    // staff for); turning a warehouse back into a store gives it the one till it
+    // must have. Both are stated, never inferred from a missing field.
+    if (nextKind === 'warehouse') {
+      if (input.terminalCount !== undefined && input.terminalCount !== 0) {
+        throw new ValidationError('A warehouse runs no tills — terminalCount must be 0');
+      }
+      input.terminalCount = 0;
+    } else if (store.kind === 'warehouse' && input.terminalCount === undefined) {
+      input.terminalCount = 1;
+    }
     if (body['baseUrl'] !== undefined) input.baseUrl = requireBaseUrl(body);
     // Repointing a store is the sharpest edge in the registry: the next licence
     // push carries this store's token to wherever the URL now points. The create
@@ -696,7 +744,11 @@ storesRouter.put(
         : store.company_id
           ? getCompanyById(store.company_id)
           : null;
-      const check = checkConfiguredTerminals(owningCompany, store, input.terminalCount);
+      const check = checkConfiguredTerminals(
+        owningCompany,
+        { ...store, kind: nextKind },
+        input.terminalCount,
+      );
       if (!check.ok) {
         res.status(402).json({ error: check.reason, code: check.code });
         return;

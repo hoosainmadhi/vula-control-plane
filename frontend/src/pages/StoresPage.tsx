@@ -112,8 +112,9 @@ export default function StoresPage() {
       const body: Record<string, unknown> = {
         name: values.name.trim(),
         vertical: values.vertical,
-        baseUrl: values.baseUrl.trim(),
-        terminalCount: Number(values.terminalCount),
+        kind: values.kind,
+        // A warehouse's count is 0 by rule; the API refuses anything else.
+        terminalCount: values.kind === 'warehouse' ? 0 : Number(values.terminalCount),
         environment: values.environment,
         companyId: values.companyId === '' ? null : Number(values.companyId),
       };

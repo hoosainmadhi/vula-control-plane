@@ -54,14 +54,34 @@ export const requireSlug = (body: unknown): string => {
   return slug;
 };
 
-export const requireTerminalCount = (body: unknown): number => {
+/**
+ * A store's terminal count. `min` is 0 for a warehouse, which runs no tills
+ * (owner decision, 2026-10-09) — everything that sells still needs at least one.
+ */
+export const requireTerminalCount = (body: unknown, min: 0 | 1 = 1): number => {
   if (!isRecord(body)) throw new ValidationError('terminalCount is required');
   const value = body['terminalCount'];
   if (typeof value !== 'number' || !Number.isInteger(value)) {
     throw new ValidationError('terminalCount must be a whole number');
   }
-  if (value < 1 || value > 99) throw new ValidationError('terminalCount must be between 1 and 99');
+  if (value < min || value > 99) {
+    throw new ValidationError(`terminalCount must be between ${min} and 99`);
+  }
   return value;
+};
+
+export const STORE_KINDS = ['store', 'warehouse'] as const;
+export type StoreKindValue = (typeof STORE_KINDS)[number];
+
+/** Reads a `kind` off a request body; `undefined` when absent (defaults apply). */
+export const optionalStoreKind = (body: unknown): StoreKindValue | undefined => {
+  if (!isRecord(body)) return undefined;
+  const raw = body['kind'];
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  if (typeof raw !== 'string' || !(STORE_KINDS as readonly string[]).includes(raw)) {
+    throw new ValidationError(`kind must be one of: ${STORE_KINDS.join(', ')}`);
+  }
+  return raw as StoreKindValue;
 };
 
 const ipv4ToInt = (value: string): number | null => {
