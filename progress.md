@@ -2745,3 +2745,30 @@ panel), which puts them in the next sweep — ten minutes — and settles once
 applied, so a second boot does not re-queue a delivered licence. Pinned by a
 migration test that seeds a plan still bundling a chargeable feature, restarts
 against it and asserts both the queueing and the settling.
+
+## 2026-10-10 — released: control planes first, then the fleet they licence
+
+Owner: "ok lets commit and release". Five commits (`e7c2d54` on dev/staging/main),
+CP 377 tests, typecheck and build green. Auto-deploy is off for the control planes,
+so the release is `scripts/release-apps.sh cp` — the script also lost the four
+deleted rehearsal apps and gained the mode it needs to run at all (644 → 755).
+
+**Order mattered more than usual, and the registry decided it.** Production was
+running on the pre-split registry, so its stores' licences said the old thing while
+the new tenant code enforces `layby` and `invoice_import`. Deploying the stores
+first would have refused lay-bys the clients pay for. So: the control planes first
+(their boot migrations rewrite the subscriptions and, since today, queue every
+delivered licence for re-delivery), then the fleet once the sweep had delivered.
+
+Verified on production rather than assumed: the office bundle now serves
+`index-A9LOiJys.js` with the release's own marker string in it; a live demo store's
+licence gained `layby` minutes after the control plane came up, without a hand
+pushed licence, which is the re-delivery queue working end to end; lay-bys answer
+200 and the invoice importer answers 402 with its "plan does not include" message —
+the paid feature that used to be free is properly closed. The tenant fleet (three
+Urban Threads branches, general, spares, restaurant, hardware, pharmacy, panel) was
+then released and each serves the exact chunk hashes built here.
+
+One operational trap recorded in tidb: the merchant panel's host is
+`demo-urban-threads-ho.vula-app.co.za`; `demo-ho.vula-app.co.za` is an unknown host
+and Coolify answers it with a 503 that reads like a dead deployment.

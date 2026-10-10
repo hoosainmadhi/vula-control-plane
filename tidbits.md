@@ -491,3 +491,10 @@ into that plan.
   now each carry a paid renewal invoice and `paid_through` 2026-11-10. Worth keeping in mind before
   demoing "a client who has not been billed yet": their stores will not ring a sale, and that is the
   product working.
+- **`demo-ho.vula-app.co.za` is not a host; the panel is
+  `demo-urban-threads-ho.vula-app.co.za` (2026-10-10).** Coolify answers an unknown
+  host on its proxy with **503 no available server**, which reads exactly like a
+  failed deployment — half an hour of polling during the release went into a
+  hostname that was never going to answer, while the app itself was
+  `running:healthy` the whole time. Look the FQDN up (`GET /api/v1/applications/<uuid>`
+  carries it) before concluding a deploy failed.
