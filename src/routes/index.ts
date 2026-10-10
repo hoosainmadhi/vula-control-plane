@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { authRouter } from './auth.js';
+import { publicRouter } from './public.js';
 import { storesRouter } from './stores.js';
 import { companiesRouter, plansRouter } from './companies.js';
 import { panelsRouter } from './panels.js';
@@ -13,6 +14,9 @@ import { deploymentsRouter } from './deployments.js';
 
 export const apiRouter = Router();
 
+// No auth: the marketing site's quote form. See routes/public.ts for why it is
+// the only open surface here and what guards it instead.
+apiRouter.use('/public', publicRouter);
 apiRouter.use('/auth', authRouter);
 apiRouter.use('/clients', clientsRouter);
 apiRouter.use('/stores', storesRouter);
