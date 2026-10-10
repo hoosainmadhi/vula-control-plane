@@ -31,14 +31,12 @@ fi
 fleet_names=(
   demo-urban-threads-jhb demo-urban-threads-cpt demo-urban-threads-dbn
   demo-general demo-spares demo-restaurant demo-hardware demo-pharmacy
-  demo-ho rehearsal-retail-store rehearsal-retail-two-1 rehearsal-retail-two-2 rehearsal-two-ho
+  demo-ho
 )
 fleet_uuids=(
   q20lwe1nrfxljrjfxn07fnq5 ojcdtrzyhwripfxcwmarffqd jeqhdcsmaiecvd0r72ecnxet
   cfpit8t3c3qpx0ldnf8qdzik tyzt97d9cwn467kgog5g9tep 3ryq7svgewjdm9trxtk3d9jq
   lqu4n6fxk0he5b6royou8j5x aux8ftmmtzooxmavwk2a0mjj cpnsg0e0lw3ggr07os8bknzg
-  io6hqzpfuumgr2cjyatbgvr2 6nkep0ldjqh3tvqvheg3ot84 jljgjyvwysyt5vlo1hchqyn0
-  yhwfyxdj3a0pqcxgekktixkw
 )
 cp_names=(vula-cp-staging vula-cp-prod)
 cp_uuids=(d5thajqrlaxxpsrwesc9mh7j yx3ntdoau1qhula5i3mr7wpz)
