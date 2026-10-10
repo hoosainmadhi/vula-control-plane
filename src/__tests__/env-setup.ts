@@ -6,6 +6,12 @@ process.env.OFFICE_ADMIN_EMAIL = 'office@test.local';
 process.env.OFFICE_ADMIN_PASSWORD = 'office-pass-123';
 process.env.STORE_REQUEST_TIMEOUT_MS = '100';
 process.env.LOG_LEVEL = 'error';
+// A real Resend key in a developer's .env would make the mailer attempt live
+// sends from tests (and the quote endpoint's suite asserts the payload it built,
+// not what a live service did with it). Pinned empty, like the Coolify keys
+// above; the suites that exercise Resend set their own value.
+process.env.RESEND_API_KEY = '';
+process.env.RESEND_FROM = '';
 // config/env.ts loads the developer's local .env at import time — after this
 // file runs — so on a machine with real COOLIFY_* keys every suite's
 // provisioning paths flip from "Coolify not configured" to live calls against

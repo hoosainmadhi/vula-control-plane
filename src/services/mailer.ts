@@ -46,6 +46,34 @@ export const isSmtpConfigured = (
   settings: OfficeSettingsRecord = getRawOfficeSettings(),
 ): boolean => Boolean(settings.smtp_host);
 
+/**
+ * The built-in delivery: Resend's HTTP API, no SDK.
+ *
+ * The same arrangement the OptiMED control plane uses, deliberately — one vendor
+ * account, one key, one thing to rotate — and it is what makes mail work on a
+ * deployment whose office has not configured an SMTP mailbox at all (production
+ * SMTP has been on the runbook's remaining list since the cutover, so invoices
+ * could not be emailed from production at all). Environment, read at call time:
+ * a key or sender change needs a container restart, never a rebuild.
+ */
+const RESEND_API_URL = 'https://api.resend.com/emails';
+/** What a Resend delivery says the mail is from, unless RESEND_FROM overrides it. */
+const DEFAULT_RESEND_FROM = 'Vula <hello@vula-app.co.za>';
+
+export type EmailTransport = 'smtp' | 'resend';
+
+export const isResendConfigured = (): boolean => Boolean(process.env.RESEND_API_KEY?.trim());
+
+/**
+ * Which transport the next send will use: the office's own mailbox when it is
+ * configured (it keeps its own SPF/DKIM), otherwise the built-in Resend
+ * delivery, otherwise nothing. Reported by `GET /api/settings` so the office can
+ * see which one is in play rather than being told "SMTP is not configured" while
+ * mail flows.
+ */
+export const activeEmailTransport = (): EmailTransport | null =>
+  isSmtpConfigured() ? 'smtp' : isResendConfigured() ? 'resend' : null;
+
 /** The envelope sender. Falls back to the SMTP user so a relay accepts the mail. */
 const senderFor = (settings: OfficeSettingsRecord): string =>
   settings.smtp_from || settings.smtp_user || settings.office_email;
@@ -59,29 +87,101 @@ const createTransport = (settings: OfficeSettingsRecord): nodemailer.Transporter
     auth: settings.smtp_user ? { user: settings.smtp_user, pass: settings.smtp_pass } : undefined,
   });
 
-/**
- * Sends a message, converting any nodemailer failure into a typed 502 whose text
- * is safe to show an operator (nodemailer's codes are about the relay, not the
- * client's data).
- */
-const send = async (message: SendMailOptions): Promise<{ messageId: string }> => {
-  const settings = getRawOfficeSettings();
-  if (!isSmtpConfigured(settings)) throw new SmtpNotConfiguredError();
-  if (!senderFor(settings)) {
-    throw new HttpError(
-      400,
-      'Set a from-address (or an SMTP user) in Settings so the mail has a sender.',
-      'smtp_sender_missing',
-    );
+/** Recipients, as Resend wants them: a plain array of addresses. */
+const resendRecipients = (to: SendMailOptions['to']): string[] => {
+  if (!to) return [];
+  const list = Array.isArray(to) ? to : [to];
+  return list.map((entry) =>
+    typeof entry === 'string' ? entry : String((entry as { address?: string }).address ?? ''),
+  ).filter(Boolean);
+};
+
+/** Attachments, as Resend wants them: base64 content and a filename. */
+const resendAttachments = (
+  attachments: SendMailOptions['attachments'],
+): Array<{ filename: string; content: string; content_type?: string }> =>
+  (attachments ?? [])
+    .filter((a) => 'content' in a && a.content)
+    .map((a) => {
+      const content = (a as { content: Buffer | string }).content;
+      return {
+        filename: typeof a.filename === 'string' && a.filename ? a.filename : 'attachment.pdf',
+        content: Buffer.isBuffer(content) ? content.toString('base64') : String(content),
+        ...(a.contentType ? { content_type: a.contentType } : {}),
+      };
+    });
+
+const sendViaResend = async (message: SendMailOptions): Promise<{ messageId: string }> => {
+  const apiKey = process.env.RESEND_API_KEY?.trim();
+  if (!apiKey) throw new SmtpNotConfiguredError();
+  const recipients = resendRecipients(message.to);
+  if (recipients.length === 0) {
+    throw new MailerError('No recipient address — nothing to send to.');
   }
+  const attachments = resendAttachments(message.attachments);
+  const payload: Record<string, unknown> = {
+    from: process.env.RESEND_FROM?.trim() || DEFAULT_RESEND_FROM,
+    to: recipients,
+    subject: String(message.subject ?? ''),
+  };
+  if (message.text) payload.text = String(message.text);
+  if (message.html) payload.html = String(message.html);
+  // A quote request is answered to the visitor, not to ourselves.
+  if (message.replyTo) payload.reply_to = String(message.replyTo);
+  if (attachments.length > 0) payload.attachments = attachments;
+
+  let res: Response;
   try {
-    const info = await createTransport(settings).sendMail(message);
-    return { messageId: info.messageId ?? '' };
+    res = await fetch(RESEND_API_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
   } catch (err) {
     throw new MailerError(
-      `Mail server refused the message: ${err instanceof Error ? err.message : String(err)}`,
+      `Could not reach the mail service: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+  if (!res.ok) {
+    // Resend answers with { message } / { error } on refusal; never echo the key.
+    const detail = (await res.json().catch(() => ({}))) as { message?: string; error?: string };
+    throw new MailerError(
+      `The mail service refused the message (HTTP ${res.status})${
+        detail.message || detail.error ? `: ${detail.message ?? detail.error}` : ''
+      }.`,
+    );
+  }
+  const body = (await res.json().catch(() => ({}))) as { id?: string };
+  return { messageId: body.id ?? '' };
+};
+
+/**
+ * Sends a message through whichever delivery is active: the office's SMTP
+ * mailbox when configured, otherwise the built-in Resend delivery. Callers do
+ * not need to know which — except that a Resend delivery sends from
+ * `RESEND_FROM`, which is the address Resend has verified.
+ */
+export const sendMail = async (message: SendMailOptions): Promise<{ messageId: string }> => {
+  const settings = getRawOfficeSettings();
+  if (isSmtpConfigured(settings)) {
+    if (!senderFor(settings)) {
+      throw new HttpError(
+        400,
+        'Set a from-address (or an SMTP user) in Settings so the mail has a sender.',
+        'smtp_sender_missing',
+      );
+    }
+    try {
+      const info = await createTransport(settings).sendMail(message);
+      return { messageId: info.messageId ?? '' };
+    } catch (err) {
+      throw new MailerError(
+        `Mail server refused the message: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  if (isResendConfigured()) return sendViaResend(message);
+  throw new SmtpNotConfiguredError();
 };
 
 const esc = (value: string): string =>
@@ -90,7 +190,7 @@ const esc = (value: string): string =>
 /** Proof that the stored credentials work. Sent to the office, never to a client. */
 export const sendTestEmail = async (to: string): Promise<{ messageId: string; to: string }> => {
   const settings = getRawOfficeSettings();
-  const sent = await send({
+  const sent = await sendMail({
     from: senderFor(settings),
     to,
     subject: `Vula control plane — SMTP test from ${settings.office_name}`,
@@ -194,7 +294,7 @@ export const sendInvoiceEmail = async (
     company: input.company,
     settings,
   });
-  const sent = await send({
+  const sent = await sendMail({
     from: senderFor(settings),
     to: input.recipient,
     subject: `Invoice ${input.invoice.invoice_number} from ${settings.office_name}`,
@@ -235,7 +335,7 @@ export const sendAdminCredentialsEmail = async (
   input: AdminCredentialsEmailInput,
 ): Promise<{ messageId: string; recipient: string }> => {
   const settings = getRawOfficeSettings();
-  const sent = await send({
+  const sent = await sendMail({
     from: senderFor(settings),
     to: input.adminEmail,
     subject: `Your ${input.surface} login — from ${settings.office_name}`,

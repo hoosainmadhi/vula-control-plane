@@ -15,7 +15,12 @@ import {
   getRawOfficeSettings,
   type OfficeSettingsPatch,
 } from '../services/officeSettings.js';
-import { isSmtpConfigured, sendTestEmail, SmtpNotConfiguredError } from '../services/mailer.js';
+import {
+  activeEmailTransport,
+  isSmtpConfigured,
+  sendTestEmail,
+  SmtpNotConfiguredError,
+} from '../services/mailer.js';
 
 export const settingsRouter = Router();
 settingsRouter.use(requireOffice);
@@ -39,7 +44,7 @@ const textField = (
 settingsRouter.get(
   '/',
   asyncHandler(async (_req, res) => {
-    res.json({ settings: getOfficeSettingsOut() });
+    res.json({ settings: getOfficeSettingsOut(), emailTransport: activeEmailTransport() });
   }),
 );
 
