@@ -23,6 +23,7 @@ interface FetchInit {
   headers?: Record<string, string>;
   body?: string;
   signal?: AbortSignal;
+  redirect?: 'follow' | 'error' | 'manual';
 }
 
 const lastFetch = (): [string, FetchInit | undefined] => {
@@ -69,6 +70,8 @@ describe('pushTerminals', () => {
     expect(url).toBe('http://store.example.com/api/internal/configure');
     expect(init?.headers?.['X-Control-Plane-Token']).toBe('tok-123');
     expect(init?.headers?.['Content-Type']).toBe('application/json');
+    // The credential must never follow a redirect to an unvalidated host.
+    expect(init?.redirect).toBe('error');
     expect(JSON.parse(init?.body as string)).toEqual({
       terminalCount: 2,
       vertical: 'general',

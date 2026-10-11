@@ -40,7 +40,7 @@ async function waitForStoreHealth(baseUrl: string, timeoutMs = HEALTH_POLL_TIMEO
 
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      const res = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(5000) });
       if (res.ok) {
         const data = (await res.json().catch(() => null)) as { status?: string; app?: string } | null;
         if (data?.status === 'ok' || data?.app === 'vula') {
@@ -69,6 +69,10 @@ export async function bootstrapStoreAdmin(
   try {
     const res = await fetch(url, {
       method: 'POST',
+      // redirect: 'error' — this call carries the control-plane credential AND
+      // the temporary admin password; neither may follow a redirect to a host
+      // the managed-endpoint policy has not validated.
+      redirect: 'error',
       headers: {
         'Content-Type': 'application/json',
         'X-Control-Plane-Token': store.control_plane_token,

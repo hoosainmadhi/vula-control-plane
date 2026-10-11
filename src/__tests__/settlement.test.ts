@@ -66,8 +66,8 @@ const makeCompany = async (paidThrough: string | null = null): Promise<{ id: num
     .send({
       name: 'Urban Threads Retail Group',
       slug: `urban-threads-${Date.now()}-${Math.floor(Math.random() * 10_000)}`,
-      planId: (await request(app).get('/api/plans').set(auth()).expect(200))
-        .body.filter((p: { code: string }) => p.code === 'vula-grow')
+      planId: (await request(app).get('/api/plans').set(auth()).expect(200)).body
+        .filter((p: { code: string }) => p.code === 'vula-grow')
         .map((p: { id: number }) => p.id)[0],
       ...(paidThrough ? { paidThrough } : {}),
     })
@@ -102,10 +102,13 @@ const makeInvoice = (
 };
 
 const pay = (invoiceId: number, body: Record<string, unknown> = {}) =>
-  request(app).post(`/api/billing/invoices/${invoiceId}/pay`).set(auth()).send({
-    method: 'manual',
-    ...body,
-  });
+  request(app)
+    .post(`/api/billing/invoices/${invoiceId}/pay`)
+    .set(auth())
+    .send({
+      method: 'manual',
+      ...body,
+    });
 
 const companyById = (id: number) =>
   request(app).get(`/api/companies/${id}`).set(auth()).expect(200);
@@ -262,6 +265,31 @@ describe('settlement — failure semantics', () => {
       periodAdvanced: true,
     });
   });
+
+  it('a second settlement of the same invoice is refused and extends nothing twice', async () => {
+    // The 2026-10-10 launch review asked the money question directly: can a
+    // duplicated settlement request extend the paid period twice? The route
+    // refuses a paid invoice — this pins it end to end: one payment row, one
+    // period advance, one audit entry, one licence push, and a second attempt
+    // changes nothing at all.
+    const { id } = await makeCompany('2030-01-01');
+    const invoiceId = makeInvoice(id, 'renewal', 96000);
+
+    const first = await pay(invoiceId).expect(200);
+    expect(first.body.newPaidThrough).toBe('2030-02-01');
+    const pushesAfterFirst = fetchMock.mock.calls.length;
+
+    const res = await pay(invoiceId).expect(409);
+    expect(res.body.error).toMatch(/already paid/i);
+
+    expect((await companyById(id)).body.paidThrough).toBe('2030-02-01');
+    const payments = getRegistryDb()
+      .prepare('SELECT COUNT(*) AS n FROM payments WHERE invoice_id = ?')
+      .get(invoiceId) as { n: number };
+    expect(payments.n).toBe(1);
+    expect(listAuditLogs(50).filter((r) => r.action === 'invoice_settled')).toHaveLength(1);
+    expect(fetchMock.mock.calls.length).toBe(pushesAfterFirst);
+  });
 });
 
 describe('settlement — the paid period survives a restart-shaped gap', () => {
@@ -270,9 +298,7 @@ describe('settlement — the paid period survives a restart-shaped gap', () => {
     // that "refused" and "half-settled" are never the same thing.
     const { id } = await makeCompany('2030-01-01');
     const invoiceId = makeInvoice(id, 'renewal', 96000);
-    getRegistryDb()
-      .prepare(`UPDATE invoices SET status = 'cancelled' WHERE id = ?`)
-      .run(invoiceId);
+    getRegistryDb().prepare(`UPDATE invoices SET status = 'cancelled' WHERE id = ?`).run(invoiceId);
 
     const res = await pay(invoiceId).expect(409);
 

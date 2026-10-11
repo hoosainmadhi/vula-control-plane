@@ -99,6 +99,9 @@ const request = async (
   try {
     res = await fetch(url, {
       method,
+      // redirect: 'error' — the credential must never follow a redirect to a
+      // host the managed-endpoint policy has not validated (CONTEXT §3a).
+      redirect: 'error',
       headers: {
         'X-Control-Plane-Token': store.control_plane_token,
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
@@ -112,6 +115,14 @@ const request = async (
       throw new StoreClientError(`Store call timed out after ${timeoutMs}ms (${method} ${path})`);
     }
     const detail = err instanceof Error ? err.message : String(err);
+    // undici reports a refused redirect as TypeError "fetch failed" with the
+    // real reason in cause.message ("unexpected redirect") — check both.
+    const cause = (err as { cause?: { message?: string } } | null)?.cause?.message ?? '';
+    if (/redirect/i.test(detail) || /redirect/i.test(cause)) {
+      throw new StoreClientError(
+        `Store call refused to follow a redirect (${method} ${path}) — the control-plane credential is never forwarded to an unvalidated destination`,
+      );
+    }
     throw new StoreClientError(`Store unreachable (${method} ${path}): ${detail}`);
   }
   const parsed = await readBody(res);
@@ -179,7 +190,11 @@ export const probeAppKind = async (
   timeoutMs = env.storeRequestTimeoutMs,
 ): Promise<{ reachable: boolean; kind: AppKind; detail?: string }> => {
   try {
+    // redirect: 'error' for consistency with the credential-bearing calls: a
+    // deployment that answers a health probe with a redirect is not a healthy
+    // managed endpoint, and the redirect target is unvalidated.
     const res = await fetch(`${resolveBase(baseUrl)}/health`, {
+      redirect: 'error',
       signal: AbortSignal.timeout(timeoutMs),
     });
     const raw = await res.text();

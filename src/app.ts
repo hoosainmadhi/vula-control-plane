@@ -4,6 +4,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import { apiRouter } from './routes/index.js';
 import { errorHandler, notFoundHandler } from './middleware/error.js';
 import { env } from './config/env.js';
+import { getRegistryDb } from './config/registryDb.js';
 
 const APP_NAME = 'vula-control-plane';
 const APP_VERSION = '1.0.0';
@@ -32,12 +33,28 @@ export const createApp = (): Express => {
   app.use(express.json({ limit: '100kb' }));
 
   app.get('/health', (_req, res) => {
-    res.json({
-      status: 'ok',
-      app: APP_NAME,
-      version: APP_VERSION,
-      timestamp: new Date().toISOString(),
-    });
+    // Readiness, not just liveness: the registry database is the control
+    // plane's reason to exist, so the probe answers 503 when it cannot serve
+    // its core operation — the same check the store app's /health has always
+    // made. A static ok let Coolify hold a dead registry open as healthy.
+    try {
+      getRegistryDb().prepare("SELECT 1 AS ok, datetime('now') AS now").get();
+      res.json({
+        status: 'ok',
+        app: APP_NAME,
+        version: APP_VERSION,
+        database: 'connected',
+        timestamp: new Date().toISOString(),
+      });
+    } catch {
+      res.status(503).json({
+        status: 'error',
+        app: APP_NAME,
+        version: APP_VERSION,
+        database: 'unhealthy',
+        timestamp: new Date().toISOString(),
+      });
+    }
   });
 
   app.use('/api', apiRouter);

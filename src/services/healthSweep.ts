@@ -124,7 +124,9 @@ export async function runHealthSweep(): Promise<HealthSweepSummary> {
     summary.panelsChecked++;
     try {
       const url = `${panel.base_url.replace(/\/+$/, '')}/health`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      // redirect: 'error' — consistent with the managed-endpoint policy: a
+      // panel whose health probe redirects is not a healthy managed endpoint.
+      const res = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(5000) });
       if (res.ok) {
         const json = (await res.json().catch(() => null)) as { version?: string } | null;
         recordPanelHealth(panel.id, 'up', json?.version ?? null);

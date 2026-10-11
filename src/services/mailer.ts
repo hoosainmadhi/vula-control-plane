@@ -134,6 +134,8 @@ const sendViaResend = async (message: SendMailOptions): Promise<{ messageId: str
   try {
     res = await fetch(RESEND_API_URL, {
       method: 'POST',
+      // redirect: 'error' — the API key must never follow a redirect elsewhere.
+      redirect: 'error',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
@@ -225,9 +227,9 @@ export const invoiceHtml = (
         item.detail
           ? `<br><span style="color:#94a3b8;font-size:11px">${esc(item.detail)}</span>`
           : ''
-      }</td><td style="text-align:right;vertical-align:top;white-space:nowrap">${formatCents(
-        item.amountCents,
-      )}</td></tr>`,
+      }</td><td style="text-align:right;vertical-align:top;white-space:nowrap">${
+        item.included ? 'Included' : formatCents(item.amountCents)
+      }</td></tr>`,
   );
 
   return `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1e293b">

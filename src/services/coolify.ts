@@ -50,14 +50,31 @@ const request = async (
   path: string,
   body?: unknown,
 ): Promise<unknown> => {
-  const res = await fetch(`${config.apiUrl}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${config.apiToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${config.apiUrl}${path}`, {
+      method,
+      // redirect: 'error' — the Coolify API token must never follow a redirect
+      // to another destination.
+      redirect: 'error',
+      headers: {
+        Authorization: `Bearer ${config.apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    // undici reports a refused redirect as TypeError "fetch failed" with the
+    // real reason in cause.message ("unexpected redirect") — check both.
+    const cause = (err as { cause?: { message?: string } } | null)?.cause?.message ?? '';
+    if (/redirect/i.test(detail) || /redirect/i.test(cause)) {
+      throw new CoolifyError(
+        `Coolify ${method} ${path} refused to follow a redirect — the API token is never forwarded to another destination`,
+      );
+    }
+    throw err;
+  }
   let data: unknown = null;
   try {
     data = await res.json();
@@ -335,13 +352,25 @@ export const probeCoolify = async (): Promise<{ version: string | null; message:
   try {
     // /api/v1/version returns a plain-text version (e.g. "4.3.10"), not JSON.
     const res = await fetch(`${config.apiUrl}${API_VERSION_PATH}/version`, {
+      redirect: 'error',
       headers: { Authorization: `Bearer ${config.apiToken}` },
     });
     if (!res.ok) return { version: null, message: `HTTP ${res.status}` };
     const version = (await res.text()).trim();
     return { version, message: 'Connected' };
   } catch (err) {
-    return { version: null, message: err instanceof Error ? err.message : 'Probe failed' };
+    // undici reports a refused redirect as TypeError "fetch failed" with the
+    // real reason in cause.message ("unexpected redirect") — check both, and
+    // name the policy rather than the transport failure.
+    const message = err instanceof Error ? err.message : 'Probe failed';
+    const cause = (err as { cause?: { message?: string } } | null)?.cause?.message ?? '';
+    return {
+      version: null,
+      message:
+        /redirect/i.test(message) || /redirect/i.test(cause)
+          ? 'Refused to follow a redirect — the API token is never forwarded to another destination'
+          : message,
+    };
   }
 };
 

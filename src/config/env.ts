@@ -49,13 +49,23 @@ if (isProduction && process.env.BILLING_SIMULATE_RENEWAL_SETTLEMENT === 'true') 
  * which is when a client is being onboarded. Refusing to start is the kinder
  * failure. (`loadKeys()` keeps its own check as defence in depth.)
  */
-if (
-  isProduction &&
-  !process.env.LEASE_PRIVATE_KEY?.trim() &&
-  !process.env.LEASE_KEY_FILE?.trim()
-) {
+if (isProduction && !process.env.LEASE_PRIVATE_KEY?.trim() && !process.env.LEASE_KEY_FILE?.trim()) {
   logger.error(
     'FATAL: LEASE_PRIVATE_KEY (or LEASE_KEY_FILE) must be set in production — the control plane signs store licences with it',
+  );
+  process.exit(1);
+}
+
+/**
+ * The managed-endpoint allowlist is the domain policy the control plane dials
+ * store and Head Office URLs under (CONTEXT §3a): an empty list disables it,
+ * letting this most-privileged component be pointed at any public host. A
+ * production boot without it is a misconfiguration, not a choice — refuse, the
+ * same way a placeholder admin password is refused.
+ */
+if (isProduction && !(process.env.MANAGED_ENDPOINT_SUFFIXES ?? '').trim()) {
+  logger.error(
+    'FATAL: MANAGED_ENDPOINT_SUFFIXES must be set in production — without an approved-domain allowlist the control plane will call any public host it is pointed at (e.g. .vula-app.co.za)',
   );
   process.exit(1);
 }
@@ -113,7 +123,10 @@ export const env: Env = {
   officeAdminEmail: requireEnv('OFFICE_ADMIN_EMAIL', 'admin@za-pos.local').toLowerCase(),
   officeAdminPassword: requireEnv('OFFICE_ADMIN_PASSWORD', 'temp123', OFFICE_PASSWORD_PLACEHOLDER),
   jwtSecret: requireEnv('JWT_SECRET', 'dev-secret-change-me', 'your-64-char-random-secret-here'),
-  jwtTtlHours: Number(process.env.JWT_TTL_HOURS || 168),
+  // The office session is the most privileged credential in the fleet; a
+  // seven-day lifetime outlives any reasonable operator day. 24h by default,
+  // JWT_TTL_HOURS still overrides for deployments that want longer.
+  jwtTtlHours: Number(process.env.JWT_TTL_HOURS || 24),
   storeRequestTimeoutMs: Number(process.env.STORE_REQUEST_TIMEOUT_MS || 5000),
   // Not required at boot: when unset the signer generates a dev keypair (and, in
   // production, refuses to serve licences until a real key is configured).
