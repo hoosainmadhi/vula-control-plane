@@ -1,5 +1,37 @@
 # Findings
 
+## 2026-10-11 — the 10 October review's P0s were real, and the redirect one was wider than it said
+
+Verified claim by claim before building (the full narrative lives in the za-pos repo's
+`findings.md`, which recorded the cross-repo pass). What this repo's code actually showed:
+
+- **The missing `redirect` policy covered three credentials, not one.** `storeClient.ts`
+  carried the store token, `bootstrapStoreAdmin` carried a **temporary admin password**
+  in the body, and `coolify.ts` carried the Coolify API bearer — none with a redirect
+  policy, so Node's default (follow) could forward any of them to an unvalidated host.
+  All now `redirect: 'error'`, with the credentialless probes made consistent.
+- **undici hides the redirect refusal in the cause chain.** A refused redirect arrives as
+  `TypeError: "fetch failed"` with `"unexpected redirect"` in `err.cause.message` — and
+  inside jest the undici `TypeError` even fails `instanceof Error`, which is why
+  `probeCoolify` reported its own `'Probe failed'` fallback instead of the real cause.
+  Classifiers read the cause chain now, and `probeCoolify` names the policy rather than
+  the transport failure. The regression suite runs real HTTP servers so a mocked fetch
+  could never paper over this.
+- **The backup script's gaps were exactly as reviewed** — `.db` only, optional off-host,
+  age-only pruning, zero verification. What the review didn't say: the *store* app's own
+  backup (DB + images tar.gz, restore-verified by test) already set the standard; the
+  fleet script now meets it. One subtlety: verification opens each copy read-only via
+  `file:…?mode=ro`, so checking a snapshot never drops `-wal`/`-shm` files beside it.
+- **`MANAGED_ENDPOINT_SUFFIXES` was genuinely boot-optional** — read only inside
+  `validate.ts` at call time, where an empty list silently disabled the allowlist (the
+  code even comments it as intentional "while a domain is still being chosen"). The
+  production boot gate now refuses to start without it, matching the other production
+  refusals' style; the settle-the-domain grace is dev/test-only by construction.
+- **The settlement double-pay question is now evidence, not confidence** — the route
+  already refused a paid invoice, but nothing proved a duplicate request moved
+  `paid_through` once and only once. Pinned: 409, one payment row, one audit entry, one
+  licence push, `fetch` call count unchanged after the first settle.
+
 ## 2026-10-07 — the Coolify API cannot make the storage the owner asked for, and the queue can wedge
 
 The owner asked for the fleet's SQLite files under `/data/apps/vula-app/` in a
@@ -1564,3 +1596,32 @@ transfers screen sorts by. The same class as the earlier `addColumn`-on-the-wron
 that "obviously" travels with the store did not, because two payloads describe the same thing and only
 one was updated. Both now carry it, and the panel treats an absent kind as "leave the row alone"
 rather than "it is a shop".
+
+**An invoice whose lines were priced but whose total was not.** `invoiceLineItems`
+printed one "Per month" line per snapshotted add-on, and the residual line made the
+columns add up to `amount_cents` in every case — so no test could fail, and no reader
+could see the problem arithmetically. The problem was the *statement*: on a custom-priced
+invoice the recurring figure is one negotiated amount that does not include the add-ons
+(they are entitlement, not a second charge), so the document told the client it was being
+billed R99/month for AI Copilot while the total said otherwise, and the difference
+reappeared inside a line labelled "Subscription — …". A residual that balances is not
+evidence that the lines are true. The guard to keep: when a document itemises a charge,
+each item must be a term the total is actually made of — if it is inside a flat figure,
+say "included" and do not put a number against it.
+
+**The same class on a screen, and the reason it survived a review.** The subscription
+editor's preview computed `rate × quantity` and ignored the add-ons it was showing a
+tickbox for, so the operator's own screenshot showed R 30 against a saved subscription of
+R 426. It was not a hidden bug: the preview and the server quote were written from
+different sources — the preview read the plan, the quote reads the agreement. Two
+implementations of one figure will disagree eventually; the fix that sticks is the one
+that removes the second implementation (`addonLinesFor` now mirrors `quoteForSubscription`
+explicitly and is asserted against the same rules: agreement first, plan as fallback,
+plan-included excluded).
+
+**A mirror is only useful if someone reads it.** `schema.sql` had drifted three columns
+behind the DDL, and CONTEXT still described the retired four-tier/R500 catalogue while
+the seeded tiers had been eight `vula-*` plans at R100–R150. Neither had a test and
+neither could fail, which is why both were stale: the DDL is the source of truth and the
+code reads it, so nothing breaks when the prose is wrong. Worth a routine when the schema
+or pricing changes — the doc is the thing a person reads before they touch either.

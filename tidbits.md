@@ -2,6 +2,33 @@
 
 > Prioritised for the next workspace. ~~Struck~~ items are done.
 
+## Deferred from the launch-hardening pass (2026-10-11)
+
+Real items from `review-10October2026.md` that are post-pilot work, deliberately not
+built this pass:
+
+- **MFA on the office login.** The most privileged session on the platform. The session
+  half is done (JWT_TTL_HOURS now defaults to 24h); TOTP + recovery codes is the shape
+  when built — needs the owner's call on the operator workflow it imposes. The review
+  also asks for login-failure notifications: the SMTP path exists, so this is a small
+  follow-on once MFA is decided.
+- **Redis-backed (shared, persistent) rate limiting.** `rateLimiter.ts` is per-process by
+  design and says so; fine for the single-process control plane today, but restarts wipe
+  the counters and replicas would not share them. The code already names Redis as the
+  upgrade path.
+- **DNS pinning on outbound calls (the TOCTOU gap).** `assertManagedEndpoint` resolves and
+  the later `fetch` resolves again — fast-rebinding DNS could differ between the two.
+  `redirect: 'error'` closed the credential-forwarding half; pinning the validated
+  address into the connection needs a custom undici dispatcher, acknowledged as
+  deliberately out of scope in `storeClient.ts`'s comment.
+- **Making off-host backups mandatory.** The script warns loudly without
+  `BACKUP_RSYNC_TARGET`; making absence a hard failure is a host-operational decision
+  (and a full restore rehearsal to an isolated environment belongs with it).
+- **Pinning the fleet demo-golden refresh** to re-verify goldens after the backup script's
+  new verification rules have run in production for a week (the goldens are pruned-exempt
+  by design; a sanity glance at `/backups/vula-app` after the first real night is cheap
+  insurance).
+
 ## Settled — do not build (2026-09-16)
 
 - **Support is not billed separately.** The per-terminal rate includes support
@@ -528,3 +555,15 @@ into that plan.
   may still refuse, in which case the wildcard has to be scoped); and there is a stray
   `v=DKIM1; k=rsa; p=…` TXT at the apex, byte-identical to `zmail._domainkey` — Zoho's key published
   without a selector, doing nothing, safe to delete.
+- **Committed or not (2026-10-10).** The add-on pass, the 10 October review pass and the
+  storage/bind migration work all sit uncommitted in this repo, and the tenant `za-pos`
+  repo holds the matching AI-guardrail work. House rule: nothing is committed, merged or
+  pushed without the owner saying so.
+- **Two lists, one rule.** A suspended licence drops `ai_assistant` and `invoice_import`
+  on both sides of the fence: `SUSPENSION_STRIPPED_FEATURES` (control plane) and
+  `SUBSCRIPTION_GATED_FEATURES` (the register's `src/services/licence.ts`). They are
+  deliberately small and deliberately duplicated because the two repos cannot import each
+  other — change them together or the claim and the gate tell different stories.
+- **Turning AI on for a demo store is still the owner's call.** It needs the add-on
+  granted and a DeepSeek key set, and it changes what the public demos offer (the
+  marketing page currently reads "everything except the AI assistant").

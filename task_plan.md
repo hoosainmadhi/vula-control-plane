@@ -14,6 +14,86 @@ container and exposes `/api/internal/*` guarded by a per-store
 `CONTROL_PLANE_TOKEN` (tenant-side workstream; contract authored here in
 CONTEXT.md "Internal API contract").
 
+## Phase: the add-on model adds up (2026-10-10) — complete, uncommitted
+
+The owner's add-on pricing (six keys sold at R99/R49 per month, priced per plan and
+bought per client) was already modelled; this pass closed the places where the numbers,
+the documents and the signed claim did not agree with it. The tenant half of the gate
+audit (`layby` on its own key) was verified already done in `za-pos`.
+
+- [x] **The subscription editor's quote includes the add-ons**
+      (`frontend/src/pages/ClientDetailPage.tsx` + `lib/money.ts`). The preview showed
+      terminals alone, so the owner's screenshot of a client with four ticks read
+      "Recurring (30 × R 1,00) R 30,00" while saving billed R 426. It now itemises the
+      terminals, each ticked add-on and the total, at the price agreed with the client
+      where one is on record (grandfathering) and the plan's price otherwise — the same
+      order the server's `quoteForSubscription` uses. `addonLinesFor` is unit-tested, and
+      a custom plan states that its ticks sit inside the agreed flat amount.
+- [x] **A custom-priced invoice names its add-ons as included, not as priced lines**
+      (`services/billing.ts` `invoiceLineItems` + both renderers). A `custom` recurring
+      charge is one negotiated figure, so pricing the snapshotted add-ons on the document
+      stated a per-month charge the client was not paying and left the residual line to
+      absorb the difference. They now read "Included in the agreed amount" with no figure
+      (`InvoiceLineItem.included`) and the agreed amount prints whole; per-terminal
+      invoices still price each add-on and sum to the total. Both directions are pinned.
+- [x] **A suspended licence omits the metered add-ons**
+      (`SUSPENSION_STRIPPED_FEATURES` in `services/features.ts`, applied at the single
+      delivery boundary in `services/licenceDelivery.ts`). `ai_assistant` and
+      `invoice_import` are sold per month, so they stop while the account is suspended —
+      the register's own gate is the second half of the same rule. The operational
+      add-ons (Head Office, credit, lay-by, e-commerce) stay: suspension stops new sales,
+      not a merchant's access to data it owns. `enforcement.test.ts` decodes the pushed
+      licence and checks both states.
+- [x] **Docs and mirror**: `schema.sql` gains the three columns the DDL already had
+      (`company_subscriptions.features_json`/`addon_prices_json`, `invoices.addons_json`);
+      `features.ts`'s "six keys" comment corrected to eight; CONTEXT §2b (vocabulary
+      table, the suspension rule), §2a (the seeded catalogue still read as the retired
+      four tiers at R500) and §5 (the add-on model, `company_subscriptions`, `invoices`).
+- Verification: control plane typecheck + `npm run build` clean, backend **405/405 across
+      33 suites**, frontend **28/28**; the tenant `za-pos` store+Head Office suites
+      **682/682** and its vitest **52/52** (unchanged tree, re-run as the cross-app gate).
+      Not committed.
+
+## Phase: launch hardening — the 10 October review (2026-10-10 → 10-11) — complete, uncommitted
+
+The owner's second external pre-launch review (`review-10October2026.md`, conditional
+NO-GO for a paid launch) was verified claim by claim against this repo, then the approved
+scope was built: both P0s plus the code-level P1s, each with a regression test. Nothing
+committed (the za-pos side of the pass is recorded in that repo's planning files).
+
+- [x] **P0 · redirect policy.** `redirect: 'error'` on every privileged outbound fetch:
+      `storeClient.ts` request() (all store/panel calls carry the token),
+      `storeProvisioning.ts` bootstrapStoreAdmin (token + temp admin password),
+      `coolify.ts` request() + probe (bearer API token), `mailer.ts` Resend call,
+      credentialless probes for consistency. undici reports the refused redirect only in
+      `err.cause.message` ("unexpected redirect") — every classifier checks the cause
+      chain, and probeCoolify names the policy instead of the transport failure.
+      `redirectPolicy.test.ts` runs real HTTP servers (origin 301/302/307/308, target
+      records arrivals) and proves the credential never reaches the target, for the store
+      ping, the admin bootstrap and the Coolify probe, with a happy-path control.
+- [x] **P0 · `scripts/vula-backup.sh`.** Now verifies every copy (read-only
+      `PRAGMA integrity_check` + schema sanity, so no `-wal/-shm` strays), archives each
+      store's `images/` beside its database, enforces a 7-copy retention floor (age prune
+      only above the floor; demo-golden exemption kept), warns loudly without
+      `BACKUP_RSYNC_TARGET`, and aborts the whole run on the first unverifiable database.
+      `VULA_DATA_ROOT`/`BACKUP_DEST` overridable (the root name matches `coolify.ts`).
+      Runtime-verified on a scratch fleet: 16/16, including corrupt-source and
+      flipped-page aborts, demo skip, tar extraction and prune behaviour.
+- [x] **P1 · `/health` is database-aware.** The registry `SELECT 1` runs on every probe
+      and answers 503 `database: 'unhealthy'` when it cannot — the static ok could hold a
+      dead registry open as healthy in Coolify. `health.test.ts` covers both paths.
+- [x] **P1 · production requires `MANAGED_ENDPOINT_SUFFIXES`.** Boot refuses an
+      empty/whitespace allowlist in production (an empty list silently disabled the
+      managed-endpoint policy). `productionBoot.test.ts` proves it with a real child
+      boot of `src/config/env.ts`; `.env.sample` updated.
+- [x] **P1 · settlement double-pay pinned.** `settlement.test.ts`: the same renewal
+      invoice settled twice → second is 409, `paid_through` moved exactly once, one
+      payment row, one `invoice_settled` audit entry, one licence push.
+- [x] **P1 · office session TTL.** `JWT_TTL_HOURS` default 168h → 24h (env override
+      kept); `.env.sample` updated.
+- Verification: typecheck clean; backend jest **401/401 across 33 suites** (was 387/30);
+  frontend 24/24; `npm run build` exit 0; prettier clean on touched files. Not committed.
+
 ## Next Step
 
 Owner: set the production office identity and SMTP in the prod control plane's

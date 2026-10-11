@@ -1,5 +1,27 @@
 # Progress
 
+## 2026-10-11 — launch hardening: both review P0s and the code-level P1s, all verified
+
+`review-10October2026.md` (conditional NO-GO for paid launch) verified claim by claim,
+then built under the owner's approved scope. P0s first: `redirect: 'error'` on every
+privileged outbound fetch with cause-chain-aware errors and a real-server regression
+suite (`redirectPolicy.test.ts`, 8 tests); `vula-backup.sh` hardened to the store app's
+standard (per-copy integrity + schema verification, images archived, 7-copy floor,
+off-host warning, env-overridable roots) and runtime-verified on a scratch fleet — 16/16
+checks including corrupt-source and flipped-page aborts. P1s: `/health` queries the
+registry DB (503 when it cannot; `health.test.ts`), production boots refuse an empty
+`MANAGED_ENDPOINT_SUFFIXES` (`productionBoot.test.ts` boots the real env gate in a child
+process), the settlement double-pay case is pinned in `settlement.test.ts`, and the
+office session TTL default is 24h. `.env.sample` updated for both the allowlist and the
+TTL.
+
+**Verification (all executed):** `npm run typecheck` clean; backend jest **401/401
+across 33 suites** (14 new tests: 8 redirect, 2 health, 3 production boot, 1 settlement
+double-pay); frontend 24/24; `npm run build` exit 0; prettier clean on touched files.
+Nothing committed — owner tests first, per house rule. Deferred with reasons in this
+repo's `tidbits.md` and the za-pos one: MFA, Redis rate limiting, DNS pinning, mandatory
+off-host enforcement, restore rehearsal.
+
 ## 2026-10-03 — production is live: vula-cp-prod deployed, healthy, clean, logins verified
 
 Owner: *"secrets done"* — the production licence keypair, JWT secret and admin
@@ -2821,3 +2843,55 @@ actually configured one. And my browser test used `thandi@cornermotors.co.za` as
 address, which is a domain that may exist — one stray message went to it through that SMTP
 account. A test address should have been `example.com`; recorded in tidbits so the next live
 test uses one.
+
+## The add-on model adds up (2026-10-10)
+
+The pricing the owner approved (a per-till rate with the base set included, plus six
+monthly add-ons at R99/R49) was already modelled in the registry — plan vocabulary,
+per-plan prices, per-client purchases, the plan ∪ bought union on the licence, and the
+add-ons in the invoice's line set. This pass closed the three places where the model did
+not actually add up, plus the mirror that had drifted.
+
+**The editor's quote was the visible one.** `SubscriptionQuotePreview` multiplied the
+ticked quantity by the plan's rate and stopped there, so the owner's screenshot of a
+client holding four add-ons read "Recurring (30 × R 1,00) R 30,00" — R 426 light against
+what saving the form would bill. It now itemises terminals, each ticked add-on and the
+total. The arithmetic lives in `frontend/src/lib/money.ts` as `addonLinesFor` (options
+the plan sells, the ticks, the client's agreed prices) so it is unit-tested rather than
+buried in JSX, and it resolves each price the way the server does: the agreement first,
+the plan only as the fallback. The option rows show the agreed price too, marked
+`· agreed` when a plan edit has since moved the catalogue — so the editor never shows a
+figure the client is not on. A custom plan says plainly that its ticks are carried inside
+the agreed flat amount.
+
+**A custom plan's document was the incorrect one.** `invoiceLineItems` printed one
+"Per month" line per snapshotted add-on on every invoice. On a per-terminal plan that is
+exactly right and sums to the total. On a custom plan the recurring figure is one
+negotiated number that does NOT add the add-ons (services/pricing.ts), so those lines
+stated a charge the client was not paying and left the residual line to absorb the
+difference. `InvoiceLineItem` now carries `included?: boolean`; on a flat deal the add-on
+lines read "Included in the agreed amount" with no figure, and both renderers (PDF and
+email) print the word rather than a money column. The agreed amount then prints whole.
+The signal for "flat deal" is the absent terminal count/rate, which is sound because the
+only invoices carrying an add-on snapshot are the computed subscription ones.
+
+**Suspension needed the vendor half.** The register already refuses `ai_assistant` and
+`invoice_import` on a suspended licence (`SUBSCRIPTION_GATED_FEATURES`), and that is
+tested there. The claim now agrees with that intent: `SUSPENSION_STRIPPED_FEATURES` in
+`services/features.ts` is applied at the one delivery boundary, so every issue path —
+both Push Licence routes, a payment, a plan change, onboarding — obeys it without knowing
+about it. Operational add-ons stay in the claim; suspension stops new sales, not a
+merchant's access to its own data. The test decodes the licence the control plane actually
+posted and asserts the suspended list, then the healthy one, so both directions are
+pinned.
+
+**Mirror and docs.** `schema.sql` did not carry three columns the DDL had shipped
+(`company_subscriptions.features_json`, `addon_prices_json`, `invoices.addons_json`) — the
+mirror is a reader's reference and it was telling a stale story. CONTEXT gained the
+suspension rule and the custom-plan itemisation in §5, the current eight-key vocabulary
+table in §2b (it still said six), and §2a was still describing the retired four tiers at
+R500 — the seeded catalogue has been eight `vula-*` tiers at R100–R150 for a while, and a
+doc that misstates the price list is how the next person misprices a client.
+
+Verified: 405/405 backend (33 suites), 28/28 frontend, typecheck and `npm run build`
+clean, and the tenant repo's 682/682 + 52/52 re-run as the cross-app gate. Not committed.

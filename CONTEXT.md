@@ -66,11 +66,15 @@ control plane is what makes the two confusable in conversation. Do not write
   owner decided the same day that support is included per terminal, so there is no
   support line, tier or charge type. See §5e before changing either.
 - **A plan grants** a store-count cap, a per-store terminal ceiling, a feature set,
-  and its pricing. Four tiers are seeded and every value is editable: `starter`
-  (1 store / 2 terminals), `business` (1/10), `multi-store` (20/10), `enterprise`
-  (custom pricing). All three per-terminal tiers are R500 per licensed terminal per
-  month plus R10,000 once-off onboarding. Operators can also **create their own
-  plans** — the seeded four are a starting point, not a closed catalogue.
+  its pricing, and the add-on prices it sells. Eight tiers are seeded and every value
+  is editable: `vula-start` (1 store / 1 terminal), `vula-grow` (1/3), `vula-branch`
+  (3/2), `vula-network` (5/3), `vula-market` (1/10), `vula-market-plus` (10/15),
+  `vula-market-enterprise` (50/20) and `vula-spares-network` (50/5) — all
+  per-terminal at R100–R150 per licensed terminal per month, with a once-off
+  onboarding charge of R3,000–R6,000. Operators can also **create their own plans** —
+  the seeded tiers are a starting point, not a closed catalogue. Each plan also carries
+  what it SELLS as add-ons (`feature_prices_json`), seeded from the approved pricing
+  page (§5, `DEFAULT_FEATURE_PRICES`).
 - **Four terminal quantities, and only one of them is billable.** **Licensed** is
   the commercial quantity (bought from the vendor, drives the fee). **Configured**
   is the terminal slots the POS is told to run (`stores.terminal_count`). **Claimed**
@@ -156,21 +160,48 @@ truth at the store: it carries `features[]`, `billingState`, `paidThrough`,
 `maxTerminals` and `maxOfflineUntil`, and each application derives its own gate from
 those claims.
 
-### The curated feature vocabulary (six keys, locked with the owner)
+### The curated feature vocabulary (eight keys, locked with the owner)
 
 A plan may grant only these keys; the control plane refuses anything else at plan
 write time (400, naming the unknown key) so a typo cannot flow silently into licences.
 Served machine-readably at `GET /api/plans/features` (see `src/services/features.ts`
 — the canonical list lives there).
 
-| Key                 | Label              | Enforced by                         |
-| ------------------- | ------------------ | ----------------------------------- |
-| `customer_credit`   | Customer credit    | store                               |
-| `advanced_reports`  | Advanced reports   | store                               |
-| `multi_store`       | Multi-store        | control plane · Head Office · store |
-| `stock_transfers`   | Stock transfers    | Head Office                         |
-| `ecommerce_bridges` | E-commerce bridges | store                               |
-| `ai_assistant`      | AI assistant       | store                               |
+| Key                 | Label                        | Enforced by                         |
+| ------------------- | ---------------------------- | ----------------------------------- |
+| `customer_credit`   | Credit accounts              | store                               |
+| `advanced_reports`  | Advanced reports             | store                               |
+| `multi_store`       | Head Office                  | control plane · Head Office · store |
+| `stock_transfers`   | Inter-branch transfers       | Head Office                         |
+| `ecommerce_bridges` | E-commerce                   | store                               |
+| `ai_assistant`      | AI Copilot                   | store · Head Office                 |
+| `layby`             | Lay-by                       | store                               |
+| `invoice_import`    | Upload invoice (AI assisted) | store                               |
+
+`layby` and `invoice_import` joined on 2026-10-10: lay-bys were gated on
+`customer_credit` (so buying credit alone handed them over, and buying lay-by alone
+unlocked nothing) and the supplier-invoice importer was gated on **no key at all**.
+Six of the eight are sold per month and priced per plan (§5, `feature_prices_json`);
+the other two are included by whichever plan grants them.
+
+### What a suspension does to the add-ons (2026-10-10)
+
+The signed claim is kept in step with the intent, on both sides:
+
+- The control plane omits `ai_assistant` and `invoice_import` from the licence it
+  signs while the client is suspended — `SUSPENSION_STRIPPED_FEATURES`
+  (`src/services/features.ts`), applied at the one delivery boundary
+  (`services/licenceDelivery.ts`), so every issue path obeys it.
+- The register applies the same rule on its own side (`SUBSCRIPTION_GATED_FEATURES`):
+  with either key present but the licence **suspended**, the gate refuses **402
+  `subscription_suspended`** rather than `feature_not_in_plan`, so a deployment still
+  holding an older licence cannot keep using them. The two lists name the same two
+  keys and must be changed together.
+
+Settling the account restores both on the next push. The operational add-ons — Head
+Office, credit accounts, lay-by, e-commerce — are never stripped: suspension stops new
+sales (the register's own trading gate), not a merchant's access to data it already
+owns.
 
 ### The licensed terminal allowance (2026-09-13)
 
@@ -480,10 +511,23 @@ The pricing page sells a per-till rate plus six monthly add-ons, so entitlement 
 - **The invoice itemises it**: one line per add-on (label, price), snapshotted onto
   the invoice as `addons_json`; the recurring total is terminals × rate + the add-ons.
   Add-ons are not pro-rated mid-period (see `tidbits.md`).
+- **On a custom plan the add-ons sit INSIDE the agreed amount.** `custom` pricing is
+  one negotiated figure per period, so the subscription arithmetic does not add the
+  add-ons on top of it (they are still recorded — they are the client's entitlement —
+  but they are not a second charge). The document follows the same rule: the add-on
+  lines read *Included in the agreed amount* with no figure (`invoiceLineItems` marks
+  them `included`), and the agreed amount prints whole. Pricing them on the document
+  would state a per-month charge the client is not paying and leave the residual line
+  to absorb the difference.
 
 `company_subscriptions` — one row per client: `company_id` (UNIQUE),
 `licensed_terminal_count` (>= 0), `setup_fee_status`
-(`not_invoiced` | `invoiced` | `paid` | `waived`).
+(`not_invoiced` | `invoiced` | `paid` | `waived`), the paid add-ons the client holds
+(`features_json`, the keys bought; `addon_prices_json`, the price agreed for each at
+the moment of purchase) and the agreed terms stamped on the row when the office
+onboards, moves or re-prices the client (`pricing_mode`, `rate_cents`,
+`custom_amount_cents`, `setup_fee_cents`, `billing_period`, `priced_at`) — those
+stamped terms, not today's plan, are what the client pays.
 
 `store_terminal_licences` — where the purchased licences sit: `company_id`,
 `store_id` (UNIQUE), `licensed_terminal_count` (>= 0). Invariants enforced in
@@ -492,7 +536,9 @@ subscription's licensed count, and no allocation exceeds the plan's per-store
 ceiling.
 
 `invoices` — `amount_cents` plus its evidence: `terminal_count`,
-`terminal_price_cents` (rate snapshot), `setup_fee_cents`, and a `description`
+`terminal_price_cents` (rate snapshot), `setup_fee_cents`, `addons_json` (the paid
+add-ons billed, with the agreed price for each — omitted when none, and marked
+*included* rather than priced on a custom-priced invoice), and a `description`
 (what the charge is for). `subtotal_cents` / `vat_cents` / `vat_rate` are the tax
 split of `amount_cents`, which is VAT-inclusive; NULL on invoices raised before
 the split existed (their documents were issued without it). `payments` records a settlement (status `completed`)
