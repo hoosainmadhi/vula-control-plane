@@ -11,6 +11,7 @@ import {
   type StoreRecord,
 } from '../config/registryDb.js';
 import { logger } from '../utils/logger.js';
+import { SUSPENSION_STRIPPED_FEATURES } from './features.js';
 import { issueLicence } from './licenceSigner.js';
 import {
   ping,
@@ -20,7 +21,7 @@ import {
   reportedLicenceSequence,
   type LicenceHolderKind,
 } from './storeClient.js';
-import { entitlementsFor, entitlementsForStore } from './subscriptions.js';
+import { entitlementsFor, entitlementsForStore, type Entitlements } from './subscriptions.js';
 
 /**
  * The one place a licence is signed and delivered. Every caller that issues one —
@@ -116,6 +117,21 @@ const reconcileSequence = async (holder: Holder): Promise<LicenceSequenceReconci
   return { from: before, to: after, reported };
 };
 
+/**
+ * The features a licence may carry.
+ *
+ * The per-month add-ons stop when the account is suspended: the deployment
+ * enforces the same rule on its own side, and putting the signed claim in step
+ * with the intent means a deployment that never ran that gate still refuses.
+ * Operational add-ons (Head Office, credit, lay-by, e-commerce) stay in the
+ * claim — suspension blocks new sales, not a merchant's access to data it
+ * already owns.
+ */
+export const licenceFeaturesFor = (ent: Entitlements): string[] =>
+  ent.billingState === 'suspended'
+    ? ent.features.filter((key) => !SUSPENSION_STRIPPED_FEATURES.includes(key))
+    : ent.features;
+
 /** Signs and delivers a store's licence; throws if the store refuses it. */
 export const deliverStoreLicence = async (store: StoreRecord): Promise<LicenceDelivery> => {
   const reconciled = await reconcileSequence({
@@ -135,7 +151,7 @@ export const deliverStoreLicence = async (store: StoreRecord): Promise<LicenceDe
     companyName: ent.companyName,
     planCode: ent.planCode,
     planName: ent.planName,
-    features: ent.features,
+    features: licenceFeaturesFor(ent),
     maxStores: ent.maxStores,
     maxTerminalsPerStore: ent.maxTerminalsPerStore,
     // This store's own allowance — the register gates new device claims on it.
@@ -170,7 +186,7 @@ export const deliverPanelLicence = async (panel: PanelRecord): Promise<LicenceDe
     companyName: ent.companyName,
     planCode: ent.planCode,
     planName: ent.planName,
-    features: ent.features,
+    features: licenceFeaturesFor(ent),
     maxStores: ent.maxStores,
     maxTerminalsPerStore: ent.maxTerminalsPerStore,
     paidThrough: ent.paidThrough,

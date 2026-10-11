@@ -34,3 +34,25 @@ export const perTerminalLabel = (
   period: 'monthly' | 'annual' | 'once-off',
 ): string =>
   `${rand(cents)} / terminal / ${period === 'monthly' ? 'month' : period === 'annual' ? 'year' : 'once-off'} incl. VAT`;
+
+/**
+ * The add-on lines a plan sells and the office has ticked in the subscription
+ * editor, priced at what THIS client agreed where a price is on record and at the
+ * plan's price otherwise — the same order the server's quote uses
+ * (`services/pricing.ts`), so the editor's figure and the raised invoice agree.
+ *
+ * A feature the plan already includes is not offered in the editor, so it cannot
+ * appear here; the lines are what the client BOUGHT.
+ */
+export const addonLinesFor = (
+  options: ReadonlyArray<{ key: string; cents: number; label: string }>,
+  selected: readonly string[],
+  agreedPrices: Record<string, number> = {},
+): Array<{ key: string; label: string; cents: number }> =>
+  options
+    .filter((option) => selected.includes(option.key))
+    .map((option) => ({
+      key: option.key,
+      label: option.label,
+      cents: agreedPrices[option.key] ?? option.cents,
+    }));

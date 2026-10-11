@@ -163,7 +163,7 @@ export const buildInvoicePdf = ({ invoice, company, settings }: InvoicePdfInput)
     // The lines come from one shared model (`invoiceLineItems`), so this document
     // and the emailed one cannot show different arithmetic.
     for (const item of invoiceLineItems(invoice)) {
-      row(item.label, item.detail, formatCents(item.amountCents));
+      row(item.label, item.detail, item.included ? 'Included' : formatCents(item.amountCents));
     }
 
     y = rule(Math.max(y + 6, 140));

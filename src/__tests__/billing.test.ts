@@ -548,6 +548,80 @@ describe('L3 Billing & Invoicing', () => {
     expect(forCustom).toHaveLength(1);
   });
 
+  it('names a flat deal`s add-ons as included instead of pricing them (2026-10-10)', async () => {
+    // The client's recurring charge is one negotiated figure, so the terms
+    // arithmetic (services/pricing.ts) does not add the add-ons on top — but the
+    // invoice snapshots them. Pricing them here would print a per-month charge
+    // the client is not paying and leave the residual to absorb the difference.
+    const planId = await planIdByCode('vula-market-enterprise');
+    await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ pricingMode: 'custom', customAmountCents: 750_000, setupFeeCents: 0 })
+      .expect(200);
+    const company = await makeCompany({
+      name: 'Flat Deal Co',
+      slug: 'flat-deal-co',
+      planId,
+      licensedTerminalCount: 12,
+    });
+    await request(app)
+      .put(`/api/clients/${company.id}`)
+      .set(auth())
+      .send({ features: ['ai_assistant', 'invoice_import'] })
+      .expect(200);
+
+    const created = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'renewal', includeOnboarding: false })
+      .expect(201);
+    expect(created.body.amountCents).toBe(750_000);
+
+    const { getInvoiceById } = await import('../config/registryDb.js');
+    const { invoiceLineItems } = await import('../services/billing.js');
+    const items = invoiceLineItems(getInvoiceById(created.body.id)!);
+    const addonLines = items.filter((item) => item.included);
+    expect(addonLines.map((item) => item.label)).toEqual([
+      'AI Copilot',
+      'Upload invoice (AI assisted)',
+    ]);
+    expect(addonLines.every((item) => item.amountCents === 0)).toBe(true);
+    // The document still adds up: the priced lines are the agreed amount, whole.
+    expect(items.filter((item) => !item.included).reduce((sum, i) => sum + i.amountCents, 0)).toBe(
+      750_000,
+    );
+  });
+
+  it('prices an add-on per month on a per-terminal invoice, and still sums to the total', async () => {
+    const company = await makeCompany();
+    await request(app)
+      .put(`/api/clients/${company.id}`)
+      .set(auth())
+      .send({ features: ['ai_assistant', 'customer_credit'] })
+      .expect(200);
+
+    const created = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: company.id, purpose: 'renewal', includeOnboarding: false })
+      .expect(201);
+    // 8 licensed terminals × the agreed rate + R99 (AI Copilot) + R49 (credit).
+    expect(created.body.amountCents).toBe(8 * company.subscription.rateCents + 9_900 + 4_900);
+
+    const { getInvoiceById } = await import('../config/registryDb.js');
+    const { invoiceLineItems } = await import('../services/billing.js');
+    const items = invoiceLineItems(getInvoiceById(created.body.id)!);
+    expect(items.filter((item) => item.included)).toHaveLength(0);
+    // Vocabulary order, not request order: the feature keys are normalised on write.
+    expect(items.map((item) => item.label)).toEqual([
+      'Licensed terminals',
+      'Credit accounts',
+      'AI Copilot',
+    ]);
+    expect(items.reduce((sum, i) => sum + i.amountCents, 0)).toBe(created.body.amountCents);
+  });
+
   it('records a settled payment as completed, not processing', async () => {
     const company = await makeCompany();
     const created = await request(app)

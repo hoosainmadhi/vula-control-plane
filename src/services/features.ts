@@ -3,8 +3,15 @@ import { ValidationError } from '../utils/validate.js';
 /**
  * The curated plan-feature vocabulary (L4).
  *
- * Six keys, locked with the owner when plans were introduced. A plan's feature
- * set is written into every licence it signs, and the applications gate on
+ * Eight keys: six sold monthly as add-ons (`PRICED_FEATURE_KEYS` — Head Office,
+ * AI Copilot, Upload invoice, Credit accounts, Lay-by, E-commerce) and two
+ * included by whichever plan grants them (`advanced_reports`,
+ * `stock_transfers`). `layby` and `invoice_import` became their own keys on
+ * 2026-10-10, split out of `customer_credit` and `ai_assistant` so each could be
+ * sold and gated on its own.
+ *
+ * A plan's feature set is written into every licence it signs, and the
+ * applications gate on
  * these exact keys — so the control plane owns the list and refuses anything
  * else at plan write time. A typo'd key would otherwise flow silently into
  * licences and gate nothing on either side.
@@ -92,6 +99,18 @@ export const PRICED_FEATURE_KEYS: readonly string[] = [
   'layby',
   'ecommerce_bridges',
 ];
+
+/**
+ * The add-ons a suspended account may not use.
+ *
+ * They are sold per month, so suspension has to switch them off: the deployment
+ * enforces the same rule on its own side (a suspended licence is refused there),
+ * and keeping the signed claim in step with the intent means a deployment that
+ * never ran that gate still refuses. Operational add-ons — Head Office, credit,
+ * lay-by, e-commerce — stay in the claim: suspension blocks new sales, not a
+ * merchant's access to data it already owns (CONTEXT §5).
+ */
+export const SUSPENSION_STRIPPED_FEATURES: readonly string[] = ['ai_assistant', 'invoice_import'];
 
 /**
  * What a feature is called on an invoice, a quote, and everywhere the office

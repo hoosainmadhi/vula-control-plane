@@ -1,4 +1,4 @@
-import { PERIOD_LABEL, perTerminalLabel, rand, toCents, toRands } from './money';
+import { addonLinesFor, PERIOD_LABEL, perTerminalLabel, rand, toCents, toRands } from './money';
 
 /**
  * Money is the one thing every screen shows and every invoice states, so the
@@ -71,5 +71,39 @@ describe('price labels', () => {
     expect(label).toContain('R 500,00');
     expect(label).toContain('/ terminal / month');
     expect(label).toContain('incl. VAT');
+  });
+});
+
+describe('addonLinesFor', () => {
+  const options = [
+    { key: 'ai_assistant', cents: 9900, label: 'AI Copilot' },
+    { key: 'customer_credit', cents: 4900, label: 'Credit accounts' },
+  ];
+
+  it('prices only the ticked add-ons, at the plan price', () => {
+    // The regression: the editor's quote showed terminals alone, so the operator
+    // saved an add-on-inclusive subscription against a preview that was R148 light.
+    expect(addonLinesFor(options, ['ai_assistant'])).toEqual([
+      { key: 'ai_assistant', label: 'AI Copilot', cents: 9900 },
+    ]);
+    expect(addonLinesFor(options, [])).toEqual([]);
+  });
+
+  it('keeps the list order so the editor and the invoice read the same', () => {
+    expect(addonLinesFor(options, ['customer_credit', 'ai_assistant']).map((l) => l.key)).toEqual([
+      'ai_assistant',
+      'customer_credit',
+    ]);
+  });
+
+  it('prefers the price agreed with this client over the plan`s', () => {
+    // Grandfathering: the terms are what the client holds, not today's catalogue.
+    expect(addonLinesFor(options, ['ai_assistant'], { ai_assistant: 4900 })).toEqual([
+      { key: 'ai_assistant', label: 'AI Copilot', cents: 4900 },
+    ]);
+  });
+
+  it('ignores a tick for something this plan does not sell', () => {
+    expect(addonLinesFor(options, ['layby'])).toEqual([]);
   });
 });

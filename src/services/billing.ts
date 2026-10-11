@@ -280,6 +280,12 @@ export interface InvoiceLineItem {
   label: string;
   detail: string;
   amountCents: number;
+  /**
+   * Named on the document but not priced: the charge sits inside a negotiated
+   * flat amount on the same invoice. The renderers print "Included" rather than
+   * a figure, so a line that prices nothing cannot be read as a charge.
+   */
+  included?: boolean;
 }
 
 /** The add-ons an invoice billed, from its own snapshot. */
@@ -326,12 +332,26 @@ export const invoiceLineItems = (invoice: InvoiceRecord): InvoiceLineItem[] => {
     });
   }
   // The paid add-ons, each its own line: the invoice says what the client bought.
+  //
+  // On a custom-priced invoice (no terminal count/rate: the recurring charge is a
+  // negotiated flat amount) the add-ons are already inside that amount — the
+  // subscription's own arithmetic excludes them there, so pricing them here and
+  // letting the residual absorb the difference would state a per-month charge the
+  // client is not paying. They are named as included instead. The only invoices
+  // carrying an add-on snapshot are the computed subscription ones, which is why
+  // the absent terminal line is a sound signal for it (`createInvoiceForCompany`).
+  const flatDeal = invoice.terminal_count === null && invoice.terminal_price_cents === null;
   for (const addon of parseAddons(invoice.addons_json)) {
-    items.push({
-      label: addon.label,
-      detail: 'Per month',
-      amountCents: addon.cents,
-    });
+    items.push(
+      flatDeal
+        ? {
+            label: addon.label,
+            detail: 'Included in the agreed amount',
+            amountCents: 0,
+            included: true,
+          }
+        : { label: addon.label, detail: 'Per month', amountCents: addon.cents },
+    );
   }
   const explained = items.reduce((sum, i) => sum + i.amountCents, 0);
   const residual = invoice.amount_cents - explained;

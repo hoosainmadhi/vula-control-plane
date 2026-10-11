@@ -22,7 +22,7 @@ import type {
   StoreFormValues,
 } from '../types';
 import { SETUP_FEE_LABEL, type Notice } from '../lib/storeVocab';
-import { rand, PERIOD_LABEL, perTerminalLabel } from '../lib/money';
+import { addonLinesFor, rand, PERIOD_LABEL, perTerminalLabel } from '../lib/money';
 
 const SETUP_FEE_LABELS: Record<SetupFeeStatus, string> = {
   not_invoiced: 'Not invoiced yet',
@@ -31,33 +31,70 @@ const SETUP_FEE_LABELS: Record<SetupFeeStatus, string> = {
   waived: 'Waived',
 };
 
-/** The live quote inside the subscription editor — the figure the invoice will carry. */
+/**
+ * The live quote inside the subscription editor — the figure the invoice will
+ * carry, itemised. It mirrors `quoteForSubscription` (services/pricing.ts): the
+ * plan's rate × licensed terminals plus every ticked add-on, at the price agreed
+ * with this client when there is one (grandfathering) and the plan's price
+ * otherwise. Showing the terminals line alone understated the bill by the price
+ * of every add-on on it.
+ */
 function SubscriptionQuotePreview({
   plan,
   licensed,
+  addonOptions,
+  selected,
+  agreedPrices,
 }: {
   plan: Plan | undefined;
   licensed: number;
+  /** What the plan sells and at what price — the lines the ticks can produce. */
+  addonOptions: Array<{ key: string; cents: number; label: string }>;
+  selected: string[];
+  /** Prices already agreed with this client; they govern over the plan's. */
+  agreedPrices: Record<string, number>;
 }) {
   if (!plan) return null;
-  const recurring = plan.pricingMode === 'per_terminal' ? plan.terminalPriceCents * licensed : null;
+  const addonLines = addonLinesFor(addonOptions, selected, agreedPrices);
+  const addonsCents = addonLines.reduce((sum, line) => sum + line.cents, 0);
+  const period = plan.billingPeriod === 'once-off' ? '' : PERIOD_LABEL[plan.billingPeriod];
+  const custom = plan.pricingMode === 'custom';
+  const terminalsCents = custom ? 0 : plan.terminalPriceCents * licensed;
   return (
     <div className="rounded-xl bg-slate-50 px-3.5 py-3 text-xs">
-      {recurring === null ? (
+      {custom ? (
         <div className="flex justify-between">
           <span className="text-slate-500">Recurring</span>
           <span className="font-bold text-slate-800">Custom pricing — agreed per client</span>
         </div>
       ) : (
-        <div className="flex justify-between">
-          <span className="text-slate-500">
-            Recurring ({licensed} × {rand(plan.terminalPriceCents)})
-          </span>
-          <span className="font-mono font-black text-slate-900">
-            {rand(recurring)}{' '}
-            {plan.billingPeriod === 'once-off' ? '' : PERIOD_LABEL[plan.billingPeriod]}
-          </span>
-        </div>
+        <>
+          <div className="flex justify-between">
+            <span className="text-slate-500">
+              Licensed terminals ({licensed} × {rand(plan.terminalPriceCents)})
+            </span>
+            <span className="font-mono text-slate-700">{rand(terminalsCents)}</span>
+          </div>
+          {addonLines.map((line) => (
+            <div key={line.key} className="mt-1 flex justify-between">
+              <span className="text-slate-500">{line.label}</span>
+              <span className="font-mono text-slate-700">{rand(line.cents)} / month</span>
+            </div>
+          ))}
+          <div className="mt-1 flex justify-between border-t border-slate-200 pt-1.5">
+            <span className="font-semibold text-slate-600">Recurring</span>
+            <span className="font-mono font-black text-slate-900">
+              {rand(terminalsCents + addonsCents)} {period}
+            </span>
+          </div>
+        </>
+      )}
+      {custom && addonLines.length > 0 && (
+        <p className="mt-1 text-[11px] text-slate-500">
+          {addonLines.length === 1 ? 'This add-on is' : 'These add-ons are'} carried inside the
+          agreed flat amount — the invoice shows {addonLines.length === 1 ? 'it' : 'them'} as
+          included, not on top.
+        </p>
       )}
       <div className="mt-1 flex justify-between">
         <span className="text-slate-500">{SETUP_FEE_LABEL}</span>
@@ -227,6 +264,10 @@ export default function ClientDetailPage() {
         .filter(([key, cents]) => cents > 0 && !planForEditor.features.includes(key))
         .map(([key, cents]) => ({ key, cents, label: featureLabels[key] ?? key }))
     : [];
+  /** What this client already agreed to pay per add-on — the editor must show that, not the plan's. */
+  const agreedAddonPrices: Record<string, number> = Object.fromEntries(
+    (data?.subscription?.addons ?? []).map((a) => [a.key, a.cents]),
+  );
 
   const handleSaveSubscription = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1469,7 +1510,11 @@ export default function ClientDetailPage() {
                           <span className="font-medium text-slate-800">{option.label}</span>
                         </span>
                         <span className="font-mono text-xs text-slate-500">
-                          {rand(option.cents)} / month
+                          {rand(agreedAddonPrices[option.key] ?? option.cents)} / month
+                          {agreedAddonPrices[option.key] !== undefined &&
+                          agreedAddonPrices[option.key] !== option.cents
+                            ? ' · agreed'
+                            : ''}
                         </span>
                       </label>
                     ))
@@ -1547,12 +1592,15 @@ export default function ClientDetailPage() {
               )}
 
               <SubscriptionQuotePreview
-                plan={plans.find((p) => String(p.id) === subPlanId)}
+                plan={planForEditor}
                 licensed={
                   client.topology === 'multi_store'
                     ? subAllocations.reduce((n, a) => n + (Number(a.licensed) || 0), 0)
                     : Number(subLicensed) || 0
                 }
+                addonOptions={subAddonOptions}
+                selected={subFeatures}
+                agreedPrices={agreedAddonPrices}
               />
 
               <div>

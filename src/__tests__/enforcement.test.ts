@@ -303,6 +303,53 @@ describe('suspended companies get no new capacity', () => {
   });
 });
 
+describe('a suspended licence drops the metered add-ons', () => {
+  /**
+   * The claims of the last licence pushed to a deployment. The licence token is
+   * `payload.signature`, so the feature list is readable without the signing key.
+   */
+  const lastLicenceFeatures = (): string[] => {
+    const calls = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/api/internal/licence'));
+    const init = calls.at(-1)?.[1] as { body?: string } | undefined;
+    const token = (JSON.parse(init?.body ?? '{}') as { token?: string }).token ?? '';
+    return JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf-8')).features;
+  };
+
+  const buyAddons = async (companyId: number, features: string[]): Promise<void> => {
+    await request(app).put(`/api/clients/${companyId}`).set(auth()).send({ features }).expect(200);
+  };
+
+  it('carries the bought add-ons while the account is in good standing', async () => {
+    const company = await makeCompany({ paidThrough: daysFromToday(30) });
+    await makeStore({ slug: 'addons-good', companyId: company.id }).expect(201);
+    await buyAddons(company.id, ['ai_assistant', 'invoice_import', 'customer_credit']);
+    expect(lastLicenceFeatures()).toEqual(
+      expect.arrayContaining(['ai_assistant', 'invoice_import', 'customer_credit']),
+    );
+  });
+
+  it('omits AI Copilot and Upload invoice while suspended, keeping the operational add-ons', async () => {
+    // The register refuses those two on a suspended licence too (the tenant gate).
+    // This is the vendor half of the same rule: the signed claim matches the
+    // intent even if a gate were bypassed, and settling puts them back.
+    const company = await makeCompany({ paidThrough: daysFromToday(30) });
+    await makeStore({ slug: 'addons-suspended', companyId: company.id }).expect(201);
+    await buyAddons(company.id, ['ai_assistant', 'invoice_import', 'customer_credit']);
+
+    await request(app)
+      .put(`/api/companies/${company.id}`)
+      .set(auth())
+      .send({ status: 'suspended' })
+      .expect(200);
+
+    const suspended = lastLicenceFeatures();
+    expect(suspended).not.toContain('ai_assistant');
+    expect(suspended).not.toContain('invoice_import');
+    // Suspension stops new sales, not a merchant's access to what it already owns.
+    expect(suspended).toContain('customer_credit');
+  });
+});
+
 describe('entitlement changes propagate licences immediately', () => {
   it('re-pushes licences to stores and the panel when the entitlement changes', async () => {
     const company = await makeCompany({ paidThrough: daysFromToday(30) });

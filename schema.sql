@@ -103,6 +103,11 @@ CREATE TABLE IF NOT EXISTS company_subscriptions (
   setup_fee_cents         INTEGER,
   billing_period          TEXT,
   priced_at               TEXT,
+  -- What the client bought: the add-on keys and the price agreed for each,
+  -- snapshotted so editing the plan or the price list cannot rewrite them
+  -- (2026-10-10). The signed licence carries the plan's features union these.
+  features_json           TEXT,
+  addon_prices_json       TEXT,
   created_at              TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at              TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -160,6 +165,9 @@ CREATE TABLE IF NOT EXISTS invoices (
   amount_cents         INTEGER NOT NULL,
   terminal_count       INTEGER,
   terminal_price_cents INTEGER,
+  -- The paid add-ons billed, with the price agreed for each — the other half of
+  -- the recurring evidence (2026-10-10), itemised on the document.
+  addons_json          TEXT,
   setup_fee_cents      INTEGER,
   -- What the charge is for. Required on a hand-priced invoice, and derived from
   -- the subscription when the control plane computes the amount.
