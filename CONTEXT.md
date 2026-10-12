@@ -976,6 +976,24 @@ tooltip before the app could say why):
   under-bills the client. A store's own allocation may still sit below its
   configured count (reductions must not strand tills mid-shift).
 
+**The once-off setup charge is the CLIENT's figure, not the plan's
+(2026-10-12).** The site sells assisted (R5 000) and self (R1 500) setup, and a
+plan can carry only one number — so `company_subscriptions.setup_fee_cents`
+(each client's own figure) is now settable, not just plan-copied:
+
+- the plan's `setup_fee_cents` is the DEFAULT the wizard offers (self setup);
+- `POST /clients` and `POST /companies` accept `setupFeeCents` at onboarding;
+  `PUT /clients/:id` accepts it later, from the subscription editor's chooser
+  (Self / Assisted / any negotiated figure);
+- the quote reads the client's row when one is on record and the plan only as a
+  fallback (`agreedSetupFeeCents` in `services/pricing.ts`) — so assisted and
+  self clients coexist on one plan, and editing the plan's default re-prices
+  neither;
+- a fee set on a row with no agreed pricing (`priced_at` NULL) first records the
+  plan's terms (`recordAgreedPricing`), so an agreed fee is never orphaned from
+  a rate that still reads the plan;
+- the invoice carries the client's figure on its once-off line, as before.
+
 **A Head Office registration tears down pause-first, like a store.** `DELETE
 /panels/:id` is refused with 409 `panel_active` while the panel is active; pause
 it (`PUT {status: 'paused'}`) and then remove it. The panel deployment keeps

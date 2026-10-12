@@ -22,14 +22,18 @@ function WizardQuote({
   plan,
   licensedTerminals,
   storeBreakdown,
+  setupFeeCents,
 }: {
   plan: Plan | undefined;
   licensedTerminals: number;
   storeBreakdown?: Array<{ label: string; licensed: number }>;
+  /** The once-off charge chosen for this client; the plan's when untouched. */
+  setupFeeCents?: number;
 }) {
   if (!plan) return null;
   const recurring =
     plan.pricingMode === 'per_terminal' ? plan.terminalPriceCents * licensedTerminals : null;
+  const setupFee = setupFeeCents ?? plan.setupFeeCents;
 
   return (
     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs">
@@ -70,7 +74,7 @@ function WizardQuote({
         <div className="flex justify-between">
           <span className="text-slate-500">Once-off onboarding</span>
           <span className="font-mono font-semibold text-slate-800">
-            {plan.setupFeeCents > 0 ? rand(plan.setupFeeCents) : 'None'}
+            {setupFee > 0 ? rand(setupFee) : 'None'}
           </span>
         </div>
         {plan.features.includes('multi_store') && (
@@ -110,6 +114,13 @@ export default function ClientsPage() {
   const [deploymentType, setDeploymentType] = useState<'single_store' | 'multi_store'>(
     'single_store',
   );
+  /**
+   * The once-off onboarding charge for THIS client, in cents. Defaults to the
+   * plan's figure (the site's self-setup price); the operator picks assisted
+   * (R5 000) or types another negotiated amount, and the choice is stored on the
+   * client — one plan, two setup offers (2026-10-12).
+   */
+  const [setupFeeCents, setSetupFeeCents] = useState<number | null>(null);
 
   // Single store inputs
   const [singleStoreName, setSingleStoreName] = useState('');
@@ -198,6 +209,9 @@ export default function ClientsPage() {
         // Only what the operator chose; a multi-store deployment adds Head Office
         // server-side even if it was missed here.
         features: addons,
+        // The once-off charge for THIS client: the plan carries the self-setup
+        // default, assisted setup states its own figure (2026-10-12).
+        setupFeeCents: effectiveSetupFeeCents,
       };
 
       if (deploymentType === 'single_store') {
@@ -258,6 +272,7 @@ export default function ClientsPage() {
     setHoUrl('');
     setHoAdminEmail('');
     setMultiStores([{ name: '', slug: '', baseUrl: '', terminalCount: 2 }]);
+    setSetupFeeCents(null);
   };
 
   const singleStoreCount = clients.filter((c) => c.topology === 'single_store').length;
@@ -266,6 +281,12 @@ export default function ClientsPage() {
   const totalTills = clients.reduce((acc, c) => acc + c.totalTills, 0);
   const licensedTotal = clients.reduce((acc, c) => acc + (c.licensedTerminalCount ?? 0), 0);
   const selectedPlan = plans.find((p) => String(p.id) === planId);
+  /**
+   * What the client will actually be charged once off: the fee they picked, or
+   * the plan's default (the site's self-setup figure). Shown in the summary and
+   * sent on creation.
+   */
+  const effectiveSetupFeeCents = setupFeeCents ?? selectedPlan?.setupFeeCents ?? 0;
 
   /** The add-ons the chosen plan SELLS. Head Office shows as forced when the
    *  deployment is multi-store: the topology buys it either way. */
@@ -620,6 +641,45 @@ export default function ClientsPage() {
                           </option>
                         ))}
                     </select>
+                    {/* Assisted vs self setup: the site sells both at different
+                        prices, and the choice belongs to the client, not the
+                        plan — so it is stated here and stored on the
+                        subscription (2026-10-12). */}
+                    <label className="mb-1 mt-3 block text-sm font-semibold text-slate-700">
+                      Set-up — once off
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setSetupFeeCents(null)}
+                        aria-pressed={setupFeeCents === null}
+                        className={`rounded-lg border px-3 py-2 text-xs font-semibold ${
+                          setupFeeCents === null
+                            ? 'border-brand-500 bg-brand-50 text-brand-700'
+                            : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        Self — {rand(selectedPlan?.setupFeeCents ?? 0)}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSetupFeeCents(500_000)}
+                        aria-pressed={setupFeeCents === 500_000}
+                        className={`rounded-lg border px-3 py-2 text-xs font-semibold ${
+                          setupFeeCents === 500_000
+                            ? 'border-brand-500 bg-brand-50 text-brand-700'
+                            : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        Assisted — {rand(500_000)}
+                      </button>
+                    </div>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      Self setup is the plan's figure
+                      {setupFeeCents !== null
+                        ? `; assisted adds ${rand(setupFeeCents - (selectedPlan?.setupFeeCents ?? 0))} for the client.`
+                        : ' — switch to Assisted if we build it with them.'}
+                    </p>
                   </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-700">
@@ -801,6 +861,7 @@ export default function ClientsPage() {
                     <WizardQuote
                       plan={selectedPlan}
                       licensedTerminals={Number(singleStoreTills) || 0}
+                      setupFeeCents={effectiveSetupFeeCents}
                     />
                   </div>
                 ) : (
@@ -922,6 +983,7 @@ export default function ClientsPage() {
                         label: s.name || `${clientName || 'Branch'} ${i + 1}`,
                         licensed: s.terminalCount || 0,
                       }))}
+                      setupFeeCents={effectiveSetupFeeCents}
                     />
                   </div>
                 )}
@@ -1003,6 +1065,7 @@ export default function ClientsPage() {
                         }))
                       : undefined
                   }
+                  setupFeeCents={effectiveSetupFeeCents}
                 />
 
                 <div className="rounded-lg bg-amber-50 p-3 text-[11px] text-amber-800 border border-amber-200">

@@ -53,6 +53,12 @@ What actually happened, so the record is true:
   plan no longer re-prices them. It does not change who pays what — they were, and are,
   billed their plan's rate.
 
+**Setup fee per client** (2026-10-12): the site's assisted/self setup is now a
+client-level figure (`setupFeeCents` on the wizard and the subscription editor; the plan
+carries only the self default). Contract in CONTEXT §"Deleting and editing a client"; two
+new billing tests pin it — assisted and self clients on ONE plan billed their own figures,
+and a later plan-fee edit moving neither.
+
 **The editor gap that made it awkward is fixed** (2026-10-12): the multi-store
 subscription editor now carries the licensed-quantity field above the allocation list (as
 the single-store editor always did), raises-then-distributes in one save, shows a live

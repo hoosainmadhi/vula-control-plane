@@ -410,6 +410,70 @@ describe('L3 Billing & Invoicing', () => {
     expect(after.body.subscription.setupFeeStatus).toBe('paid');
   });
 
+  it('charges each client its own setup fee — assisted and self on one plan', async () => {
+    // The plan carries the self-setup default; assisted setup is a per-client
+    // figure, so the two variants coexist on a single plan (2026-10-12).
+    const planId = await planIdByCode('vula-grow'); // setup fee R3 000
+    const self = await makeCompany({ slug: 'self-setup-co', planId });
+    const assisted = await makeCompany({
+      slug: 'assisted-setup-co',
+      planId,
+      setupFeeCents: 500_000, // R5 000, the site's assisted price
+    });
+
+    // Both quotes agree with what was chosen, on the same plan.
+    expect(self.subscription.setupFeeCents).toBe(300_000);
+    expect(assisted.subscription.setupFeeCents).toBe(500_000);
+    expect(assisted.subscription.recurringAmountCents).toBe(
+      self.subscription.recurringAmountCents,
+    );
+
+    // The invoice carries each client's own figure…
+    const selfInvoice = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: self.id, purpose: 'initial' })
+      .expect(201);
+    expect(selfInvoice.body.setupFeeCents).toBe(300_000);
+    const assistedInvoice = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: assisted.id, purpose: 'initial' })
+      .expect(201);
+    expect(assistedInvoice.body.setupFeeCents).toBe(500_000);
+
+    // …and editing the PLAN's default afterwards moves neither client.
+    await request(app).put(`/api/plans/${planId}`).set(auth()).send({ setupFeeCents: 900_000 }).expect(200);
+    const selfAfter = await request(app).get(`/api/clients/${self.id}`).set(auth()).expect(200);
+    const assistedAfter = await request(app)
+      .get(`/api/clients/${assisted.id}`)
+      .set(auth())
+      .expect(200);
+    expect(selfAfter.body.subscription.setupFeeCents).toBe(300_000);
+    expect(assistedAfter.body.subscription.setupFeeCents).toBe(500_000);
+  });
+
+  it('sets the client`s setup fee through the subscription editor', async () => {
+    const company = await makeCompany({ slug: 'editor-setup-co' });
+    expect(company.subscription.setupFeeCents).toBe(300_000);
+
+    const updated = await request(app)
+      .put(`/api/clients/${company.id}`)
+      .set(auth())
+      .send({ setupFeeCents: 500_000 })
+      .expect(200);
+    expect(updated.body.setupFeeCents).toBe(500_000);
+
+    // A refused value writes nothing.
+    await request(app)
+      .put(`/api/clients/${company.id}`)
+      .set(auth())
+      .send({ setupFeeCents: -1 })
+      .expect(400);
+    const after = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+    expect(after.body.subscription.setupFeeCents).toBe(500_000);
+  });
+
   it('bills a custom plan`s agreed amount, but only when one is stated', async () => {
     const planId = await planIdByCode('vula-market-enterprise');
 

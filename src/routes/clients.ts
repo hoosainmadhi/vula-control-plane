@@ -14,6 +14,7 @@ import {
   setLicensedTerminalCount,
   setSetupFeeStatus,
   setSubscriptionAddons,
+  setSubscriptionSetupFee,
   getSubscription,
   planFeaturePrice,
   planFeaturePrices,
@@ -512,6 +513,16 @@ clientsRouter.put(
     ) {
       throw new HttpError(400, `setupFeeStatus must be one of: ${SETUP_FEE_STATUSES.join(', ')}`);
     }
+    // The client's own once-off charge: assisted vs self setup, stated per client
+    // because the plan carries only the default (2026-10-12).
+    const requestedSetupFee =
+      body.setupFeeCents !== undefined ? Number(body.setupFeeCents) : undefined;
+    if (
+      requestedSetupFee !== undefined &&
+      (!Number.isInteger(requestedSetupFee) || requestedSetupFee < 0 || requestedSetupFee > 5_000_000)
+    ) {
+      throw new HttpError(400, 'setupFeeCents must be whole cents between 0 and 5 000 000');
+    }
     const rawAllocations = body.allocations;
     if (rawAllocations !== undefined && !Array.isArray(rawAllocations)) {
       throw new HttpError(
@@ -587,6 +598,28 @@ clientsRouter.put(
       const effectivePlan = getPlanById((planId !== undefined ? planId : company.plan_id) ?? -1);
       if (setupFeeStatusRaw !== undefined) {
         setSetupFeeStatus(company.id, setupFeeStatusRaw as SetupFeeStatus);
+      }
+      // The once-off charge the operator stated for THIS client: the plan carries
+      // only the default (self setup), so assisted setup is stated here.
+      // `recordAgreedPricing` first when nothing is stamped yet — the fee must
+      // never sit on a row whose rate still reads the plan, or a later plan edit
+      // would move the rate under an agreed fee.
+      if (requestedSetupFee !== undefined) {
+        const before = getSubscription(company.id);
+        if (!before?.priced_at && effectivePlan) {
+          recordAgreedPricing(
+            company.id,
+            effectivePlan,
+            'office',
+            'Recorded the plan terms before stating the client\'s onboarding charge',
+          );
+        }
+        setSubscriptionSetupFee(company.id, requestedSetupFee);
+        recordAuditLog('office', 'subscription_setup_fee_set', 'company', company.id, {
+          before: { setupFeeCents: before?.setup_fee_cents ?? null },
+          after: { setupFeeCents: requestedSetupFee },
+          reason: 'Set the once-off onboarding charge for this client',
+        });
       }
 
       if (requestedFeatures !== undefined) {
@@ -791,6 +824,14 @@ clientsRouter.post(
       }
     }
 
+    // The once-off onboarding charge chosen at onboarding: the plan's default is
+    // self setup (R1 500); assisted setup (R5 000) is stated here. Validated up
+    // front like the add-ons, so a refused request writes nothing.
+    const requestedSetupFee =
+      req.body?.setupFeeCents !== undefined
+        ? requireInt(req.body, 'setupFeeCents', { min: 0, max: 5_000_000 })
+        : undefined;
+
     // 1. Create company record
     const company = createCompany({
       name,
@@ -872,6 +913,13 @@ clientsRouter.post(
       'office',
       'Recorded the price agreed when the client was onboarded',
     );
+    // The onboarding charge is the client's own: assisted setup states R5 000 on
+    // the wizard, self setup leaves the plan's R1 500 in place. Written AFTER the
+    // agreed terms so the fee lands on a row that already carries its rate; the
+    // terms stay the plan's, exactly as a client who never touches this field.
+    if (requestedSetupFee !== undefined) {
+      setSubscriptionSetupFee(company.id, requestedSetupFee);
+    }
 
     // The add-ons the operator chose on the wizard's first step — the six the plan
     // prices (2026-10-10). Bought before any store exists, so the licences that

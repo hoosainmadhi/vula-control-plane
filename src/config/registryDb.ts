@@ -2237,6 +2237,31 @@ export const setLicensedTerminalCount = (
 };
 
 /**
+ * The client's own once-off onboarding charge — assisted (R5 000) or self
+ * (R1 500) setup, or anything negotiated. The plan's `setup_fee_cents` is the
+ * default the onboarding wizard offers; this is where the client's real figure
+ * lives, so the two variants coexist on one plan (2026-10-12).
+ *
+ * A pure writer: the caller has already ensured the row carries agreed terms
+ * (`recordAgreedPricing` when nothing was stamped), so the fee is never orphaned
+ * from a rate. Audited by the caller with the office's reason.
+ */
+export const setSubscriptionSetupFee = (
+  companyId: number,
+  setupFeeCents: number,
+): CompanySubscriptionRecord => {
+  ensureSubscription(companyId);
+  getRegistryDb()
+    .prepare(
+      `UPDATE company_subscriptions
+          SET setup_fee_cents = ?, updated_at = datetime('now')
+        WHERE company_id = ?`,
+    )
+    .run(setupFeeCents, companyId);
+  return getSubscription(companyId)!;
+};
+
+/**
  * The add-ons a client has bought, and what they agreed to pay for each.
  *
  * `prices` is written as given: the caller snapshots newly bought features from

@@ -8,12 +8,30 @@ import {
   subscriptionAddonPrices,
   subscriptionFeatures,
   type CompanyRecord,
+  type CompanySubscriptionRecord,
   type PlanPeriod,
   type PlanPricingMode,
   type PlanRecord,
   type SetupFeeStatus,
 } from '../config/registryDb.js';
 import { FEATURE_LABELS } from './features.js';
+
+/**
+ * The once-off onboarding charge a client owes: THEIR agreed figure when one is
+ * on record, the plan's only as a fallback.
+ *
+ * The plan carries a default (R1 500, the site's self-setup price); the client's
+ * row is where an assisted setup's R5 000 lives, so the two variants of one offer
+ * coexist on a single plan. NULL — never agreed — is the only case that reads the
+ * plan, which is how every row that predates this field keeps behaving.
+ */
+export const agreedSetupFeeCents = (
+  plan: PlanRecord | null,
+  subscription: CompanySubscriptionRecord | null | undefined,
+): number =>
+  subscription?.setup_fee_cents !== null && subscription?.setup_fee_cents !== undefined
+    ? subscription.setup_fee_cents
+    : (plan?.setup_fee_cents ?? 0);
 
 /**
  * The one canonical recurring-subscription calculator (2026-09-13 model).
@@ -201,6 +219,11 @@ export function quoteForSubscription(
     : plan?.pricing_mode === 'custom'
       ? plan.custom_amount_cents
       : 0;
+  // The once-off onboarding charge is the client's OWN figure, not the plan's:
+  // READ from their subscription when one has been agreed there, so assisted
+  // and self setup can coexist on one plan (2026-10-12). NULL — never agreed —
+  // falls back to the plan, which is how rows that predate the field behave.
+  const setupFeeCents = agreedSetupFeeCents(plan, subscription);
   // The add-ons the client bought, priced at what was agreed when they bought
   // them (falling back to the plan's price for a feature recorded before prices
   // existed). Agreed terms, like the rate: editing a plan does not move them.
@@ -224,7 +247,6 @@ export function quoteForSubscription(
           ? customAmountCents
           : null
         : licensed * rateCents + addonsCents;
-  const setupFeeCents = agreed ? agreed.setupFeeCents : (plan?.setup_fee_cents ?? 0);
   const setupFeeDueCents = setupFeeStatus === 'not_invoiced' ? setupFeeCents : 0;
 
   const notes: string[] = [];

@@ -21,6 +21,7 @@ import {
   setSetupFeeStatus,
   setSubscriptionAddons,
   setSubscriptionPricing,
+  setSubscriptionSetupFee,
   getSubscription,
   planFeaturePrices,
   subscriptionAddonPrices,
@@ -553,6 +554,16 @@ companiesRouter.post(
             'office',
             'Recorded the price agreed when the client was onboarded',
           );
+          // The once-off charge, when the caller stated one: assisted setup is a
+          // per-client figure, the plan carries only the self-setup default.
+          if (req.body?.setupFeeCents !== undefined) {
+            const fee = boundedInt(req.body.setupFeeCents, 'setupFeeCents', 0, 5_000_000);
+            setSubscriptionSetupFee(company.id, fee);
+            recordAuditLog('office', 'subscription_setup_fee_set', 'company', company.id, {
+              after: { setupFeeCents: fee },
+              reason: 'Set the once-off onboarding charge when the client was onboarded',
+            });
+          }
           return getCompanyById(company.id)!;
         })(),
       ),

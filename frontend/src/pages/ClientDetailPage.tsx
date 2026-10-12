@@ -24,6 +24,9 @@ import type {
 import { SETUP_FEE_LABEL, type Notice } from '../lib/storeVocab';
 import { addonLinesFor, rand, PERIOD_LABEL, perTerminalLabel } from '../lib/money';
 
+/** The site's assisted-setup price, offered as a quick pick beside the plan's self figure. */
+const ASSISTED_SETUP_CENTS = 500_000;
+
 const SETUP_FEE_LABELS: Record<SetupFeeStatus, string> = {
   not_invoiced: 'Not invoiced yet',
   invoiced: 'Invoiced',
@@ -130,6 +133,8 @@ export default function ClientDetailPage() {
   const [subPlanId, setSubPlanId] = useState('');
   const [subLicensed, setSubLicensed] = useState('0');
   const [subSetupFeeStatus, setSubSetupFeeStatus] = useState<SetupFeeStatus>('not_invoiced');
+  /** The client's once-off charge in cents, as text for the input. */
+  const [subSetupFee, setSubSetupFee] = useState('0');
   /** The paid add-ons the client holds — what the editor's ticks will send. */
   const [subFeatures, setSubFeatures] = useState<string[]>([]);
   const [subAllocations, setSubAllocations] = useState<
@@ -245,6 +250,9 @@ export default function ClientDetailPage() {
     setSubPlanId(data.client.planId ? String(data.client.planId) : '');
     setSubLicensed(String(sub?.licensedTerminalCount ?? data.client.licensedTerminalCount ?? 0));
     setSubSetupFeeStatus(sub?.setupFeeStatus ?? data.client.setupFeeStatus ?? 'not_invoiced');
+    setSubSetupFee(
+      String(sub?.setupFeeCents ?? data.client.setupFeeCents ?? 0),
+    );
     setSubFeatures((sub?.addons ?? []).map((a) => a.key));
     setSubAllocations(
       (data.stores ?? []).map((store) => {
@@ -317,6 +325,8 @@ export default function ClientDetailPage() {
         body: {
           planId: subPlanId ? Number(subPlanId) : null,
           setupFeeStatus: subSetupFeeStatus,
+          // The client's own once-off charge: assisted vs self setup (2026-10-12).
+          setupFeeCents: Number(subSetupFee) || 0,
           // The paid add-ons. A feature the plan already includes is not offered
           // below (the client has it), so this list is only what they BUY.
           features: subFeatures,
@@ -1668,10 +1678,49 @@ export default function ClientDetailPage() {
 
               <div>
                 <label className="block text-xs font-bold text-slate-700">{SETUP_FEE_LABEL}</label>
+                <div className="mt-1.5 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSubSetupFee(String(planForEditor?.setupFeeCents ?? 0))}
+                    aria-pressed={subSetupFee === String(planForEditor?.setupFeeCents ?? 0)}
+                    className={`rounded-lg border px-3 py-1.5 text-[11px] font-semibold ${
+                      subSetupFee === String(planForEditor?.setupFeeCents ?? 0)
+                        ? 'border-brand-500 bg-brand-50 text-brand-700'
+                        : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    Self — {rand(planForEditor?.setupFeeCents ?? 0)}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSubSetupFee(String(ASSISTED_SETUP_CENTS))}
+                    aria-pressed={subSetupFee === String(ASSISTED_SETUP_CENTS)}
+                    className={`rounded-lg border px-3 py-1.5 text-[11px] font-semibold ${
+                      subSetupFee === String(ASSISTED_SETUP_CENTS)
+                        ? 'border-brand-500 bg-brand-50 text-brand-700'
+                        : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    Assisted — {rand(ASSISTED_SETUP_CENTS)}
+                  </button>
+                  <input
+                    type="number"
+                    min={0}
+                    value={subSetupFee}
+                    onChange={(e) => setSubSetupFee(e.target.value)}
+                    aria-label="Set-up amount in cents"
+                    className="w-28 rounded-lg border border-slate-300 p-1.5 text-right font-mono text-[11px]"
+                  />
+                </div>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  The client's own once-off charge (cents) — assisted or self setup. Whichever
+                  invoice is raised next carries it while it is unbilled; after that it is never
+                  repeated.
+                </p>
                 <select
                   value={subSetupFeeStatus}
                   onChange={(e) => setSubSetupFeeStatus(e.target.value as SetupFeeStatus)}
-                  className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-sm"
+                  className="mt-2 w-full rounded-lg border border-slate-300 p-2 text-sm"
                 >
                   {(Object.keys(SETUP_FEE_LABELS) as SetupFeeStatus[]).map((s) => (
                     <option key={s} value={s}>
@@ -1679,10 +1728,6 @@ export default function ClientDetailPage() {
                     </option>
                   ))}
                 </select>
-                <p className="mt-1 text-[11px] text-slate-400">
-                  Charged once. Whichever invoice is raised next carries it while it is unbilled — a
-                  renewal included; after that it is never repeated.
-                </p>
               </div>
 
               {subError && (
