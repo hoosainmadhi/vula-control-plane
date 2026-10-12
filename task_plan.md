@@ -97,10 +97,10 @@ committed (the za-pos side of the pass is recorded in that repo's planning files
 ## Next Step
 
 Owner: set the production office identity and SMTP in the prod control plane's
-Settings, then onboard the first real client (cutover §8). Alongside: commit
-this repo's uncommitted tree — the storage helper, the bind paths in
-`coolify.ts`, the backup/reset scripts and these planning docs — on the
-owner's word.
+Settings, then onboard the first real client (cutover §8). The repository is
+committed and promoted (`dev` → `staging` → `main`, all three at the same commit,
+2026-10-12); the CP's own two deployments have **not** been redeployed since, so
+they still run the previous `main` — say the word and they follow.
 
 ## Current Phase
 
