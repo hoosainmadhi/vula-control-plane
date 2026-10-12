@@ -2,6 +2,55 @@
 
 > Prioritised for the next workspace. ~~Struck~~ items are done.
 
+## The dev catalogue was consolidated, then restored by hand (2026-10-12) — one lasting side effect
+
+A consolidation of the local dev registry (`data/control-plane.db`, CP on `:3240`) was
+attempted and then **reverted on the owner's instruction** ("ok dont delete"), mid-flight.
+What actually happened, so the record is true:
+
+- The eight seeded tiers were deleted and all eleven demo clients moved onto a new plan,
+  `vula-standard` (R99/terminal per month, `advanced_reports` included, the six add-ons
+  priced R99/R49, 500 stores / 20 terminals per store, R1 500 setup).
+- On the instruction, the eight were re-inserted from the seed definitions (new row ids
+  11–18; codes unchanged) and each client was moved back. Every client's recurring figure
+  matches its pre-change value to the cent (AHK 123 terminals R18 647,00, Street Gym
+  R1 846,00, Urban Threads R1 344,00, the rest unchanged), and no company, store or
+  allocation row was ever touched.
+- **One new plan was added to dev, built twice** (owner: "add new plans that we can use
+  based on the market website — give these plan relevant names", then "I say merge"):
+  - `vula-standard` **Vula Standard** — id 10, **active**. R99,00 per terminal per month,
+    500 stores / 99 terminals per store, `advanced_reports` + `stock_transfers` included,
+    the six add-ons priced R99/R49, R1 500 setup, monthly. The site's offer in one plan.
+  - `vula-multi-store` **Vula Multi-Store** — id 19, **archived**. Built first as a
+    second name (99 terminals per store vs Standard's 20) and merged away the same day:
+    the store cap is not enforced server-side and the per-store ceiling was the only
+    difference, so the second plan earned nothing. Archived rather than deleted.
+  Urban Threads (client 1) was moved to it during the owner's own session and was moved
+  onto `vula-standard` at the merge — same rate, same features, recurring unchanged at
+  R1 344,00. All other clients remain on their original tiers, whose rows are unchanged.
+- **The one lasting side effect:** the eleven subscriptions now carry a recorded price
+  (`priced_at`, `rate_cents`) stamped by the move-and-restore, where before ten of them
+  read `priced_at IS NULL`. That closes the grandfathering gap those ten had: editing a
+  plan no longer re-prices them. It does not change who pays what — they were, and are,
+  billed their plan's rate.
+
+**The editor gap that made it awkward is fixed** (2026-10-12): the multi-store
+subscription editor now carries the licensed-quantity field above the allocation list (as
+the single-store editor always did), raises-then-distributes in one save, shows a live
+"allocated / licensed" readout and the configured-tills floor, and renders refusals INSIDE
+the dialog — the page-level banner sits behind the modal, so a refused save used to look
+like a dead button. The server refuses a purchased quantity below the configured tills
+(400 `licensed_below_configured`, guarded in `PUT /clients/:id`). Contract in CONTEXT
+§"Deleting and editing a client"; three new tests in `subscription.test.ts` plus the
+billing quote-sum regression.
+
+**What is deliberately NOT done:** `SEED_PLANS` still carries the eight tiers, so a fresh
+registry seeds them again. Aligning it is not a one-liner: `scripts/reseed-fleet.ts`
+carries its own copy of the catalogue, `scripts/seed-mockup-fleet.ts` assigns specific
+codes, and ten test suites pick plans by code (`vula-grow`, `vula-market`, …). The move to
+a single catalogue in code is the real "one plan vs tiers" product decision — when it is
+made, this is the list of things to change together.
+
 ## Deferred from the launch-hardening pass (2026-10-11)
 
 Real items from `review-10October2026.md` that are post-pilot work, deliberately not

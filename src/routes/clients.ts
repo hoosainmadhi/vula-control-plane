@@ -618,6 +618,21 @@ clientsRouter.put(
           }
         }
         if (requestedLicensed !== undefined) {
+          // A subscription cannot drop below the tills its stores RUN. Licensed
+          // gates new device claims and may sit below a store's configured slots
+          // (reductions must not strand tills mid-shift) — but writing a
+          // purchased quantity smaller than the installed tills describes a
+          // state that cannot exist and silently under-bills the client.
+          const configuredTotal = listStores()
+            .filter((s) => s.company_id === company.id)
+            .reduce((n, s) => n + (s.terminal_count || 0), 0);
+          if (requestedLicensed < configuredTotal) {
+            throw new HttpError(
+              400,
+              `Licensed terminals cannot drop below ${configuredTotal} — the stores already run that many tills. Reduce the stores' configured tills first.`,
+              'licensed_below_configured',
+            );
+          }
           setLicensedTerminalCount(company.id, requestedLicensed);
         }
         if (allocations) {

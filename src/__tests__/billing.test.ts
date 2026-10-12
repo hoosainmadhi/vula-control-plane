@@ -622,6 +622,87 @@ describe('L3 Billing & Invoicing', () => {
     expect(items.reduce((sum, i) => sum + i.amountCents, 0)).toBe(created.body.amountCents);
   });
 
+  it("sums every purchased add-on into the recurring figure the editor previews (the demo's R99 plan)", async () => {
+    // The demo panel that showed R 594,00 for a fully-laden client: 6 terminals
+    // at R99 plus all six add-ons is R 1 038,00, and the onboarding response,
+    // the client's card and the invoice must all say so. Guards the class of bug
+    // where the terminals line ticks up but the add-ons stay out of the total.
+    const planRes = await request(app)
+      .post('/api/plans')
+      .set(auth())
+      .send({
+        code: 'vula-demo',
+        name: 'Vula Demo',
+        maxStores: 10,
+        maxTerminalsPerStore: 10,
+        terminalPriceCents: 9_900,
+        setupFeeCents: 0,
+        featurePrices: {
+          multi_store: 9_900,
+          ai_assistant: 9_900,
+          invoice_import: 9_900,
+          customer_credit: 4_900,
+          layby: 4_900,
+          ecommerce_bridges: 4_900,
+        },
+      })
+      .expect(201);
+
+    const created = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send({
+        name: 'Urban Threads (Demo)',
+        slug: 'urban-threads-demo',
+        planId: (planRes.body as { id: number }).id,
+        autoDeploy: false,
+        features: [
+          'multi_store',
+          'ai_assistant',
+          'invoice_import',
+          'customer_credit',
+          'layby',
+          'ecommerce_bridges',
+        ],
+        stores: [{ name: 'Urban Threads Main', slug: 'urban-threads-main', terminalCount: 6, licensedTerminalCount: 6 }],
+      })
+      .expect(201);
+
+    const client = created.body.client as {
+      id: number;
+      licensedTerminalCount: number;
+      recurringAmountCents: number;
+      addons: Array<{ key: string; cents: number }>;
+      addonsCents: number;
+    };
+    expect(client.licensedTerminalCount).toBe(6);
+    // 6 × R99 + (3 × R99) + (3 × R49) = 594 + 297 + 147.
+    expect(client.addonsCents).toBe(44_400);
+    expect(client.addons).toHaveLength(6);
+    expect(client.recurringAmountCents).toBe(103_800);
+
+    const detail = await request(app)
+      .get(`/api/companies/${client.id}`)
+      .set(auth())
+      .expect(200);
+    expect(detail.body.subscription.recurringAmountCents).toBe(103_800);
+
+    const invoice = await request(app)
+      .post('/api/billing/invoices')
+      .set(auth())
+      .send({ companyId: client.id, purpose: 'renewal', includeOnboarding: false })
+      .expect(201);
+    expect(invoice.body.amountCents).toBe(103_800);
+    const { getInvoiceById } = await import('../config/registryDb.js');
+    const { invoiceLineItems } = await import('../services/billing.js');
+    // The amount's evidence is stored on the record, not only in the response.
+    const record = getInvoiceById(invoice.body.id)!;
+    expect(record.addons_json).toBeTruthy();
+    const items = invoiceLineItems(record);
+    expect(items).toHaveLength(7);
+    expect(items.reduce((sum, i) => sum + i.amountCents, 0)).toBe(103_800);
+  });
+
   it('records a settled payment as completed, not processing', async () => {
     const company = await makeCompany();
     const created = await request(app)

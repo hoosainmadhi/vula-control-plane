@@ -229,6 +229,116 @@ describe('a client purchases terminal licences', () => {
     // The plan's ceiling is still carried, and is not the same thing.
     expect(claims.maxTerminalsPerStore).toBe(15);
   });
+
+  it('raises the purchased quantity and distributes it in one save (the till increase)', async () => {
+    // The multi-store editor states both facts at once: the client bought 11,
+    // and they sit 3/3/5. The server applies the quantity BEFORE the
+    // allocations, so 11 may be distributed in the same request that raises it.
+    const company = await makeCompany({ licensedTerminalCount: 9 });
+    const cape = await makeStore({ slug: 'cape-town', terminalCount: 3, companyId: company.id }).then(
+      (r) => r.body.store as { id: number },
+    );
+    const durban = await makeStore({ slug: 'durban', terminalCount: 3, companyId: company.id }).then(
+      (r) => r.body.store as { id: number },
+    );
+    const jhb = await makeStore({ slug: 'jhb', terminalCount: 3, companyId: company.id }).then(
+      (r) => r.body.store as { id: number },
+    );
+
+    const res = await request(app)
+      .put(`/api/clients/${company.id}`)
+      .set(auth())
+      .send({
+        licensedTerminalCount: 11,
+        allocations: [
+          { storeId: cape.id, licensedTerminalCount: 3 },
+          { storeId: durban.id, licensedTerminalCount: 3 },
+          { storeId: jhb.id, licensedTerminalCount: 5 },
+        ],
+      })
+      .expect(200);
+    expect(res.body.licensedTerminalCount).toBe(11);
+    expect(res.body.allocatedTerminals).toBe(11);
+    // The fee follows the raised quantity: 11 × the agreed rate.
+    const detail = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+    expect(res.body.recurringAmountCents).toBe(11 * detail.body.subscription.rateCents);
+
+    // The distribution landed: 3 / 3 / 5 across the branches.
+    const bySlug = new Map(
+      (
+        detail.body.subscription.allocations as Array<{
+          storeSlug: string;
+          licensedTerminalCount: number;
+        }>
+      ).map((a) => [a.storeSlug, a.licensedTerminalCount]),
+    );
+    expect(bySlug.get('cape-town')).toBe(3);
+    expect(bySlug.get('durban')).toBe(3);
+    expect(bySlug.get('jhb')).toBe(5);
+  });
+
+  describe('the editor states a coherent state or nothing', () => {
+    const threeStores = async (companyId: number) => {
+      const cape = await makeStore({
+        slug: 'cape-town',
+        terminalCount: 3,
+        companyId,
+      }).then((r) => r.body.store as { id: number });
+      const durban = await makeStore({
+        slug: 'durban',
+        terminalCount: 3,
+        companyId,
+      }).then((r) => r.body.store as { id: number });
+      const jhb = await makeStore({ slug: 'jhb', terminalCount: 3, companyId }).then(
+        (r) => r.body.store as { id: number },
+      );
+      return { cape, durban, jhb };
+    };
+
+    it('refuses a purchased quantity below the tills the stores run, and writes nothing', async () => {
+      const company = await makeCompany({ licensedTerminalCount: 9 });
+      const { cape, durban, jhb } = await threeStores(company.id);
+
+      const res = await request(app)
+        .put(`/api/clients/${company.id}`)
+        .set(auth())
+        .send({
+          licensedTerminalCount: 8, // 9 tills are configured across the branches
+          allocations: [
+            { storeId: cape.id, licensedTerminalCount: 3 },
+            { storeId: durban.id, licensedTerminalCount: 3 },
+            { storeId: jhb.id, licensedTerminalCount: 3 },
+          ],
+        })
+        .expect(400);
+      expect(res.body.code).toBe('licensed_below_configured');
+      expect(res.body.error).toMatch(/cannot drop below 9/i);
+
+      // The refusal is total: the quantity and every allocation are untouched.
+      const detail = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+      expect(detail.body.subscription.licensedTerminalCount).toBe(9);
+      expect(detail.body.subscription.allocatedTerminals).toBe(9);
+    });
+
+    it('refuses allocations above the stored quantity when the licensed field is absent', async () => {
+      const company = await makeCompany({ licensedTerminalCount: 9 });
+      const { cape, durban, jhb } = await threeStores(company.id);
+
+      const res = await request(app)
+        .put(`/api/clients/${company.id}`)
+        .set(auth())
+        .send({
+          allocations: [
+            { storeId: cape.id, licensedTerminalCount: 3 },
+            { storeId: durban.id, licensedTerminalCount: 3 },
+            { storeId: jhb.id, licensedTerminalCount: 5 },
+          ],
+        })
+        .expect(402);
+      expect(res.body.code).toBe('terminal_allocation_exceeded');
+      expect(res.body.error).toMatch(/total 11 terminals/i);
+    });
+  });
 });
 
 describe('the fee follows the purchased quantity, not device state', () => {

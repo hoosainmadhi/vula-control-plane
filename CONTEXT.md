@@ -957,6 +957,25 @@ could set but never clear — an expired trial was un-clearable and a wrongly
 entered paid-through date permanent short of hand-edited SQL, while the routes
 and the office's empty date fields had been treating null as "clear" all along.
 
+**The subscription editor can raise the quantity and distribute it in one save
+(2026-10-12).** A multi-store client's editor now carries the "Licensed
+terminals" field above the allocation list, as the single-store editor always
+did — before it, the multi-store form had no lever to raise the purchased
+quantity, so a mid-contract till increase (9 → 11 split 3/3/5) could only be
+done through the API. `PUT /clients/:id` applies `licensedTerminalCount` BEFORE
+the allocations, so one request may both raise the quantity and place it. Two
+invariants are enforced, and both are stated in the dialog rather than by a
+native `min`/`max` attribute (which blocked the submit with the browser's own
+tooltip before the app could say why):
+
+- `licensed == null` — allocations may not exceed the stored quantity
+  (402 `terminal_allocation_exceeded`, unchanged);
+- `licensed < Σ configured tills` — refused (400
+  `licensed_below_configured`): a subscription cannot drop below the tills the
+  stores already RUN, because that describes a state that cannot exist and
+  under-bills the client. A store's own allocation may still sit below its
+  configured count (reductions must not strand tills mid-shift).
+
 **A Head Office registration tears down pause-first, like a store.** `DELETE
 /panels/:id` is refused with 409 `panel_active` while the panel is active; pause
 it (`PUT {status: 'paused'}`) and then remove it. The panel deployment keeps

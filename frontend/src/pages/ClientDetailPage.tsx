@@ -136,6 +136,12 @@ export default function ClientDetailPage() {
     Array<{ storeId: number; name: string; licensed: string }>
   >([]);
   const [savingSubscription, setSavingSubscription] = useState(false);
+  /**
+   * The editor's own error line. The page-level banner renders BEHIND this
+   * modal, so a refused save used to look like a dead button; whatever the
+   * operator must read belongs inside the dialog.
+   */
+  const [subError, setSubError] = useState<string | null>(null);
 
   // Upgrade modal state (§7)
   const [upgradeOpen, setUpgradeOpen] = useState(false);
@@ -250,6 +256,7 @@ export default function ClientDetailPage() {
         };
       }),
     );
+    setSubError(null);
     setSubscriptionOpen(true);
   };
 
@@ -264,6 +271,17 @@ export default function ClientDetailPage() {
         .filter(([key, cents]) => cents > 0 && !planForEditor.features.includes(key))
         .map(([key, cents]) => ({ key, cents, label: featureLabels[key] ?? key }))
     : [];
+  /**
+   * The tills the client's stores already RUN (configured slots, not licensed).
+   * The purchased quantity may never drop below it: a subscription cannot
+   * disown tills that exist, only refuse new ones. The editor shows this floor
+   * so the refusal is visible before the save.
+   */
+  const subConfiguredTotal = (data?.stores ?? []).reduce(
+    (n, s) => n + (s.terminalCount || 0),
+    0,
+  );
+  const subAllocatedTotal = subAllocations.reduce((n, a) => n + (Number(a.licensed) || 0), 0);
   /** What this client already agreed to pay per add-on — the editor must show that, not the plan's. */
   const agreedAddonPrices: Record<string, number> = Object.fromEntries(
     (data?.subscription?.addons ?? []).map((a) => [a.key, a.cents]),
@@ -276,6 +294,24 @@ export default function ClientDetailPage() {
     setError(null);
     try {
       const isMulti = (data?.client.topology ?? 'single_store') === 'multi_store';
+      if (isMulti) {
+        // The editor can state both facts in one save, but never a state that
+        // cannot exist: the purchased quantity may not drop below the tills the
+        // stores already run, and the allocation may not exceed what is bought.
+        if (Number(subLicensed) < subConfiguredTotal) {
+          setSubError(
+            `Licensed terminals cannot drop below ${subConfiguredTotal} — the stores already run that many tills. Reduce the stores' configured tills first.`,
+          );
+          return;
+        }
+        if (subAllocatedTotal > Number(subLicensed)) {
+          setSubError(
+            `Those allocations total ${subAllocatedTotal} terminals but the licensed quantity is ${Number(subLicensed)}. Raise the licensed quantity to cover the difference.`,
+          );
+          return;
+        }
+      }
+      setSubError(null);
       await api(`/clients/${id}`, {
         method: 'PUT',
         body: {
@@ -286,6 +322,10 @@ export default function ClientDetailPage() {
           features: subFeatures,
           ...(isMulti
             ? {
+                // The purchased quantity FIRST, then where it sits: the server
+                // reads them in this order, so a raise and its distribution can
+                // be one save (see routes/clients.ts).
+                licensedTerminalCount: Number(subLicensed) || 0,
                 allocations: subAllocations.map((a) => ({
                   storeId: a.storeId,
                   licensedTerminalCount: Number(a.licensed) || 0,
@@ -297,7 +337,7 @@ export default function ClientDetailPage() {
       setSubscriptionOpen(false);
       await loadData();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to update the subscription');
+      setSubError(err instanceof Error ? err.message : 'Failed to update the subscription');
     } finally {
       setSavingSubscription(false);
     }
@@ -1528,10 +1568,34 @@ export default function ClientDetailPage() {
                     Licensed terminals
                   </label>
                   <p className="mt-0.5 text-[11px] text-slate-400">
-                    Distribute the client's purchased terminals across its stores. Each store's
+                    The quantity the client has purchased — what the recurring fee is charged on.
+                    Raise it first when they buy more, then distribute it below. Each store's
                     signed licence permits exactly its allocation.
                   </p>
-                  <div className="mt-2 space-y-2">
+                  <div className="mt-2 flex items-center gap-3">
+                    <input
+                      type="number"
+                      // No native min/max: constraint validation would block the
+                      // submit with the browser's own tooltip before the app's
+                      // guard could say WHY (the floor is the tills already
+                      // running, a fact only the form knows).
+                      value={subLicensed}
+                      onChange={(e) => setSubLicensed(e.target.value)}
+                      aria-label="Licensed terminals"
+                      aria-describedby="licensed-floor"
+                      className="w-28 rounded-lg border border-slate-300 p-2 text-center text-sm font-bold"
+                    />
+                    <span className="text-[11px] text-slate-400">
+                      allocated{' '}
+                      {subAllocations.reduce((n, a) => n + (Number(a.licensed) || 0), 0)} /{' '}
+                      licensed {Number(subLicensed) || 0}
+                    </span>
+                  </div>
+                  <p id="licensed-floor" className="mt-1 text-[11px] text-slate-400">
+                    The tills already running: {subConfiguredTotal}. The subscription cannot drop
+                    below that — reduce a store's configured tills first.
+                  </p>
+                  <div className="mt-3 space-y-2">
                     {subAllocations.map((a, idx) => (
                       <div key={a.storeId} className="flex items-center justify-between gap-3">
                         <Link
@@ -1593,11 +1657,10 @@ export default function ClientDetailPage() {
 
               <SubscriptionQuotePreview
                 plan={planForEditor}
-                licensed={
-                  client.topology === 'multi_store'
-                    ? subAllocations.reduce((n, a) => n + (Number(a.licensed) || 0), 0)
-                    : Number(subLicensed) || 0
-                }
+                // The figure the invoice will carry is the LICENSED quantity the
+                // form states, whatever is distributed so far — otherwise the
+                // preview understates while a raise is being typed.
+                licensed={Number(subLicensed) || 0}
                 addonOptions={subAddonOptions}
                 selected={subFeatures}
                 agreedPrices={agreedAddonPrices}
@@ -1621,6 +1684,15 @@ export default function ClientDetailPage() {
                   renewal included; after that it is never repeated.
                 </p>
               </div>
+
+              {subError && (
+                <p
+                  role="alert"
+                  className="rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs font-semibold text-red-700"
+                >
+                  {subError}
+                </p>
+              )}
 
               <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
                 <button
