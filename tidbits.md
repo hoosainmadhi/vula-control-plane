@@ -2,6 +2,25 @@
 
 > Prioritised for the next workspace. ~~Struck~~ items are done.
 
+## "Pay from go-live" replaced "first month free" on the site (2026-10-12) — the office's steps
+
+The marketing page now promises the subscription starts when the shop is set up and ready
+for its first sale. The product has no go-live DATE — the operator holds that fact. What
+the office does, per client:
+
+1. Onboard with no paid-through and no trial date. The panel reads `suspended` from day one
+   (never-paid has derived to suspended since 2026-09-25) until the first payment — the
+   client is in setup, nothing is trading yet and nothing is billed.
+2. At go-live, raise and settle the first invoice. That settlement writes the first
+   `paid_through` and starts the period — the subscription begins when the shop does, not
+   when the paperwork did.
+
+If a client needs a dated window instead (a long, negotiated fit-out), the `trialEndsAt`
+field is the tool: a trial trades and bills nothing, and derives to suspended when it ends.
+Worth considering later: a `goLiveAt` field so the switch is one click rather than a
+remembered conversation, and so the register's setup-time banners can say "we're setting
+you up" rather than reading as unpaid.
+
 ## The dev catalogue was consolidated, then restored by hand (2026-10-12) — one lasting side effect
 
 A consolidation of the local dev registry (`data/control-plane.db`, CP on `:3240`) was
