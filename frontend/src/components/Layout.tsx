@@ -1,6 +1,9 @@
 import type { ReactNode } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { setToken } from '../api';
+import StatusBadge from './StatusBadge';
+import { ENVIRONMENT_COLORS, ENVIRONMENT_LABELS } from '../lib/storeVocab';
+import type { StoreEnvironment } from '../types';
 
 interface LayoutProps {
   title: string;
@@ -25,6 +28,18 @@ const NAV: NavItem[] = [
   { to: '/settings', label: 'Settings' },
 ];
 
+/**
+ * Which deployment this is, from where it is served: the Vite dev server is
+ * development, a `staging` host is staging, anything else is production. The
+ * badge used to be a hardcoded "Development" — the right intent (§44) wired to
+ * nothing, so staging and production both claimed to be a dev box.
+ */
+const environment: StoreEnvironment = import.meta.env.DEV
+  ? 'development'
+  : window.location.hostname.includes('staging')
+    ? 'staging'
+    : 'production';
+
 export default function Layout({ title, children }: LayoutProps) {
   const navigate = useNavigate();
   const signOut = (): void => {
@@ -46,8 +61,12 @@ export default function Layout({ title, children }: LayoutProps) {
           <div className="flex items-center gap-3">
             {/* §44: the environment must always be visible, so an operator can
                 never mistake a dev action for a production one. */}
-            <span className="hidden rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-amber-700 sm:inline">
-              Development
+            <span className="hidden sm:inline">
+              <StatusBadge
+                status={environment}
+                colors={ENVIRONMENT_COLORS}
+                label={ENVIRONMENT_LABELS[environment]}
+              />
             </span>
             <button
               onClick={signOut}
