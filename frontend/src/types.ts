@@ -676,7 +676,15 @@ export interface Quote {
   };
   /** The catalogue's own figures — what the desk quotes from. */
   priced: {
-    lines: Array<{ label: string; detail: string; cents: number }>;
+    lines: Array<{
+      label: string;
+      detail: string;
+      cents: number;
+      /** The unit rate in cents, when the line has one (the tills line does). */
+      rateCents?: number;
+      /** The billed quantity the rate multiplies. */
+      quantity?: number;
+    }>;
     monthlyTotalCents: number;
     setupCents: number;
     monthlyVatCents: number;

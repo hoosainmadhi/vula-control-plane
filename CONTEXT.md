@@ -1115,7 +1115,11 @@ existing client pays — related words, different things; keep them apart.
   testing), and the priced line spells the split out — `3 tills (1 till per store ×
   3 stores)` — because the terse `(3 × 1)` is how that misreading happened; a
   single-store quote prints no split, and the marketing builder's line reads the same
-  way. The page must deploy before the CP: the endpoint requires the structured
+  way. The till line also snaps its unit rate (`rateCents`/`quantity` on the priced
+  line — the invoice's `terminal_price_cents` discipline) and both renderers compose
+  it the invoice's own way, `6 × R 99,00` beside the line total, so the quotation's
+  arithmetic is checkable; a flat add-on carries no rate — its amount is the rate. The
+  page must deploy before the CP: the endpoint requires the structured
   fields, and the old endpoint ignores them.
 - **A quote can be drafted, corrected or removed** (2026-10-13). `POST /api/quotes`
   drafts one from the office's input for a prospect who called or emailed instead of

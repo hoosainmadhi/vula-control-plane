@@ -1251,9 +1251,12 @@ export default function QuotesPage() {
                       <tr key={index} className="border-t border-slate-100">
                         <td className="px-3 py-2 text-slate-600">
                           {line.label}
-                          {line.detail ? (
-                            <span className="text-slate-400"> {line.detail}</span>
-                          ) : null}
+                          <span className="text-slate-400">
+                            {line.detail ? ` ${line.detail}` : ''}
+                            {line.quantity !== undefined && line.rateCents !== undefined
+                              ? `${line.detail ? ' · ' : ' '}${line.quantity} × ${rand(line.rateCents)}`
+                              : ''}
+                          </span>
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums text-slate-700">
                           {rand(line.cents)}

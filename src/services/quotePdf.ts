@@ -15,6 +15,7 @@ import type { OfficeSettingsRecord, QuoteRecord } from '../config/registryDb.js'
 import { formatCents } from '../utils/money.js';
 import { AMOUNT_LEFT, AMOUNT_WIDTH, DESCRIPTION_WIDTH, PAGE_RIGHT } from './invoicePdf.js';
 import { brandMarkPng } from './brandMark.js';
+import type { QuotePricedLine } from './quotePricing.js';
 
 const BRAND = '#059669';
 const GRAY = '#64748b';
@@ -154,13 +155,20 @@ export const buildQuotePdf = ({ quote, settings }: QuotePdfInput): Promise<Buffe
       y += detail ? 28 : 16;
     };
 
-    const pricedLines = JSON.parse(quote.priced_lines_json) as Array<{
-      label: string;
-      detail: string;
-      cents: number;
-    }>;
+    const pricedLines = JSON.parse(quote.priced_lines_json) as QuotePricedLine[];
+    // The detail plus the rate when the line carries one — the invoice's own
+    // "7 × R 500,00" shape, so the quotation's arithmetic can be checked.
+    const detailFor = (line: QuotePricedLine): string =>
+      [
+        line.detail,
+        line.quantity !== undefined && line.rateCents !== undefined
+          ? `${line.quantity} × ${formatCents(line.rateCents)}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
     header('MONTHLY');
-    for (const line of pricedLines) row(line.label, line.detail, formatCents(line.cents));
+    for (const line of pricedLines) row(line.label, detailFor(line), formatCents(line.cents));
 
     header('ONCE OFF');
     row(setupTitle(quote), setupDetail(quote), formatCents(quote.setup_cents));

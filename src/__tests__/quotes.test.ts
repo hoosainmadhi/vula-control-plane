@@ -78,7 +78,13 @@ describe('a request becomes a numbered, priced record', () => {
     expect(row.drift).toBe(0);
     expect(row.addons_json).toBe('["multi_store"]');
     expect(JSON.parse(row.priced_lines_json)).toEqual([
-      { label: '6 tills', detail: '(2 tills per store × 3 stores)', cents: 59400 },
+      {
+        label: '6 tills',
+        detail: '(2 tills per store × 3 stores)',
+        cents: 59400,
+        rateCents: 9900,
+        quantity: 6,
+      },
       { label: 'Head Office', detail: '', cents: 9900 },
     ]);
     // The email went out and the record says so.

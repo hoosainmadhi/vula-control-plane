@@ -31,6 +31,15 @@ export interface QuotePricedLine {
   label: string;
   detail: string;
   cents: number;
+  /**
+   * The unit rate behind the line, in cents, when it has one — the tills line
+   * does; a flat add-on's amount *is* its rate. Snapshotted with the quantity
+   * so a later list-price change cannot rewrite an issued quote, the way an
+   * invoice stores its `terminal_price_cents`.
+   */
+  rateCents?: number;
+  /** The billed quantity the rate multiplies — what the label counts. */
+  quantity?: number;
 }
 
 export interface PricedQuote {
@@ -87,6 +96,8 @@ export const priceQuote = (config: QuoteConfig, vatRate: number): PricedQuote =>
       label: `${config.tills} till${config.tills === 1 ? '' : 's'}`,
       detail,
       cents: config.tills * LIST_TILL_RATE_CENTS,
+      rateCents: LIST_TILL_RATE_CENTS,
+      quantity: config.tills,
     },
   ];
   for (const key of PRICED_FEATURE_KEYS) {

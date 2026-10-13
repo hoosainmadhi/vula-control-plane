@@ -34,7 +34,13 @@ const seedQuote = (over: Partial<QuoteInput> = {}) =>
     requestedMonthlyCents: 69300,
     requestedSetupCents: 500000,
     pricedLines: [
-      { label: '6 tills', detail: '(2 tills per store × 3 stores)', cents: 59400 },
+      {
+        label: '6 tills',
+        detail: '(2 tills per store × 3 stores)',
+        cents: 59400,
+        rateCents: 9900,
+        quantity: 6,
+      },
       { label: 'Head Office', detail: '', cents: 9900 },
     ],
     monthlyTotalCents: 69300,

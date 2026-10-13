@@ -2881,7 +2881,15 @@ export interface QuoteInput {
   requestedLines: Array<{ label: string; amount: string }>;
   requestedMonthlyCents: number | null;
   requestedSetupCents: number | null;
-  pricedLines: Array<{ label: string; detail: string; cents: number }>;
+  /** The catalogue's figures — carries `rateCents`/`quantity` on lines that
+   *  have a unit rate (the tills line), snapshotted like an invoice's price. */
+  pricedLines: Array<{
+    label: string;
+    detail: string;
+    cents: number;
+    rateCents?: number;
+    quantity?: number;
+  }>;
   monthlyTotalCents: number;
   setupCents: number;
   vatRate: number;
@@ -2981,7 +2989,15 @@ export interface QuotePricingEdit {
   tills: number;
   addons: string[];
   setupVariant: string;
-  pricedLines: Array<{ label: string; detail: string; cents: number }>;
+  /** The catalogue's figures — carries `rateCents`/`quantity` on lines that
+   *  have a unit rate (the tills line), snapshotted like an invoice's price. */
+  pricedLines: Array<{
+    label: string;
+    detail: string;
+    cents: number;
+    rateCents?: number;
+    quantity?: number;
+  }>;
   monthlyTotalCents: number;
   setupCents: number;
   vatRate: number;

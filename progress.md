@@ -3054,6 +3054,16 @@ same thing; the marketing builder's line was updated to match, so a visitor's re
 figures and the catalogue's read alike. Non-dividing totals (hand-posted, legacy) degrade to
 `(across N stores)`. A record keeps its stored snapshot until an edit re-prices it.
 
+**And the line carries its rate (same day, owner's ask).** The till line now snapshots its
+unit rate in cents (`rateCents`/`quantity` on the priced line — the invoice's
+`terminal_price_cents` discipline, so a later list-price change cannot rewrite an issued
+quote) and both renderers compose it the invoice's own way:
+`3 tills (1 till per store × 3 stores) · 3 × R 99,00` with the line total in the amount
+column. Flat add-ons carry no rate — their amount is the rate — and a line without one
+renders exactly as before, so records priced earlier are untouched until an edit or a
+re-send re-prices them. The owner asked comparing the quotation to the invoice:
+quantity × rate in the description is this house's document convention.
+
 Verified: 450/450 backend, typecheck and prettier clean; the preview PDF rendered and
 looked at. Not committed.
 

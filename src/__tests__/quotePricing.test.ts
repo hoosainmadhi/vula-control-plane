@@ -17,7 +17,13 @@ describe('quote pricing', () => {
   it("prices tills and add-ons from the list, in the vocabulary's order", () => {
     const priced = priceQuote(base, 15);
     expect(priced.lines).toEqual([
-      { label: '6 tills', detail: '(2 tills per store × 3 stores)', cents: 59400 },
+      {
+        label: '6 tills',
+        detail: '(2 tills per store × 3 stores)',
+        cents: 59400,
+        rateCents: 9900,
+        quantity: 6,
+      },
       { label: 'Head Office', detail: '', cents: 9900 },
       { label: 'Credit accounts', detail: '', cents: 4900 },
     ]);
@@ -56,13 +62,21 @@ describe('quote pricing', () => {
       label: '7 tills',
       detail: '(across 3 stores)',
       cents: 69300,
+      rateCents: 9900,
+      quantity: 7,
     });
     expect(priced.setupCents).toBe(SETUP_FEE_CENTS.self);
   });
 
   it('leaves the split off a single-store quote — there is nothing to split', () => {
     const priced = priceQuote({ stores: 1, tills: 2, addons: [], setup: 'self' }, 15);
-    expect(priced.lines[0]).toEqual({ label: '2 tills', detail: '', cents: 19800 });
+    expect(priced.lines[0]).toEqual({
+      label: '2 tills',
+      detail: '',
+      cents: 19800,
+      rateCents: 9900,
+      quantity: 2,
+    });
   });
 });
 
