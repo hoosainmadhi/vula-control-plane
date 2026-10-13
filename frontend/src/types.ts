@@ -327,6 +327,8 @@ export interface OfficeSettings {
   officeAddress: string;
   /** Payment terms applied to newly raised invoices. */
   invoiceDueDays: number;
+  /** How long a quotation stays valid, in days. */
+  quoteValidDays: number;
   invoiceFooter: string;
   /** The office's own VAT registration ('' = not registered). */
   vatRegNo: string;
@@ -647,4 +649,51 @@ export interface DeploymentDetail {
   ok: true;
   job: DeploymentSummary;
   steps: DeploymentStepView[];
+}
+
+/** A quote-desk record (§45) — what the marketing form's request became. */
+export interface Quote {
+  id: number;
+  number: string;
+  status: 'new' | 'quoted' | 'accepted' | 'declined';
+  /** Where it came from: the website's builder, or the office's own draft. */
+  source: 'website' | 'office';
+  business: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  vertical: string;
+  note: string;
+  stores: number;
+  tills: number;
+  addons: string[];
+  setupVariant: string;
+  /** What the visitor's page showed, kept beside the catalogue's own figures. */
+  requested: {
+    lines: Array<{ label: string; amount: string }>;
+    monthlyCents: number | null;
+    setupCents: number | null;
+  };
+  /** The catalogue's own figures — what the desk quotes from. */
+  priced: {
+    lines: Array<{ label: string; detail: string; cents: number }>;
+    monthlyTotalCents: number;
+    setupCents: number;
+    monthlyVatCents: number;
+    setupVatCents: number;
+  };
+  vatRate: number;
+  /** Derived: sent, and its validity has passed. Never a stored status. */
+  expired: boolean;
+  /** True when the page's figures disagreed with the catalogue (or did not parse). */
+  drift: boolean;
+  emailedAt: string | null;
+  emailError: string | null;
+  validUntil: string | null;
+  sentAt: string | null;
+  acceptedAt: string | null;
+  declinedAt: string | null;
+  companyId: number | null;
+  createdAt: string;
+  updatedAt: string;
 }

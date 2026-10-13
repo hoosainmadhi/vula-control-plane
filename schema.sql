@@ -232,6 +232,60 @@ CREATE TABLE IF NOT EXISTS invoice_sequences (
   last_value INTEGER NOT NULL
 );
 
+-- The quote desk's records (§45). A quote starts life as the marketing site's
+-- request and ends as a document the office sends. Both figures are kept — what
+-- the visitor's page showed and what the catalogue prices — so a stale page is
+-- visible on the record instead of being believed (2026-10-13).
+CREATE TABLE IF NOT EXISTS quotes (
+  id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+  quote_number            TEXT    NOT NULL UNIQUE,
+  status                  TEXT    NOT NULL DEFAULT 'new'
+    CHECK (status IN ('new','quoted','accepted','declined')),
+  business                TEXT    NOT NULL DEFAULT '',
+  contact_name            TEXT    NOT NULL DEFAULT '',
+  email                   TEXT    NOT NULL,
+  phone                   TEXT    NOT NULL,
+  vertical                TEXT    NOT NULL DEFAULT '',
+  note                    TEXT    NOT NULL DEFAULT '',
+  stores                  INTEGER NOT NULL,
+  tills                   INTEGER NOT NULL,
+  addons_json             TEXT    NOT NULL DEFAULT '[]',
+  setup_variant           TEXT    NOT NULL,
+  -- Where the quote came from: the website's builder, or the office's own draft.
+  source                  TEXT    NOT NULL DEFAULT 'website'
+    CHECK (source IN ('website','office')),
+  -- What the visitor's page showed, as JSON [{label,amount}].
+  requested_lines_json    TEXT    NOT NULL DEFAULT '[]',
+  requested_monthly_cents INTEGER,
+  requested_setup_cents   INTEGER,
+  -- The catalogue's own figures, as JSON [{label,detail,cents}].
+  priced_lines_json       TEXT    NOT NULL DEFAULT '[]',
+  monthly_total_cents     INTEGER NOT NULL,
+  setup_cents             INTEGER NOT NULL,
+  vat_rate                INTEGER NOT NULL,
+  monthly_vat_cents       INTEGER NOT NULL,
+  setup_vat_cents         INTEGER NOT NULL,
+  drift                   INTEGER NOT NULL DEFAULT 0,
+  emailed_at              TEXT,
+  email_error             TEXT,
+  valid_until             TEXT,
+  sent_at                 TEXT,
+  accepted_at             TEXT,
+  declined_at             TEXT,
+  company_id              INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+  created_at              TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at              TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status);
+CREATE INDEX IF NOT EXISTS idx_quotes_email ON quotes(email);
+
+-- The quote counter, on the invoice counter's rules.
+CREATE TABLE IF NOT EXISTS quote_sequences (
+  year       INTEGER PRIMARY KEY,
+  last_value INTEGER NOT NULL
+);
+
 -- The control plane's OWN settings: the vendor's identity and the SMTP account
 -- it mails clients from. A true singleton (CHECK id = 1), seeded on first boot.
 -- Distinct from billing_settings above (per client) and from the tenant's
@@ -244,6 +298,9 @@ CREATE TABLE IF NOT EXISTS office_settings (
   office_address    TEXT    NOT NULL DEFAULT '',
   invoice_due_days  INTEGER NOT NULL DEFAULT 14
     CHECK (invoice_due_days BETWEEN 1 AND 180),
+  -- How long a quotation stays valid, in days (§5f).
+  quote_valid_days  INTEGER NOT NULL DEFAULT 30
+    CHECK (quote_valid_days BETWEEN 1 AND 180),
   invoice_footer    TEXT    NOT NULL DEFAULT '',
   -- The vendor's own registration and the rate its inclusive prices carry.
   vat_reg_no        TEXT    NOT NULL DEFAULT '',

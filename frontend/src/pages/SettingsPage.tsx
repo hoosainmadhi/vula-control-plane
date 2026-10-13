@@ -24,6 +24,7 @@ interface Form {
   officePhone: string;
   officeAddress: string;
   invoiceDueDays: string;
+  quoteValidDays: string;
   invoiceFooter: string;
   vatRegNo: string;
   vatRate: string;
@@ -40,6 +41,7 @@ const toForm = (s: OfficeSettings): Form => ({
   officePhone: s.officePhone,
   officeAddress: s.officeAddress,
   invoiceDueDays: String(s.invoiceDueDays),
+  quoteValidDays: String(s.quoteValidDays),
   invoiceFooter: s.invoiceFooter,
   vatRegNo: s.vatRegNo,
   vatRate: String(s.vatRate),
@@ -94,6 +96,7 @@ export default function SettingsPage() {
           officePhone: form.officePhone,
           officeAddress: form.officeAddress,
           invoiceDueDays: Number(form.invoiceDueDays),
+          quoteValidDays: Number(form.quoteValidDays),
           invoiceFooter: form.invoiceFooter,
           vatRegNo: form.vatRegNo,
           vatRate: Number(form.vatRate),
@@ -266,6 +269,21 @@ export default function SettingsPage() {
               </p>
             </div>
             <div>
+              <label className={labelCls}>Quote validity (days)</label>
+              <input
+                required
+                type="number"
+                min={1}
+                max={180}
+                value={form.quoteValidDays}
+                onChange={(e) => set({ quoteValidDays: e.target.value })}
+                className={inputCls}
+              />
+              <p className="mt-1 text-[11px] text-slate-400">
+                How long a quotation the desk sends stays valid — 30 by default.
+              </p>
+            </div>
+            <div>
               <label className={labelCls}>Invoice footer</label>
               <textarea
                 rows={3}
@@ -293,8 +311,8 @@ export default function SettingsPage() {
             </span>
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            Where invoices to clients are sent from. Without a host, "Email to client" refuses
-            rather than reporting a send that never happened.
+            Where invoices and quotations to clients are sent from. Without a host, "Email to
+            client" refuses rather than reporting a send that never happened.
           </p>
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <div>
@@ -353,6 +371,12 @@ export default function SettingsPage() {
                 className={inputCls}
                 placeholder="billing@vula.app"
               />
+              <p className="mt-1 text-[11px] text-slate-400">
+                Must be an address this SMTP account is allowed to send as. A Gmail account can only
+                send as its own address (or a verified alias) — a business address like
+                billing@vula-app.co.za needs its own mailbox (e.g. Zoho) configured here, or the
+                mail is accepted and then never arrives.
+              </p>
             </div>
           </div>
 

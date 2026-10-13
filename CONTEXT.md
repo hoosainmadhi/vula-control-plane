@@ -1082,6 +1082,76 @@ than anything containing "invoice": the §40 privacy test walks field *names* on
 the client and company endpoints and cannot tell a vendor document number from a
 merchant's billing data — the same reason `tradingBlocked` is not `salesBlocked`.
 
+## 5f. The quote desk (2026-10-13)
+
+The marketing site's `#pricing` builder posts a quote request to the control
+plane's one public surface (`POST /api/public/quote-request`: honeypot, 5/hour
+per IP, no recipient on the wire). The desk turns that request into a record and
+the record into a document the office sends.
+
+**Vocabulary.** A *quote* (this section) is a commercial offer to a prospect.
+`SubscriptionQuote` / `quoteForSubscription` (§5) is the arithmetic of what an
+existing client pays — related words, different things; keep them apart.
+
+- **A request is recorded before it is emailed.** The number and row are written
+  in one transaction, then the desk's copy (carrying the number, and any drift)
+  and the visitor's copy (the copy the page promises) go out. A transport failure
+  stamps `email_error` and keeps the lead; the page's 502 → mailto fallback is
+  unchanged. Honeypot and validation failures record nothing.
+- **Numbers** are `VULA-Q-<year>-<6 digits>` on the invoice counter's rules
+  (`quote_sequences`, increment in the reading statement, self-heal from the
+  highest number already written). `LIKE 'VULA-<year>-%'` cannot match a quote,
+  nor the reverse, so the two sequences never see each other's rows.
+- **The desk prices; the page's figures are evidence.** `services/quotePricing.ts`
+  holds the list (the page's own figures: R99/till/month; add-ons from
+  `DEFAULT_FEATURE_PRICES`; the R5 000 assisted / R1 500 self set-up pair). The
+  record keeps the visitor's figures (`requested_*`) beside the catalogue's
+  (`priced_*`); a disagreement — or an unreadable figure — sets `drift`, and the
+  desk's email names both. Refused by name: an unknown add-on, a missing setup
+  choice, Head Office below two stores, and **fewer tills than stores** — tills are
+  the total across the stores, and the office's forms ask the product's own two
+  numbers (stores × tills per store) so the multiplication is never left to the
+  typist (the desk once recorded 3 stores / 1 till at R99; the owner caught it in
+  testing), and the priced line spells the split out — `3 tills (1 till per store ×
+  3 stores)` — because the terse `(3 × 1)` is how that misreading happened; a
+  single-store quote prints no split, and the marketing builder's line reads the same
+  way. The page must deploy before the CP: the endpoint requires the structured
+  fields, and the old endpoint ignores them.
+- **A quote can be drafted, corrected or removed** (2026-10-13). `POST /api/quotes`
+  drafts one from the office's input for a prospect who called or emailed instead of
+  using the site; `PUT /api/quotes/:id` edits a `new`/`quoted` quote — the prospect's
+  details and/or the configuration, the latter re-priced from the catalogue, with the
+  visitor's `requested_*` snapshot never rewritten (a settled quote is not edited);
+  `DELETE /api/quotes/:id` removes any quote that never became a client — the
+  `company_id` link is the guard, because a converted quote is part of that client's
+  story. Deletions are audited, and the number is retired: the sequence only ever
+  moves forward. An office draft carries `source: 'office'`, no `requested_*` (there
+  was no page) and no request email (the desk is where it was born).
+- **Sending** (`POST /api/quotes/:id/send`, office): the office may correct the
+  configuration first — an explicit field re-prices from the catalogue and moves
+  `priced_*`; `requested_*` is never rewritten. The PDF (`services/quotePdf.ts`,
+  the invoice's geometry and constants; headed **Quotation**, saying plainly it is
+  not a tax invoice; the invoice footer is deliberately not printed) is attached
+  to a short covering email to the prospect, Reply-To the office
+  (`office_email`/`smtp_from`). A refused or unconfigured send stamps nothing and
+  audits `result: 'failed'`; success sets `status='quoted'`, `sent_at` and
+  `valid_until` (today + `quote_valid_days`, the office setting beside the invoice
+  terms, 30 by default) and audits `quote_sent`. A settled quote is refused with
+  409 — and the same builder serves `GET /api/quotes/:id/pdf`, so what the office
+  files is what the client receives.
+- **The desk is office-gated** (`/api/quotes*`, `requireOffice`). Expiry is
+  **derived, never stored** (the subscription-state rule: `quoted` with a past
+  `valid_until` reads as expired; sending again extends it).
+- **The pipeline is recorded, not automated** (P3, 2026-10-13). `accept`/`decline`
+  record the prospect's answer (audited; a settled quote refuses a second verdict),
+  and `create-client` — only from an accepted quote, once — creates the client
+  with the quote's own name/email, its tills as the licensed quantity, and the
+  **quote's figures** as the agreed pricing: the quotation is the promise, and a
+  plan edit since must not re-price the client who said yes (P4's served list
+  closes the loop between desk and plan). The office's panel pre-fills the name,
+  slug, plan and quantity and can correct them; the quote keeps `company_id`, so
+  the desk says which client it became.
+
 ## 6. Auth & session conventions
 
 - Single office admin from env; password bcrypt-hashed once at boot, compared

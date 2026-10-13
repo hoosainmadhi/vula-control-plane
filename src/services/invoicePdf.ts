@@ -12,6 +12,7 @@ import PDFDocument from 'pdfkit';
 import type { CompanyRecord, InvoiceRecord, OfficeSettingsRecord } from '../config/registryDb.js';
 import { formatCents } from '../utils/money.js';
 import { invoiceLineItems } from './billing.js';
+import { brandMarkPng } from './brandMark.js';
 
 const BRAND = '#059669';
 const GRAY = '#64748b';
@@ -72,8 +73,16 @@ export const buildInvoicePdf = ({ invoice, company, settings }: InvoicePdfInput)
     };
 
     // --- Header: the vendor, not the merchant ---
-    doc.fontSize(18).font('Helvetica-Bold').fillColor(INK).text(settings.office_name);
-    doc.moveDown(0.2);
+    // The mark sits beside the name it belongs to — the site's own lockup.
+    const headerTop = doc.y;
+    const mark = brandMarkPng();
+    const textLeft = mark ? 90 : 48;
+    if (mark) doc.image(mark, 48, headerTop, { height: 30 });
+    doc
+      .fontSize(18)
+      .font('Helvetica-Bold')
+      .fillColor(INK)
+      .text(settings.office_name, textLeft, headerTop + 1, { width: PAGE_RIGHT - textLeft });
     doc
       .fontSize(9)
       .font('Helvetica')
@@ -88,9 +97,16 @@ export const buildInvoicePdf = ({ invoice, company, settings }: InvoicePdfInput)
         ]
           .filter(Boolean)
           .join('   |   '),
+        textLeft,
+        doc.y + 3,
+        { width: PAGE_RIGHT - textLeft },
       );
+    doc.y = Math.max(doc.y, headerTop + 32);
     doc.moveDown(0.4);
     doc.rect(48, doc.y, PAGE_RIGHT - 48, 2).fill(BRAND);
+    // The header left the flow cursor beside the mark; body text belongs at the
+    // left margin.
+    doc.x = 48;
     doc.moveDown(1);
 
     doc

@@ -30,9 +30,11 @@ const validQuote = (over: Record<string, unknown> = {}): Record<string, unknown>
   vertical: 'spares',
   note: 'We open in November.',
   stores: 3,
-  tills: 2,
+  tills: 6,
+  addons: ['multi_store'],
+  setup: 'assisted',
   lines: [
-    { label: '6 tills (3 stores × 2)', amount: 'R 594,00' },
+    { label: '6 tills (2 tills per store × 3 stores)', amount: 'R 594,00' },
     { label: 'Head Office', amount: 'R 99,00' },
   ],
   // The page sends the bare amount; the endpoint is what words it as "per month".
@@ -42,17 +44,15 @@ const validQuote = (over: Record<string, unknown> = {}): Record<string, unknown>
   ...over,
 });
 
-const lastCall = (): [string, FetchInit | undefined] => {
-  const calls = fetchMock.mock.calls;
-  expect(calls.length).toBeGreaterThan(0);
-  return [String(calls[calls.length - 1][0]), calls[calls.length - 1][1] as FetchInit];
+/** The message at `index`; the desk's goes first, the visitor's copy last. */
+const payloadAt = (index: number): Record<string, any> => {
+  const call = fetchMock.mock.calls[index];
+  expect(call).toBeTruthy();
+  expect(String(call[0])).toBe('https://api.resend.com/emails');
+  return JSON.parse(String((call[1] as FetchInit | undefined)?.body)) as Record<string, any>;
 };
 
-const sentPayload = (): Record<string, any> => {
-  const [url, init] = lastCall();
-  expect(url).toBe('https://api.resend.com/emails');
-  return JSON.parse(String(init?.body)) as Record<string, any>;
-};
+const sentPayload = (): Record<string, any> => payloadAt(fetchMock.mock.calls.length - 1);
 
 beforeEach(() => {
   resetRegistryDb();
@@ -72,29 +72,37 @@ afterEach(() => {
 });
 
 describe('POST /api/public/quote-request', () => {
-  it('mails the office and the visitor, answering the visitor', async () => {
+  it('mails the desk and the visitor’s copy, answering the visitor', async () => {
     const res = await request(app).post('/api/public/quote-request').send(validQuote());
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
 
-    const payload = sentPayload();
-    expect(payload.from).toBe('Vula <hello@vula-app.co.za>');
-    // Both addresses on one message: that IS the "copy to you" the page promises.
-    expect(payload.to).toEqual(['hello@vula-app.co.za', 'thandi@cornermotors.co.za']);
-    expect(payload.reply_to).toBe('thandi@cornermotors.co.za');
-    expect(String(payload.subject)).toContain('Corner Motors');
-    expect(String(payload.subject)).toContain('R 693,00 / month');
-    expect(String(payload.text)).toContain('• 6 tills (3 stores × 2): R 594,00');
-    expect(String(payload.text)).toContain('Mobile: 082 123 4567');
-    expect(String(payload.text)).toContain('Trade: spares');
-    expect(String(payload.text)).toContain('Their note:');
-    expect(String(payload.html)).toContain('thandi@cornermotors.co.za');
+    // Two messages now: the desk's carries the record's number and the
+    // catalogue's figure; the visitor's is the copy the page promises.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const desk = payloadAt(0);
+    expect(desk.from).toBe('Vula <hello@vula-app.co.za>');
+    expect(desk.to).toEqual(['hello@vula-app.co.za']);
+    expect(desk.reply_to).toBe('thandi@cornermotors.co.za');
+    expect(String(desk.subject)).toContain('VULA-Q-');
+    expect(String(desk.subject)).toContain('Corner Motors');
+
+    const visitor = payloadAt(1);
+    expect(visitor.to).toEqual(['thandi@cornermotors.co.za']);
+    expect(visitor.reply_to).toBe('thandi@cornermotors.co.za');
+    expect(String(visitor.subject)).toContain('Corner Motors');
+    expect(String(visitor.subject)).toContain('R 693,00 / month');
+    expect(String(visitor.text)).toContain('• 6 tills (2 tills per store × 3 stores): R 594,00');
+    expect(String(visitor.text)).toContain('Mobile: 082 123 4567');
+    expect(String(visitor.text)).toContain('Trade: spares');
+    expect(String(visitor.text)).toContain('Their note:');
+    expect(String(visitor.html)).toContain('thandi@cornermotors.co.za');
   });
 
   it('takes QUOTE_TO as the office address, so it can move without a rebuild', async () => {
     process.env.QUOTE_TO = 'sales@vula-app.co.za';
     await request(app).post('/api/public/quote-request').send(validQuote()).expect(200);
-    expect(sentPayload().to[0]).toBe('sales@vula-app.co.za');
+    expect(payloadAt(0).to[0]).toBe('sales@vula-app.co.za');
   });
 
   it('cannot be pointed at a third party — there is no recipient field on the wire', async () => {
@@ -102,9 +110,12 @@ describe('POST /api/public/quote-request', () => {
       .post('/api/public/quote-request')
       .send({ ...validQuote(), to: 'victim@example.com', cc: 'victim2@example.com' })
       .expect(200);
-    const payload = sentPayload();
-    expect(JSON.stringify(payload)).not.toContain('victim@example.com');
-    expect(JSON.stringify(payload)).not.toContain('victim2@example.com');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const both = JSON.stringify(
+      fetchMock.mock.calls.map((call) => String((call[1] as FetchInit | undefined)?.body)),
+    );
+    expect(both).not.toContain('victim@example.com');
+    expect(both).not.toContain('victim2@example.com');
   });
 
   it('says ok to a bot and sends nothing when the honeypot is filled', async () => {
@@ -194,6 +205,7 @@ describe('POST /api/public/quote-request', () => {
     }
     // Five in the hour, then a refusal — and the refusal is not a send.
     expect(statuses).toEqual([200, 200, 200, 200, 200, 429]);
-    expect(fetchMock).toHaveBeenCalledTimes(5);
+    // Five requests, two messages each (desk + visitor); the refusal sends none.
+    expect(fetchMock).toHaveBeenCalledTimes(10);
   });
 });

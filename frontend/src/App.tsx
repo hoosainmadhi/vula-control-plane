@@ -11,6 +11,7 @@ import PanelsPage from './pages/PanelsPage';
 import CompaniesPage from './pages/CompaniesPage';
 import PlansPage from './pages/PlansPage';
 import BillingPage from './pages/BillingPage';
+import QuotesPage from './pages/QuotesPage';
 import ErrorsPage from './pages/ErrorsPage';
 import DevicesPage from './pages/DevicesPage';
 import VersionsPage from './pages/VersionsPage';
@@ -102,6 +103,16 @@ export default function App() {
           <RequireOffice>
             <Layout title="Billing & Invoicing">
               <BillingPage />
+            </Layout>
+          </RequireOffice>
+        }
+      />
+      <Route
+        path="/quotes"
+        element={
+          <RequireOffice>
+            <Layout title="Quotes">
+              <QuotesPage />
             </Layout>
           </RequireOffice>
         }

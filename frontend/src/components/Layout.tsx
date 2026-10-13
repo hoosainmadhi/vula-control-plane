@@ -15,6 +15,7 @@ interface NavItem {
 /** Fleet apps the control plane operates. Business content lives elsewhere. */
 const NAV: NavItem[] = [
   { to: '/', label: 'Clients' },
+  { to: '/quotes', label: 'Quotes' },
   { to: '/plans', label: 'Plans' },
   { to: '/billing', label: 'Billing' },
   { to: '/devices', label: 'Devices' },

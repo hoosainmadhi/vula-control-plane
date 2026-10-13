@@ -236,6 +236,9 @@ const OFFICE_SETTINGS_DDL = `
     office_address    TEXT    NOT NULL DEFAULT '',
     invoice_due_days  INTEGER NOT NULL DEFAULT 14
       CHECK (invoice_due_days BETWEEN 1 AND 180),
+    -- How long a quotation stays valid, in days (§5f).
+    quote_valid_days  INTEGER NOT NULL DEFAULT 30
+      CHECK (quote_valid_days BETWEEN 1 AND 180),
     invoice_footer    TEXT    NOT NULL DEFAULT '',
     -- The vendor's own VAT registration and the rate its (VAT-inclusive) prices
     -- are quoted at. Nothing here is a merchant's tax data — that stays off this
@@ -260,6 +263,64 @@ const OFFICE_SETTINGS_DDL = `
  */
 const INVOICE_SEQUENCES_DDL = `
   CREATE TABLE IF NOT EXISTS invoice_sequences (
+    year       INTEGER PRIMARY KEY,
+    last_value INTEGER NOT NULL
+  )`;
+
+/**
+ * The quote desk's records (§45). A quote starts life as the marketing site's
+ * request and ends as a document the office sends. Both figures are kept — what
+ * the visitor's page showed and what the catalogue prices — so a stale page is
+ * visible on the record instead of being believed (2026-10-13).
+ *
+ * `valid_until`/`sent_at` are filled by the send phase, `accepted_at`/
+ * `declined_at`/`company_id` by the pipeline phase; NULL until then.
+ */
+const QUOTES_DDL = `
+  CREATE TABLE IF NOT EXISTS quotes (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    quote_number            TEXT    NOT NULL UNIQUE,
+    status                  TEXT    NOT NULL DEFAULT 'new'
+      CHECK (status IN ('new','quoted','accepted','declined')),
+    business                TEXT    NOT NULL DEFAULT '',
+    contact_name            TEXT    NOT NULL DEFAULT '',
+    email                   TEXT    NOT NULL,
+    phone                   TEXT    NOT NULL,
+    vertical                TEXT    NOT NULL DEFAULT '',
+    note                    TEXT    NOT NULL DEFAULT '',
+    stores                  INTEGER NOT NULL,
+    tills                   INTEGER NOT NULL,
+    addons_json             TEXT    NOT NULL DEFAULT '[]',
+    setup_variant           TEXT    NOT NULL,
+    -- Where the quote came from: the website's builder, or the office's own draft.
+    source                  TEXT    NOT NULL DEFAULT 'website'
+      CHECK (source IN ('website','office')),
+    -- What the visitor's page showed, as JSON [{label,amount}].
+    requested_lines_json    TEXT    NOT NULL DEFAULT '[]',
+    requested_monthly_cents INTEGER,
+    requested_setup_cents   INTEGER,
+    -- The catalogue's own figures, as JSON [{label,detail,cents}].
+    priced_lines_json       TEXT    NOT NULL DEFAULT '[]',
+    monthly_total_cents     INTEGER NOT NULL,
+    setup_cents             INTEGER NOT NULL,
+    vat_rate                INTEGER NOT NULL,
+    monthly_vat_cents       INTEGER NOT NULL,
+    setup_vat_cents         INTEGER NOT NULL,
+    drift                   INTEGER NOT NULL DEFAULT 0,
+    emailed_at              TEXT,
+    email_error             TEXT,
+    valid_until             TEXT,
+    sent_at                 TEXT,
+    accepted_at             TEXT,
+    declined_at             TEXT,
+    company_id              INTEGER REFERENCES companies(id) ON DELETE SET NULL,
+    created_at              TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at              TEXT    NOT NULL DEFAULT (datetime('now'))
+  )`;
+
+/** The quote sequence, on the invoice counter's rules (see INVOICE_SEQUENCES_DDL). */
+const QUOTE_SEQUENCES_DDL = `
+  CREATE TABLE IF NOT EXISTS quote_sequences (
     year       INTEGER PRIMARY KEY,
     last_value INTEGER NOT NULL
   )`;
@@ -631,6 +692,8 @@ export const getRegistryDb = (): Database.Database => {
   db.exec(PANELS_DDL);
   db.exec(INVOICES_DDL);
   db.exec(INVOICE_SEQUENCES_DDL);
+  db.exec(QUOTES_DDL);
+  db.exec(QUOTE_SEQUENCES_DDL);
   db.exec(PAYMENTS_DDL);
   db.exec(BILLING_SETTINGS_DDL);
   db.exec(OFFICE_SETTINGS_DDL);
@@ -643,6 +706,8 @@ export const getRegistryDb = (): Database.Database => {
   db.exec(ERROR_EVENTS_DDL);
   db.exec('CREATE INDEX IF NOT EXISTS idx_invoices_company ON invoices(company_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_quotes_email ON quotes(email)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_payments_company ON payments(company_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_payments_invoice ON payments(invoice_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_deployment_jobs_company ON deployment_jobs(company_id)');
@@ -809,6 +874,17 @@ export const getRegistryDb = (): Database.Database => {
   };
   addOfficeColumn('vat_reg_no', "vat_reg_no TEXT NOT NULL DEFAULT ''");
   addOfficeColumn('vat_rate', 'vat_rate INTEGER NOT NULL DEFAULT 15');
+  addOfficeColumn('quote_valid_days', 'quote_valid_days INTEGER NOT NULL DEFAULT 30');
+
+  // Where a quote came from (§5f). Existing rows are all website requests, which
+  // is exactly what the default says.
+  const quoteCols = db.prepare('PRAGMA table_info(quotes)').all() as Array<{ name: string }>;
+  const addQuoteColumn = (name: string, ddl: string) => {
+    if (!quoteCols.some((c) => c.name === name)) {
+      db.exec(`ALTER TABLE quotes ADD COLUMN ${ddl}`);
+    }
+  };
+  addQuoteColumn('source', "source TEXT NOT NULL DEFAULT 'website'");
 
   migratePlanCustomAmount(db);
   restructurePlans(db);
@@ -1224,9 +1300,9 @@ const moveBundledFeaturesToAddons = (db: Database.Database): boolean => {
     changed = true;
 
     const prices = Object.fromEntries(bundled.map((key) => [key, priced[key]]));
-    const clients = db
-      .prepare('SELECT id FROM companies WHERE plan_id = ?')
-      .all(plan.id) as Array<{ id: number }>;
+    const clients = db.prepare('SELECT id FROM companies WHERE plan_id = ?').all(plan.id) as Array<{
+      id: number;
+    }>;
 
     const run = db.transaction(() => {
       for (const client of clients) {
@@ -1748,9 +1824,7 @@ export const PLAN_PRICING_MODES: readonly PlanPricingMode[] = ['per_terminal', '
  * plan; a subscription's `features_json` holds what the client bought.
  */
 /** The features a subscription has BOUGHT (the add-ons the client pays for). */
-export const subscriptionFeatures = (
-  subscription: CompanySubscriptionRecord | null,
-): string[] => {
+export const subscriptionFeatures = (subscription: CompanySubscriptionRecord | null): string[] => {
   if (!subscription?.features_json) return [];
   try {
     const parsed = JSON.parse(subscription.features_json);
@@ -1785,9 +1859,7 @@ export const subscriptionAddonPrices = (
 export const effectiveFeatures = (
   plan: PlanRecord | null,
   subscription: CompanySubscriptionRecord | null,
-): string[] => [
-  ...new Set([...planFeatures(plan), ...subscriptionFeatures(subscription)]),
-];
+): string[] => [...new Set([...planFeatures(plan), ...subscriptionFeatures(subscription)])];
 
 export interface PlanRecord {
   id: number;
@@ -2708,6 +2780,316 @@ export const nextInvoiceNumber = (now: Date = new Date()): string => {
   })();
 };
 
+/** `VULA-Q-2026-000001` — a quote keeps the invoice family, marked as its own. */
+export const formatQuoteNumber = (year: number, sequence: number): string =>
+  `VULA-Q-${year}-${String(sequence).padStart(6, '0')}`;
+
+/**
+ * Allocates the next quote number, on the invoice counter's rules exactly: the
+ * increment happens in the statement that reads the counter, and a year's
+ * counter starts from the highest quote number already written, so a restored
+ * backup cannot re-issue one. `LIKE 'VULA-<year>-%'` cannot match a quote, and
+ * vice versa, so the two sequences never see each other's numbers.
+ */
+export const nextQuoteNumber = (now: Date = new Date()): string => {
+  const db = getRegistryDb();
+  const year = now.getUTCFullYear();
+  return db.transaction((): string => {
+    db.prepare('INSERT OR IGNORE INTO quote_sequences (year, last_value) VALUES (?, 0)').run(year);
+    const seeded = db
+      .prepare('SELECT last_value FROM quote_sequences WHERE year = ?')
+      .get(year) as {
+      last_value: number;
+    };
+    if (seeded.last_value === 0) {
+      const highest = db
+        .prepare(
+          'SELECT quote_number FROM quotes WHERE quote_number LIKE ? ORDER BY quote_number DESC LIMIT 1',
+        )
+        .get(`VULA-Q-${year}-%`) as { quote_number: string } | undefined;
+      const from = highest ? Number(highest.quote_number.slice(-6)) || 0 : 0;
+      if (from > 0) {
+        db.prepare('UPDATE quote_sequences SET last_value = ? WHERE year = ?').run(from, year);
+      }
+    }
+    const next = db
+      .prepare(
+        'UPDATE quote_sequences SET last_value = last_value + 1 WHERE year = ? RETURNING last_value',
+      )
+      .get(year) as { last_value: number };
+    return formatQuoteNumber(year, next.last_value);
+  })();
+};
+
+export interface QuoteRecord {
+  id: number;
+  quote_number: string;
+  status: 'new' | 'quoted' | 'accepted' | 'declined';
+  /** Where it came from: the website's builder, or the office's own draft. */
+  source: 'website' | 'office';
+  business: string;
+  contact_name: string;
+  email: string;
+  phone: string;
+  vertical: string;
+  note: string;
+  stores: number;
+  /** Total tills across the stores (the wire's own count). */
+  tills: number;
+  /** The add-on keys quoted, as JSON `string[]`. */
+  addons_json: string;
+  setup_variant: string;
+  /** What the visitor's page showed, as JSON `[{label,amount}]`. */
+  requested_lines_json: string;
+  requested_monthly_cents: number | null;
+  requested_setup_cents: number | null;
+  /** The catalogue's own figures, as JSON `[{label,detail,cents}]`. */
+  priced_lines_json: string;
+  monthly_total_cents: number;
+  setup_cents: number;
+  vat_rate: number;
+  monthly_vat_cents: number;
+  setup_vat_cents: number;
+  /** 1 when the page's figures disagreed with the catalogue (or did not parse). */
+  drift: number;
+  emailed_at: string | null;
+  email_error: string | null;
+  /** Filled by the send phase. */
+  valid_until: string | null;
+  sent_at: string | null;
+  /** Filled by the pipeline phase. */
+  accepted_at: string | null;
+  declined_at: string | null;
+  company_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface QuoteInput {
+  /** Where it came from: the website's builder, or the office's own draft. */
+  source: 'website' | 'office';
+  business: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  vertical: string;
+  note: string;
+  stores: number;
+  tills: number;
+  addons: string[];
+  setupVariant: string;
+  requestedLines: Array<{ label: string; amount: string }>;
+  requestedMonthlyCents: number | null;
+  requestedSetupCents: number | null;
+  pricedLines: Array<{ label: string; detail: string; cents: number }>;
+  monthlyTotalCents: number;
+  setupCents: number;
+  vatRate: number;
+  monthlyVatCents: number;
+  setupVatCents: number;
+  drift: number;
+}
+
+/**
+ * Records a quote request: number allocated and row written in one transaction,
+ * so a request that then fails to email still holds its number and the lead
+ * survives (the route emails after this returns, and stamps the outcome).
+ */
+export const createQuote = (input: QuoteInput): QuoteRecord => {
+  const db = getRegistryDb();
+  return db.transaction((): QuoteRecord => {
+    const number = nextQuoteNumber();
+    const result = db
+      .prepare(
+        `INSERT INTO quotes (
+           quote_number, source, business, contact_name, email, phone, vertical, note,
+           stores, tills, addons_json, setup_variant,
+           requested_lines_json, requested_monthly_cents, requested_setup_cents,
+           priced_lines_json, monthly_total_cents, setup_cents,
+           vat_rate, monthly_vat_cents, setup_vat_cents, drift
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        number,
+        input.source,
+        input.business,
+        input.contactName,
+        input.email,
+        input.phone,
+        input.vertical,
+        input.note,
+        input.stores,
+        input.tills,
+        JSON.stringify(input.addons),
+        input.setupVariant,
+        JSON.stringify(input.requestedLines),
+        input.requestedMonthlyCents,
+        input.requestedSetupCents,
+        JSON.stringify(input.pricedLines),
+        input.monthlyTotalCents,
+        input.setupCents,
+        input.vatRate,
+        input.monthlyVatCents,
+        input.setupVatCents,
+        input.drift,
+      );
+    return db
+      .prepare('SELECT * FROM quotes WHERE id = ?')
+      .get(result.lastInsertRowid) as QuoteRecord;
+  })();
+};
+
+export const listQuotes = (status?: string): QuoteRecord[] => {
+  const db = getRegistryDb();
+  const rows = status
+    ? db
+        .prepare('SELECT * FROM quotes WHERE status = ? ORDER BY created_at DESC, id DESC')
+        .all(status)
+    : db.prepare('SELECT * FROM quotes ORDER BY created_at DESC, id DESC').all();
+  return rows as QuoteRecord[];
+};
+
+export const getQuoteById = (id: number): QuoteRecord | null => {
+  const row = getRegistryDb().prepare('SELECT * FROM quotes WHERE id = ?').get(id);
+  return row ? (row as QuoteRecord) : null;
+};
+
+/**
+ * Stamps the email outcome. A failed send sets the reason and leaves `emailed_at`
+ * alone — that combination (row without `emailed_at`, with `email_error`) is what
+ * makes a failed send a lead the office can still see and act on.
+ */
+export const markQuoteEmailed = (id: number, error: string | null): void => {
+  getRegistryDb()
+    .prepare(
+      `UPDATE quotes
+          SET emailed_at = CASE WHEN ? IS NULL THEN datetime('now') ELSE emailed_at END,
+              email_error = ?,
+              updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+    .run(error, error, id);
+};
+
+/**
+ * An office edit to a quote's configuration, with the figures re-priced from the
+ * catalogue. The visitor's `requested_*` snapshot is never touched: it is the
+ * record of what they were shown, and an edit cannot rewrite history.
+ */
+export interface QuotePricingEdit {
+  stores: number;
+  tills: number;
+  addons: string[];
+  setupVariant: string;
+  pricedLines: Array<{ label: string; detail: string; cents: number }>;
+  monthlyTotalCents: number;
+  setupCents: number;
+  vatRate: number;
+  monthlyVatCents: number;
+  setupVatCents: number;
+}
+
+export const updateQuotePricing = (id: number, edit: QuotePricingEdit): QuoteRecord => {
+  getRegistryDb()
+    .prepare(
+      `UPDATE quotes
+          SET stores = ?, tills = ?, addons_json = ?, setup_variant = ?,
+              priced_lines_json = ?, monthly_total_cents = ?, setup_cents = ?,
+              vat_rate = ?, monthly_vat_cents = ?, setup_vat_cents = ?,
+              updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+    .run(
+      edit.stores,
+      edit.tills,
+      JSON.stringify(edit.addons),
+      edit.setupVariant,
+      JSON.stringify(edit.pricedLines),
+      edit.monthlyTotalCents,
+      edit.setupCents,
+      edit.vatRate,
+      edit.monthlyVatCents,
+      edit.setupVatCents,
+      id,
+    );
+  return getQuoteById(id)!;
+};
+
+/** Stamps a successful send: the quotation is out, and until when it stands. */
+export const markQuoteSent = (id: number, validUntil: string): QuoteRecord => {
+  getRegistryDb()
+    .prepare(
+      `UPDATE quotes
+          SET status = 'quoted', sent_at = datetime('now'), valid_until = ?,
+              updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+    .run(validUntil, id);
+  return getQuoteById(id)!;
+};
+
+/** Records the office's outcome: the prospect accepted, or declined (§5f). */
+export const markQuoteAccepted = (id: number): QuoteRecord => {
+  getRegistryDb()
+    .prepare(
+      `UPDATE quotes
+          SET status = 'accepted', accepted_at = datetime('now'), updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+    .run(id);
+  return getQuoteById(id)!;
+};
+
+export const markQuoteDeclined = (id: number): QuoteRecord => {
+  getRegistryDb()
+    .prepare(
+      `UPDATE quotes
+          SET status = 'declined', declined_at = datetime('now'), updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+    .run(id);
+  return getQuoteById(id)!;
+};
+
+/** Links the quote to the client it became — one client, one quote. */
+export const linkQuoteToCompany = (id: number, companyId: number): QuoteRecord => {
+  getRegistryDb()
+    .prepare(`UPDATE quotes SET company_id = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(companyId, id);
+  return getQuoteById(id)!;
+};
+
+/** An office correction to the prospect's details — the record must stay sendable. */
+export interface QuoteContactEdit {
+  business: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  vertical: string;
+  note: string;
+}
+
+export const updateQuoteContact = (id: number, edit: QuoteContactEdit): QuoteRecord => {
+  getRegistryDb()
+    .prepare(
+      `UPDATE quotes
+          SET business = ?, contact_name = ?, email = ?, phone = ?, vertical = ?, note = ?,
+              updated_at = datetime('now')
+        WHERE id = ?`,
+    )
+    .run(edit.business, edit.contactName, edit.email, edit.phone, edit.vertical, edit.note, id);
+  return getQuoteById(id)!;
+};
+
+/**
+ * Removes a quote that never became a client (the route refuses to delete a
+ * linked one). The number is not freed: the sequence counter only ever moves
+ * forward, so a deleted quote's number is retired, never reused.
+ */
+export const deleteQuote = (id: number): void => {
+  getRegistryDb().prepare('DELETE FROM quotes WHERE id = ?').run(id);
+};
+
 export const createInvoice = (
   companyId: number,
   amountCents: number,
@@ -2915,6 +3297,8 @@ export interface OfficeSettingsRecord {
   office_phone: string;
   office_address: string;
   invoice_due_days: number;
+  /** How long a quotation stays valid, in days (§5f). */
+  quote_valid_days: number;
   invoice_footer: string;
   /** The vendor's own VAT registration (`''` = not registered → not a tax invoice). */
   vat_reg_no: string;
@@ -2943,7 +3327,8 @@ export const updateOfficeSettings = (
     .prepare(
       `UPDATE office_settings
           SET office_name = ?, office_email = ?, office_phone = ?, office_address = ?,
-              invoice_due_days = ?, invoice_footer = ?, vat_reg_no = ?, vat_rate = ?,
+              invoice_due_days = ?, quote_valid_days = ?,
+              invoice_footer = ?, vat_reg_no = ?, vat_rate = ?,
               smtp_host = ?, smtp_port = ?, smtp_user = ?, smtp_pass = ?, smtp_from = ?,
               updated_at = datetime('now')
         WHERE id = 1`,
@@ -2954,6 +3339,7 @@ export const updateOfficeSettings = (
       next.office_phone,
       next.office_address,
       next.invoice_due_days,
+      next.quote_valid_days,
       next.invoice_footer,
       next.vat_reg_no,
       next.vat_rate,

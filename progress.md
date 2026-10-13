@@ -2895,3 +2895,170 @@ doc that misstates the price list is how the next person misprices a client.
 
 Verified: 405/405 backend (33 suites), 28/28 frontend, typecheck and `npm run build`
 clean, and the tenant repo's 682/682 + 52/52 re-run as the cross-app gate. Not committed.
+
+## The quote desk records (2026-10-13) — P1 backend, uncommitted
+
+Owner: *"ok lets implement invoicing"* — the desk's first phase: the record under the
+marketing form's request. The endpoint that already emailed the office and the visitor now
+records first and emails second. A transport failure keeps the lead (the row survives with
+`email_error` stamped; the page's 502 → mailto fallback is unchanged), a honeypot fill or a
+bad payload records nothing, and every request gets a number: `VULA-Q-<year>-<6 digits>` on
+the invoice counter's rules (`quote_sequences`, increment in the reading statement,
+self-heal from the highest number already written; the two `LIKE` prefixes cannot see each
+other's rows).
+
+**Server-priced, with a drift flag.** The route priced nothing before — `money()` only
+shape-checked the page's strings. It now prices the configuration itself
+(`services/quotePricing.ts`: the R99/till list rate, `DEFAULT_FEATURE_PRICES`, the R5 000 /
+R1 500 setup pair) and keeps what the visitor saw beside what the catalogue says. A
+disagreement — or an unreadable figure; `parseMoneyCents` refuses anything that is not the
+page's money shape, a `<script>` tag has no digits to mine — sets `drift`, and the desk's
+email names both figures while the visitor's copy keeps their builder's numbers. Refused
+by name: an unknown add-on, a missing setup choice, Head Office on a single-store quote.
+The page now posts its add-on keys and setup choice (`ADDON_KEY` maps its toggle shorthand
+to the curated vocabulary) — **deploy the page before the CP**; the old endpoint ignores
+the extra fields, so that order has no window. Reading the payload closely also caught the
+old `tills` cap: the wire carries the *total* across stores, so 3 stores × 20 tills was
+refused by a bound of 50 — 500 now, with the reason in a comment.
+
+**The desk reads it back.** `routes/quotes.ts` (office-only): `GET /api/quotes` with a
+status filter and `GET /api/quotes/:id`, camelCase, JSON columns parsed, no DB names.
+**The page.** `frontend/src/pages/QuotesPage.tsx` (nav "Quotes", beside Clients): summary
+tiles, a status filter, drift and email-failed chips on the rows, and a detail modal that
+shows the visitor's figures beside the catalogue's, the VAT breakout, and the email
+outcome. Feature labels come from `GET /plans/features`, never a local copy (owner,
+2026-10-10). Read-only — the PDF and the send action are P2.
+
+Verified: 428/428 backend (35 suites; `quotePricing.test.ts` and `quotes.test.ts` new,
+`publicQuotes.test.ts` updated), 28/28 CP frontend (3 suites), typecheck and `tsc -b`
+clean, prettier clean on touched files. Not committed.
+
+## The quotation goes out (2026-10-13) — P2, uncommitted
+
+The desk's second phase: the record becomes a document. `POST /api/quotes/:id/send`
+(office) builds the PDF, emails it to the prospect, and stamps the record. The office may
+correct the configuration first — an explicit field re-prices from the catalogue and moves
+`priced_*`, while the visitor's `requested_*` snapshot is never rewritten (the marketing
+page itself asks a prospect for its real split, so this is the designed path). The
+covering email is short, Reply-To the office (`office_email`/`smtp_from`), and the
+attachment comes from the same builder the download route serves — what the operator
+files is what the client receives.
+
+**The document** (`services/quotePdf.ts`) shares the invoice's geometry constants on
+purpose: A4, 48pt margins, the brand rule, the money column measured with pdfkit's own
+metrics. It is headed **Quotation** and says it is not a tax invoice; the tax is broken
+out of the inclusive figures at the snapshotted rate. The invoice footer is deliberately
+not printed — nobody owes anything yet; a validity line stands in its place. Validity is
+`quote_valid_days` (new office setting, 30 by default, edited in Settings beside the
+invoice terms): `valid_until = today + N`, with a per-send `validDays` override in the
+API. Success sets `status='quoted'`, `sent_at`, `valid_until` and audits `quote_sent`; a
+refused or unconfigured send audits `result: 'failed'` and stamps nothing — the invoice
+email route's honest-outcomes rule. A settled quote is refused with 409.
+
+**The page** gained the actions: `Download PDF` (a blob fetch with the token, like
+Billing), and Send / Send again opening an inline panel — stores, total tills, set-up,
+and the add-ons from the vocabulary (Head Office disabled below two stores). After a send
+the record shows "Sent <when> · valid until <date>".
+
+Not yet surfaced (they land with P3's accept/decline pass): editing the prospect's note,
+and the per-send validity override in the UI.
+
+Verified: 436/436 backend (36 suites; `quotePdf.test.ts` new, five send tests added to
+`quotes.test.ts`), 28/28 CP frontend, typecheck and `tsc -b` clean, prettier clean on
+touched files. Not committed.
+
+## The quote becomes a client (2026-10-13) — P3, uncommitted
+
+The desk's third phase, the pipeline. `POST /api/quotes/:id/accept` and `/decline` record the
+prospect's answer (audited `quote_accepted`/`quote_declined`; a settled quote refuses a second
+verdict with 409), and `expired` is now derived on every read — a sent quote whose
+`valid_until` has passed reads expired while the record keeps saying `quoted`, because that is
+what happened; sending again extends it. The desk gained an Expired filter and chip, and the
+client-less visitor (`business: ''`) is caught at the door.
+
+**`POST /api/quotes/:id/create-client`** — only from an accepted quote, once. It reuses the
+onboarding machinery rather than rebuilding it (`createCompany`, `setLicensedTerminalCount`,
+`setSubscriptionPricing`, `setSubscriptionAddons`) but prices the subscription from the
+**quote's own figures** — the quoted rate, the quoted add-on prices, the quoted once-off — not
+from the plan's, deliberately: the quotation is the promise, and a plan edit since must not
+re-price the client who said yes (the same grandfathering every agreed price gets; P4's served
+list closes the loop between desk and plan). The office's panel pre-fills name, slug, plan and
+licensed terminals from the record and can correct them; the quote keeps `company_id`, and the
+desk links straight to the client page.
+
+Verified: 441/441 backend (36 suites; five pipeline tests added), 28/28 CP frontend, typecheck
+and `tsc -b` clean, prettier clean on touched files. Not committed.
+
+## The desk drafts its own quotes (2026-10-13)
+
+The gap the owner hit while testing: quotes could only arrive from the website's builder, so a
+phone-in prospect had nowhere to land. `POST /api/quotes` (office) now drafts one from the
+desk — business, contact, email, trade, note, stores, tills, add-ons and the set-up choice —
+priced by the same catalogue, recording `source: 'office'` (a new column, defaulted to
+'website', added with the usual column migration so existing registries keep working). There is
+no `requested_*` snapshot (there was no page to disagree with) and no request email (the desk
+is where it was born — `emailed_at` stays null and the detail reads "Drafted by the office").
+Everything after creation is the identical pipeline: send, accept, create client. The Quotes
+page gained the "Create quote" button, its modal, and an "Office" chip on the rows.
+
+Verified: 444/444 backend (three draft tests added), 28/28 CP frontend, typecheck and `tsc -b`
+clean, prettier clean. Not committed.
+
+## Stores × tills, and the desk obeys it (2026-10-13)
+
+The owner's first real test of the create form caught a desk bug: the office asked for
+"Tills (total)" while the product prices per till, so "3 stores × 1 till" was entered as 1
+and quoted at R99 instead of R297. The fix is the product's own model, everywhere: the
+office's forms (create, send, edit) ask **Stores** and **Tills per store** and show the
+computed total, exactly as the marketing builder does, and `validateQuoteConfig` refuses
+the impossible shape — a quote cannot have fewer tills than stores, whether it arrives
+from the page or from the office. The owner's own test quote can be corrected through the
+new edit panel (which re-prices it to 3 tills) or deleted.
+
+**And the desk gained the missing verbs.** `PUT /api/quotes/:id` edits a `new`/`quoted`
+quote — the prospect's details and the configuration, the latter re-priced from the
+catalogue with the visitor's `requested_*` snapshot never rewritten; a settled quote is
+refused (409), audited as `quote_updated`. `DELETE /api/quotes/:id` removes any quote that
+never became a client — the `company_id` link is the guard — audited as `quote_deleted`,
+with the number retired rather than reused. The page grew an Edit panel, a Delete confirm
+and the per-store inputs in all three forms.
+
+Verified: 448/448 backend (four new edit/delete tests plus the refusal case), 28/28 CP
+frontend, typecheck and `tsc -b` clean, prettier clean. Not committed.
+
+## The documents wear the mark (2026-10-13)
+
+The office's quotation and invoice PDFs now carry the Vula mark beside the office
+identity — the same lockup the site's header uses. pdfkit cannot draw SVG, so
+`frontend/public/vula-mark.png` (256px, rendered from `vula-mark.svg` with sharp) sits
+beside the SVG, and `services/brandMark.ts` reads it from wherever the app serves the
+SPA (public/ in dev, dist/ in the container), cached, returning null when the asset is
+missing — a document must render with or without its letterhead. A missing asset is a
+plain document, never an error.
+
+The preview pass caught what the tests could not: coordinate-positioned header text
+leaves pdfkit's flow cursor at that x, so the body title was indented by the header's
+offset. Both documents reset `doc.x = 48` after the header, and the fix was verified by
+rendering a real quotation and looking at it.
+
+Verified: 449/449 backend (the mark test added), typecheck and prettier clean, the PNG
+ships in the built UI and is served. Not committed.
+
+## The line item spells the split out (2026-10-13)
+
+Owner, reading the quotation: *"the till line item must be specific (1 till 3 stores)"*. The
+priced line said `3 tills (3 × 1)` — terse enough that the desk itself once read it the wrong
+way round. It now reads `3 tills (1 till per store × 3 stores)`, and a single-store quote
+prints no split at all. One source (`priceQuote`) so the desk, the PDF and both emails say the
+same thing; the marketing builder's line was updated to match, so a visitor's requested
+figures and the catalogue's read alike. Non-dividing totals (hand-posted, legacy) degrade to
+`(across N stores)`. A record keeps its stored snapshot until an edit re-prices it.
+
+Verified: 450/450 backend, typecheck and prettier clean; the preview PDF rendered and
+looked at. Not committed.
+
+**And the tiles agreed with the forms.** The detail view's summary showed "Stores 3 /
+Tills 3" — which reads as three tills per store if you are thinking per store, the same
+misreading the line item invited. The tile says "Tills (total)" now, and the list rows
+read "3 stores · 3 tills (1/store) · Assisted set-up", the qualifier the forms already
+use ("= 3 tills total").

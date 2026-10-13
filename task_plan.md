@@ -869,3 +869,115 @@ month, nothing chargeable is bundled, and what a client buys is snapshotted at t
       `kind` travelled on the roster but not on branch activation, so the panel filed a warehouse as a
       shop; both payloads carry it now, with the panel leaving an absent kind alone.
       CP 376 tests, panel 97, store 656.
+
+## Phase set (planned 2026-10-13): the quote desk — the CP sends the site's quotes as documents
+
+Owner: *"should we use the CP to send quotes? We dont have a that feature. lets plan"* — the
+sending half already exists; what the office does not have is the desk around it.
+
+**What already exists, verified live 2026-10-13.** The marketing `#pricing` builder posts its
+quote to `POST /api/public/quote-request` (deployed: CORS preflight from `vula-app.co.za`
+answers 204, `/health` ok). The route mails the office (`QUOTE_TO`) and the visitor, Reply-To
+the visitor, through SMTP-or-Resend (`routes/public.ts`, `services/quoteMail.ts`, 9 tests).
+What is missing: **nothing persists** (no `quotes` table — the schema's only "quote" is the
+pricing arithmetic — and no office screen); the visitor receives a copy of their *request*, not
+a quotation; and the route trusts the page's figures (`money()` only shape-checks).
+
+**Vocabulary.** A *quote* (this feature) is a document sent to a prospect.
+`SubscriptionQuote` / `quoteForSubscription` (`services/pricing.ts`) is the arithmetic of what
+an existing client pays — a different concept; CONTEXT gains §5f with the distinction when P1
+lands.
+
+- [ ] **P0 Prove production sending.** The transport is the office's SMTP mailbox (owner,
+      2026-10-13: no Resend — the mailbox is already configured), so nothing here waits on an
+      env key; what remains is a live request from the site with `example.com` as the visitor
+      address, confirming the office copy, the visitor copy, and that Reply goes to the
+      visitor. Nothing below can be verified end-to-end without it.
+- [ ] **P1 The record.** `quotes` + `quote_sequences` tables (registryDb.ts, mirrored in
+      schema.sql; new tables, no data migration). `nextQuoteNumber()` copies
+      `nextInvoiceNumber`'s rules exactly (increment in the reading statement, self-heal from
+      the highest number already written) with the format `VULA-Q-<year>-<6 digits>`. The public
+      route records **first, emails second**, in a transaction: a transport failure keeps the
+      lead (today it is lost) and the page's 502 → mailto fallback is unchanged; honeypot and
+      validation failures still record nothing. **Server-priced, with a drift flag**: the route
+      prices the configuration itself (`services/quotePricing.ts` — the list plan's per-till
+      rate, `DEFAULT_FEATURE_PRICES`, and the R5 000 assisted / R1 500 self setup pair, whose
+      assisted figure currently has no home server-side and needs one: settings or a constant)
+      and stores what the visitor saw beside what the catalogue says. The office email names a
+      difference; the visitor's copy keeps their builder's numbers. Office API `GET /api/quotes`
+      + `/:id` and a read-only Quotes page beside Billing in the CP frontend; the lead email
+      carries the number and a deep link. Tests: numbering (monotonic, never reused, self-heal),
+      record-on-request, honeypot records nothing, transport failure keeps the row, pricing +
+      drift, list/detail; `publicQuotes.test.ts` updated for the new behaviour.
+      *P1 progress (2026-10-13): the backend is in — `quotes` + `quote_sequences` and
+      `nextQuoteNumber` in the registry, `services/quotePricing.ts` (the list price and the
+      assisted/self setup pair as constants there; P4 moves them to a served endpoint), the
+      public route recording first and emailing second (desk copy with the number and any
+      drift, visitor copy as before), and `routes/quotes.ts` (office-only list/detail). The
+      builder now posts its add-on keys and setup choice alongside the figures — **deploy the
+      page before the CP**, since the new endpoint requires them (the old endpoint ignores the
+      extra fields, so that order is safe). The read-only Quotes page landed the same day
+      (`frontend/src/pages/QuotesPage.tsx`: status filter, drift and email-failed chips, a
+      detail modal with both figure sets; labels come from `/plans/features`, never a local
+      copy) — **P1 is complete, P2 (PDF + send) next**.*
+- [x] **P2 The document.** `services/quotePdf.ts` on the `invoicePdf.ts` pattern (A4, 48pt
+      margins; the money column and wrap rules asserted the same way): vendor identity from
+      office settings, "Quotation" + number, date and valid-until, prospect block, lines, the
+      tax broken out of the inclusive prices at the snapshotted rate, setup once-off, monthly
+      total, note, footer — and the explicit line that it is **not a tax invoice**.
+      `GET /api/quotes/:id/pdf` (office; what the office downloads is what the prospect
+      receives) and `POST /api/quotes/:id/send`: config/validity/note editable while sending,
+      prices snapshotted, `valid_until` from a new office setting `quote_valid_days` (30), the
+      prospect receives the PDF with `hello@` as Reply-To, status → `quoted`, audit row; the
+      mailer's honest-outcomes table applies. The request email stays as it is — the quotation
+      is a separate message.
+      *P2 progress (2026-10-13): landed — the office setting, `services/quotePdf.ts`, the PDF
+      and send routes, the page's Download/Send actions and the inline send panel (stores,
+      tills, set-up, add-ons from the vocabulary). Deviations from the plan above, recorded
+      rather than quietly dropped: the invoice footer is **not** printed on a quotation
+      (payment instructions belong to an invoice — nobody owes anything yet; a validity line
+      stands in its place); the per-send `validDays` override exists in the API but the UI
+      leaves validity to the setting; and editing the prospect's note was not built — it
+      lands with P3's accept/decline pass.*
+- [x] **P3 The pipeline.** Accept/decline recorded by the office; `expired` derived from
+      `valid_until` (never stored, no cron — the subscription-state rule). **Create client from
+      this quote** pre-fills the existing onboarding (`POST /companies`, `recordAgreedPricing`,
+      setup fee) and stores `company_id` back on the quote. Audit every action.
+      *P3 progress (2026-10-13): landed — `accept`/`decline` (audited; a settled quote refuses a
+      second verdict with 409), `expired` derived in `quoteOut` and surfaced as an Expired
+      filter/chip, and `create-client`: a quote-driven creation reusing the onboarding machinery
+      (`createCompany`, `setLicensedTerminalCount`, the pricing setters) but with the **quote's
+      own figures** rather than `recordAgreedPricing`'s plan prices — the quotation is the
+      promise, and a plan edited since must not re-price it (P4 closes the loop). The office's
+      panel pre-fills name/slug/plan/tills from the record and can correct them; a visitor with
+      no business name must be given one. `company_id` links the two, and the desk links to the
+      client page. **Also landed 2026-10-13, from the owner testing the desk: the office can
+      draft a quote itself** — `POST /api/quotes` records a `source: 'office'` draft (same
+      catalogue pricing, no request email; a new column, defaulted to 'website' with the usual
+      column migration for existing registries) so a phone-in prospect flows through the
+      identical pipeline. **Then the owner's first real test found the desk pricing tills
+      wrong** — the forms asked for a total while the product prices per till (3 stores × 1
+      till quoted as 1 till): the create/send/edit forms now ask Stores × Tills per store (the
+      marketing builder's own model) and a quote with fewer tills than stores is refused;
+      `PUT /api/quotes/:id` edits a live quote (re-priced, audited, the visitor's snapshot
+      untouched) and `DELETE /api/quotes/:id` removes any quote that never became a client
+      (audited; numbers retired). Still open from P2's note: the per-send validity override in
+      the UI (the note edit landed with the edit panel).*
+- [ ] **P4 (optional, decide after P2) One price source.** `GET /api/public/pricing` from the
+      CP; the site's script hydrates its figures from it with the static `data-cents` kept as
+      the no-JS default. Then the P1 drift flag becomes a canary, not a routine.
+
+**Open decisions (owner).** (1) A negotiated adjustment line on a quote — v1, or defer? The
+plan defaults to defer (list prices; the office's reply carries any concession). (2)
+Prospect-data retention for quotes that never become clients — deferred; say if a purge action
+is wanted. (3) A signed public "accept" link (the store's receipt-link pattern) — deferred;
+acceptance is recorded by the office.
+
+**Out of scope.** Auto-provisioning on acceptance (the orchestrator exists; onboarding a live
+client stays an owner action). Merchant-side quoting — the store and panel already send their
+own; the vendor plane must not carry merchant content.
+
+**Acceptance.** After P3: a visitor builds a quote on the live site → a numbered, server-priced
+record appears in the CP → the office sends a PDF quotation the prospect receives and can reply
+to → acceptance is recorded → the client is created from the quote at the agreed prices and the
+quote links to it. Suites green, typecheck clean, uncommitted (house rule).

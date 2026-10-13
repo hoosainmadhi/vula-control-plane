@@ -1625,3 +1625,15 @@ the seeded tiers had been eight `vula-*` plans at R100–R150. Neither had a tes
 neither could fail, which is why both were stale: the DDL is the source of truth and the
 code reads it, so nothing breaks when the prose is wrong. Worth a routine when the schema
 or pricing changes — the doc is the thing a person reads before they touch either.
+
+**An SMTP 250 is not a delivery, and a From the account does not own is neither.** The
+local office's SMTP is a personal Gmail app password with `smtp_from` set to
+`billing@vula-app.co.za` — an address that account does not own. Gmail accepted the
+submission (nodemailer resolved, the desk stamped the quote *Sent*, the audit said
+`result: 'ok'`) and then dropped the message inside its own pipeline: nothing arrived, and
+nothing in this codebase could see it, because submission and delivery are different steps
+and only the first is ours. The fix is the account, not the message — authenticate as the
+mailbox that owns the From (Zoho hosts this domain's mail), and the Settings page now says
+so under the From field. A trap to remember for every deployment whose From is a business
+address while the credentials are somebody's personal mailbox: "sent" on a desk screen
+means the relay took it, no more.

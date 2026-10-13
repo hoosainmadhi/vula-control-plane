@@ -85,6 +85,10 @@ settingsRouter.put(
     if (body['invoiceDueDays'] !== undefined) {
       patch.invoice_due_days = requireInt(body, 'invoiceDueDays', { min: 1, max: 180 });
     }
+    // How long a quotation the desk sends stays valid (§5f).
+    if (body['quoteValidDays'] !== undefined) {
+      patch.quote_valid_days = requireInt(body, 'quoteValidDays', { min: 1, max: 180 });
+    }
     // The rate the office's inclusive prices are quoted at. Whole percent: the SA
     // rate is 15, and a fractional rate would need a decision about rounding that
     // nothing has asked for yet.

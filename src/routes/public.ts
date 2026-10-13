@@ -24,6 +24,14 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { optionalString, requireString, ValidationError } from '../utils/validate.js';
 import { rateLimiter } from '../utils/rateLimiter.js';
 import { sendQuoteRequest, type QuoteLine } from '../services/quoteMail.js';
+import { createQuote, markQuoteEmailed } from '../config/registryDb.js';
+import { getRawOfficeSettings } from '../services/officeSettings.js';
+import {
+  parseAddonKeys,
+  parseMoneyCents,
+  parseSetupVariant,
+  priceQuote,
+} from '../services/quotePricing.js';
 import { logger } from '../utils/logger.js';
 
 export const publicRouter = Router();
@@ -122,6 +130,16 @@ publicRouter.post(
       throw new ValidationError('A quote needs between 1 and 20 lines');
     }
 
+    // The configuration the desk prices. `tills` is the total across the stores
+    // (the page's own count), so its ceiling is stores × per-store — the old cap
+    // of 50 refused legal multi-store shapes like 3 stores × 20 tills.
+    const config = {
+      stores: boundedInt(body.stores, 1, 50, 'stores'),
+      tills: boundedInt(body.tills, 1, 500, 'tills'),
+      addons: parseAddonKeys(body.addons),
+      setup: parseSetupVariant(body.setup),
+    };
+
     const input = {
       to: quoteTo(),
       business: optionalString(body, 'business', 120)?.trim() ?? '',
@@ -132,19 +150,68 @@ publicRouter.post(
       // form post is not obliged to have used it.
       vertical: optionalString(body, 'vertical', 40)?.trim() ?? '',
       note: optionalString(body, 'note', 2000)?.trim() ?? '',
-      stores: boundedInt(body.stores, 1, 50, 'stores'),
-      tills: boundedInt(body.tills, 1, 50, 'tills'),
+      stores: config.stores,
+      tills: config.tills,
       lines: linesRaw.map(quoteLine),
       monthlyTotal: money(body.monthlyTotal),
       setupLabel: optionalString(body, 'setupLabel', 120)?.trim() || 'Set-up, once off',
       setupAmount: money(body.setupAmount),
     };
 
+    // The desk prices the configuration from its own list; the page's figures
+    // are kept beside it as the record of what the visitor was shown, and a
+    // disagreement is flagged rather than believed (a stale page, not a
+    // contract). The refused configurations — an unknown add-on, Head Office
+    // without a second store — are named by `priceQuote`.
+    const priced = priceQuote(config, getRawOfficeSettings().vat_rate);
+    const requestedMonthly = parseMoneyCents(input.monthlyTotal);
+    const requestedSetup = parseMoneyCents(input.setupAmount);
+    const drift =
+      requestedMonthly === priced.monthlyTotalCents && requestedSetup === priced.setupCents
+        ? null
+        : {
+            requestedMonthlyCents: requestedMonthly,
+            requestedSetupCents: requestedSetup,
+            monthlyTotalCents: priced.monthlyTotalCents,
+            setupCents: priced.setupCents,
+          };
+
+    // Record first, email second: a transport failure must not lose the lead.
+    const record = createQuote({
+      source: 'website',
+      business: input.business,
+      contactName: input.name,
+      email: input.email,
+      phone: input.phone,
+      vertical: input.vertical,
+      note: input.note,
+      stores: config.stores,
+      tills: config.tills,
+      addons: config.addons,
+      setupVariant: config.setup,
+      requestedLines: input.lines,
+      requestedMonthlyCents: requestedMonthly,
+      requestedSetupCents: requestedSetup,
+      pricedLines: priced.lines,
+      monthlyTotalCents: priced.monthlyTotalCents,
+      setupCents: priced.setupCents,
+      vatRate: priced.vatRate,
+      monthlyVatCents: priced.monthlyVatCents,
+      setupVatCents: priced.setupVatCents,
+      drift: drift ? 1 : 0,
+    });
+
     try {
-      await sendQuoteRequest(input);
+      await sendQuoteRequest(input, {
+        number: record.quote_number,
+        monthlyTotalCents: priced.monthlyTotalCents,
+        drift,
+      });
     } catch (err) {
+      markQuoteEmailed(record.id, err instanceof Error ? err.message : String(err));
       // The page shows this and offers the visitor their own mail app instead, so
-      // it says what happened without leaking anything about the transport.
+      // it says what happened without leaking anything about the transport — and
+      // the record survives, so the office still has the request.
       logger.warn(`Quote request could not be sent: ${err instanceof Error ? err.message : err}`);
       res.status(502).json({
         error: 'We could not send that just now. Please try again, or email us directly.',
@@ -153,7 +220,10 @@ publicRouter.post(
       return;
     }
 
-    logger.info(`Quote request sent for ${input.business || input.email} (${input.email})`);
+    markQuoteEmailed(record.id, null);
+    logger.info(
+      `Quote request ${record.quote_number} recorded for ${input.business || input.email} (${input.email})`,
+    );
     res.json({ ok: true });
   }),
 );

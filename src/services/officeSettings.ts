@@ -24,6 +24,8 @@ export interface OfficeSettingsOut {
   officePhone: string;
   officeAddress: string;
   invoiceDueDays: number;
+  /** How long a quotation stays valid, in days (§5f). */
+  quoteValidDays: number;
   invoiceFooter: string;
   /** The vendor's own VAT registration number; '' = not registered. */
   vatRegNo: string;
@@ -51,6 +53,7 @@ export const toOfficeSettingsOut = (
   officePhone: row.office_phone,
   officeAddress: row.office_address,
   invoiceDueDays: row.invoice_due_days,
+  quoteValidDays: row.quote_valid_days,
   invoiceFooter: row.invoice_footer,
   vatRegNo: row.vat_reg_no,
   vatRate: row.vat_rate,

@@ -641,3 +641,16 @@ into that plan.
 - **Turning AI on for a demo store is still the owner's call.** It needs the add-on
   granted and a DeepSeek key set, and it changes what the public demos offer (the
   marketing page currently reads "everything except the AI assistant").
+- **Resend is off the table (owner, 2026-10-13).** The office's SMTP mailbox is the
+  transport — it is already configured — so `RESEND_API_KEY` stays unset and the Resend
+  branch in `services/mailer.ts` is an inert fallback (it is only consulted when no SMTP
+  host is saved). The 2026-10-10 Resend domain-record work is not on the critical path,
+  and the dev registry's Gmail app password remains the local sender. The quote desk is
+  unaffected either way: it records before it sends, so a mail failure leaves the lead on
+  the desk instead of losing it.
+- **The local control plane cannot actually send as billing@ (2026-10-13).** Its SMTP is a
+  Gmail app password (`hoosain.madhi@gmail.com`) with `smtp_from` set to
+  `billing@vula-app.co.za` — Gmail accepts the submission and then drops the message, so
+  desk sends show *Sent* and never arrive (`findings.md` has the full story). Point the
+  local Settings at the Zoho mailbox that owns billing@ (`smtp.zoho.com`, port 465/587)
+  before the next test send; production needs the same account before go-live.
