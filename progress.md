@@ -3064,6 +3064,19 @@ renders exactly as before, so records priced earlier are untouched until an edit
 re-send re-prices them. The owner asked comparing the quotation to the invoice:
 quantity × rate in the description is this house's document convention.
 
+**And an uneven estate is stateable (same day, the owner's own case).** *"how will quote
+work if 1 store wants 2 till anther 3 and another 1?"* — before this, the forms multiplied
+evenly, so 3 stores × 2 priced 2/3/1 correctly but the words implied an even split. The
+create/send/edit panels gained an optional "real split" field (`…or the real split — tills
+per store`): typed as a list (`2, 3, 1`) it sets both the store count and the total, the
+even inputs grey out beside it, and the line reads
+`6 tills (2 + 3 + 1 across 3 stores) · 6 × R 99,00`. The price is unchanged by the shape —
+per till wherever the till is — which the rate line now makes visible. `tillsSplit` rides
+the same three bodies (a sent split overrides the even counts; sending only even counts
+clears it), the priced line snapshots it, and the panels prefill it from the record. The
+even path stays the default: the marketing builder multiplies evenly and the page defers
+the real split to provisioning — which the office can now fix on the quote itself.
+
 Verified: 450/450 backend, typecheck and prettier clean; the preview PDF rendered and
 looked at. Not committed.
 

@@ -627,3 +627,68 @@ describe('editing and deleting a quote', () => {
     expect(String(res.body.error)).toMatch(/client/i);
   });
 });
+
+describe('the real per-store split', () => {
+  it('drafts a quote from the split, and the record reads as the estate is', async () => {
+    const token = await loginAsOffice(app);
+    const res = await request(app)
+      .post('/api/quotes')
+      .set(authHeader(token))
+      .send({
+        business: 'Kloof Auto',
+        email: 'sipho@example.com',
+        addons: [],
+        setup: 'self',
+        tillsSplit: [2, 3, 1],
+      })
+      .expect(201);
+    expect(res.body.quote.stores).toBe(3);
+    expect(res.body.quote.tills).toBe(6);
+    expect(res.body.quote.priced.monthlyTotalCents).toBe(59400);
+    expect(res.body.quote.priced.lines[0]).toEqual({
+      label: '6 tills',
+      detail: '(2 + 3 + 1 across 3 stores)',
+      cents: 59400,
+      rateCents: 9900,
+      quantity: 6,
+      split: [2, 3, 1],
+    });
+  });
+
+  it('lets an edit state the split on a request that came in even', async () => {
+    const token = await loginAsOffice(app);
+    await request(app).post('/api/public/quote-request').send(validQuote()).expect(200);
+    const id = quoteRows()[0].id;
+
+    const res = await request(app)
+      .put(`/api/quotes/${id}`)
+      .set(authHeader(token))
+      .send({ tillsSplit: [2, 3, 1] })
+      .expect(200);
+    expect(res.body.quote.stores).toBe(3);
+    expect(res.body.quote.tills).toBe(6);
+    // The visitor's snapshot is untouched — they saw the even builder.
+    const row = quoteRows()[0];
+    expect(row.requested_monthly_cents).toBe(69300);
+    expect(JSON.parse(row.priced_lines_json)[0].detail).toBe('(2 + 3 + 1 across 3 stores)');
+  });
+
+  it('refuses a malformed split, and the even path still needs its pair', async () => {
+    const token = await loginAsOffice(app);
+    const base = {
+      business: 'X',
+      email: 'x@example.com',
+      addons: [],
+      setup: 'self',
+    };
+    for (const bad of [[0, 3], [], [1.5], Array(51).fill(1), Array(11).fill(50), '2,3']) {
+      await request(app)
+        .post('/api/quotes')
+        .set(authHeader(token))
+        .send({ ...base, tillsSplit: bad })
+        .expect(400);
+    }
+    await request(app).post('/api/quotes').set(authHeader(token)).send(base).expect(400);
+    expect(quoteRows()).toHaveLength(0);
+  });
+});

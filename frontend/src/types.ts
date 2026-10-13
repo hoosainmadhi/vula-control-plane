@@ -684,6 +684,8 @@ export interface Quote {
       rateCents?: number;
       /** The billed quantity the rate multiplies. */
       quantity?: number;
+      /** The real per-store tills, when the office gave a split. */
+      split?: number[];
     }>;
     monthlyTotalCents: number;
     setupCents: number;

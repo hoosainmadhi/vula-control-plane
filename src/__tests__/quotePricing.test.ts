@@ -78,6 +78,24 @@ describe('quote pricing', () => {
       quantity: 2,
     });
   });
+
+  it('states a real per-store split as itself, deriving the counts from the list', () => {
+    // The even counts beside the split are ignored: the list is what the office
+    // knows — 2 tills at one store, 3 at the next, 1 at the last.
+    const priced = priceQuote(
+      { stores: 9, tills: 9, addons: [], setup: 'self', tillsSplit: [2, 3, 1] },
+      15,
+    );
+    expect(priced.lines[0]).toEqual({
+      label: '6 tills',
+      detail: '(2 + 3 + 1 across 3 stores)',
+      cents: 59400,
+      rateCents: 9900,
+      quantity: 6,
+      split: [2, 3, 1],
+    });
+    expect(priced.monthlyTotalCents).toBe(59400);
+  });
 });
 
 describe('reading the page’s money format back', () => {

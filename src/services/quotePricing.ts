@@ -25,6 +25,12 @@ export interface QuoteConfig {
   /** Add-on keys, from the curated vocabulary. */
   addons: string[];
   setup: QuoteSetupVariant;
+  /**
+   * The real per-store tills, when the office gave one (e.g. 2, 3, 1). The list
+   * is the truth then: `stores` and `tills` are derived from it, so the quote
+   * states the estate as it is rather than an even multiplication that isn't.
+   */
+  tillsSplit?: number[];
 }
 
 export interface QuotePricedLine {
@@ -40,6 +46,8 @@ export interface QuotePricedLine {
   rateCents?: number;
   /** The billed quantity the rate multiplies — what the label counts. */
   quantity?: number;
+  /** The per-store tills behind the quantity, when the office gave a real split. */
+  split?: number[];
 }
 
 export interface PricedQuote {
@@ -74,23 +82,43 @@ export const validateQuoteConfig = (config: QuoteConfig): void => {
 };
 
 /**
+ * The configuration as the quote must read it: a real per-store split sets both
+ * the store count and the total — the even counts beside it are then ignored,
+ * never trusted, because the list is what the office actually knows.
+ */
+export const resolveQuoteConfig = (config: QuoteConfig): QuoteConfig =>
+  config.tillsSplit && config.tillsSplit.length > 0
+    ? {
+        ...config,
+        stores: config.tillsSplit.length,
+        tills: config.tillsSplit.reduce((sum, tills) => sum + tills, 0),
+      }
+    : config;
+
+/**
  * Prices a configuration from the list: tills × rate, the chargeable add-ons in
  * the vocabulary's own order, and the setup variant — VAT-inclusive, with the
  * tax broken out at the office's rate (the same arithmetic as an invoice).
  */
-export const priceQuote = (config: QuoteConfig, vatRate: number): PricedQuote => {
+export const priceQuote = (configInput: QuoteConfig, vatRate: number): PricedQuote => {
+  const config = resolveQuoteConfig(configInput);
   validateQuoteConfig(config);
+  const split = config.tillsSplit && config.tillsSplit.length > 0 ? config.tillsSplit : undefined;
   const perStore =
-    config.stores > 0 && config.tills % config.stores === 0 ? config.tills / config.stores : null;
+    !split && config.stores > 0 && config.tills % config.stores === 0
+      ? config.tills / config.stores
+      : null;
   // The split, spelled out: "(3 × 1)" left the reader guessing which number was
-  // which — and it is how a per-store count once got read as a total. A
-  // single-store quote needs no split.
+  // which — and it is how a per-store count once got read as a total. A real
+  // per-store list is stated as itself; a single-store quote needs no split.
   const detail =
     config.stores === 1
       ? ''
-      : perStore === null
-        ? `(across ${config.stores} stores)`
-        : `(${perStore} till${perStore === 1 ? '' : 's'} per store × ${config.stores} stores)`;
+      : split
+        ? `(${split.join(' + ')} across ${config.stores} stores)`
+        : perStore === null
+          ? `(across ${config.stores} stores)`
+          : `(${perStore} till${perStore === 1 ? '' : 's'} per store × ${config.stores} stores)`;
   const lines: QuotePricedLine[] = [
     {
       label: `${config.tills} till${config.tills === 1 ? '' : 's'}`,
@@ -98,6 +126,7 @@ export const priceQuote = (config: QuoteConfig, vatRate: number): PricedQuote =>
       cents: config.tills * LIST_TILL_RATE_CENTS,
       rateCents: LIST_TILL_RATE_CENTS,
       quantity: config.tills,
+      ...(split ? { split } : {}),
     },
   ];
   for (const key of PRICED_FEATURE_KEYS) {
@@ -172,4 +201,26 @@ export const parseSetupVariant = (raw: unknown): QuoteSetupVariant => {
     throw new ValidationError('A quote needs its setup choice (assisted or self)');
   }
   return value as QuoteSetupVariant;
+};
+
+/**
+ * The real per-store till list a caller sent, if any — whole counts, one to
+ * fifty stores, and the same 500-till ceiling the even path carries. Absent
+ * means "no split given", which is what clears one on an edit.
+ */
+export const optionalTillsSplit = (body: Record<string, unknown>): number[] | undefined => {
+  const raw = body['tillsSplit'];
+  if (raw === undefined || raw === null) return undefined;
+  const shape = 'The split is a list of per-store till counts (e.g. 2, 3, 1)';
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 50) {
+    throw new ValidationError(shape);
+  }
+  const split = raw.map((value) => Number(value));
+  if (split.some((tills) => !Number.isInteger(tills) || tills < 1 || tills > 50)) {
+    throw new ValidationError(shape);
+  }
+  if (split.reduce((sum, tills) => sum + tills, 0) > 500) {
+    throw new ValidationError('The split totals more tills than a quote can carry (500)');
+  }
+  return split;
 };

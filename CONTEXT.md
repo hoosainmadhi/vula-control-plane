@@ -1118,9 +1118,12 @@ existing client pays — related words, different things; keep them apart.
   way. The till line also snaps its unit rate (`rateCents`/`quantity` on the priced
   line — the invoice's `terminal_price_cents` discipline) and both renderers compose
   it the invoice's own way, `6 × R 99,00` beside the line total, so the quotation's
-  arithmetic is checkable; a flat add-on carries no rate — its amount is the rate. The
-  page must deploy before the CP: the endpoint requires the structured
-  fields, and the old endpoint ignores them.
+  arithmetic is checkable; a flat add-on carries no rate — its amount is the rate. An
+  uneven estate is stateable too: the office's forms take a real per-store split
+  (`tillsSplit`, e.g. 2, 3, 1), the list then sets both the store count and the total,
+  and the line reads `6 tills (2 + 3 + 1 across 3 stores)` — the price is unchanged,
+  because pricing is per till wherever the till is. The page must deploy before the CP:
+  the endpoint requires the structured fields, and the old endpoint ignores them.
 - **A quote can be drafted, corrected or removed** (2026-10-13). `POST /api/quotes`
   drafts one from the office's input for a prospect who called or emailed instead of
   using the site; `PUT /api/quotes/:id` edits a `new`/`quoted` quote — the prospect's

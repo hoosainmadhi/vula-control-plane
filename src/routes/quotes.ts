@@ -28,9 +28,11 @@ import { buildQuotePdf, quotePdfFilename } from '../services/quotePdf.js';
 import { DEFAULT_FEATURE_PRICES } from '../services/features.js';
 import {
   LIST_TILL_RATE_CENTS,
+  optionalTillsSplit,
   parseAddonKeys,
   parseSetupVariant,
   priceQuote,
+  resolveQuoteConfig,
   type QuoteConfig,
   type QuoteSetupVariant,
 } from '../services/quotePricing.js';
@@ -144,11 +146,17 @@ quotesRouter.post(
         'That email address does not look right — the quotation is sent to it',
       );
     }
+    // A real per-store split sets both counts; without one the even pair is the
+    // configuration, and is required.
+    const split = optionalTillsSplit(body);
     const config: QuoteConfig = {
-      stores: requireInt(body, 'stores', { min: 1, max: 50 }),
-      tills: requireInt(body, 'tills', { min: 1, max: 500 }),
+      stores: split ? split.length : requireInt(body, 'stores', { min: 1, max: 50 }),
+      tills: split
+        ? split.reduce((sum, tills) => sum + tills, 0)
+        : requireInt(body, 'tills', { min: 1, max: 500 }),
       addons: parseAddonKeys(body['addons']),
       setup: parseSetupVariant(body['setup']),
+      ...(split ? { tillsSplit: split } : {}),
     };
     const priced = priceQuote(config, getRawOfficeSettings().vat_rate);
     const record = createQuote({
@@ -225,7 +233,11 @@ quotesRouter.put(
     const note = text('note', 2000);
 
     let current = quote;
-    if (['stores', 'tills', 'addons', 'setup'].some((key) => body[key] !== undefined)) {
+    const splitSent = body['tillsSplit'] !== undefined;
+    if (
+      splitSent ||
+      ['stores', 'tills', 'addons', 'setup'].some((key) => body[key] !== undefined)
+    ) {
       const config: QuoteConfig = {
         stores:
           body['stores'] !== undefined
@@ -243,13 +255,17 @@ quotesRouter.put(
           body['setup'] !== undefined
             ? parseSetupVariant(body['setup'])
             : (quote.setup_variant as QuoteSetupVariant),
+        // A sent split is the truth and overrides the even counts; an edit that
+        // sends only even counts clears any split the record held.
+        tillsSplit: optionalTillsSplit(body),
       };
       const priced = priceQuote(config, getRawOfficeSettings().vat_rate);
+      const resolved = resolveQuoteConfig(config);
       current = updateQuotePricing(quote.id, {
-        stores: config.stores,
-        tills: config.tills,
-        addons: config.addons,
-        setupVariant: config.setup,
+        stores: resolved.stores,
+        tills: resolved.tills,
+        addons: resolved.addons,
+        setupVariant: resolved.setup,
         pricedLines: priced.lines,
         monthlyTotalCents: priced.monthlyTotalCents,
         setupCents: priced.setupCents,
@@ -348,10 +364,15 @@ quotesRouter.post(
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     // The office may correct the configuration before sending — the marketing
-    // page itself tells a prospect to send its real split. Only an explicit
-    // field re-prices; an untouched send keeps the record's snapshot.
+    // page itself tells a prospect to send its real split, and the desk can now
+    // state it. Only an explicit field re-prices; an untouched send keeps the
+    // record's snapshot.
     let current = quote;
-    if (['stores', 'tills', 'addons', 'setup'].some((key) => body[key] !== undefined)) {
+    const splitSent = body['tillsSplit'] !== undefined;
+    if (
+      splitSent ||
+      ['stores', 'tills', 'addons', 'setup'].some((key) => body[key] !== undefined)
+    ) {
       const office = getRawOfficeSettings();
       const config: QuoteConfig = {
         stores:
@@ -370,13 +391,17 @@ quotesRouter.post(
           body['setup'] !== undefined
             ? parseSetupVariant(body['setup'])
             : (quote.setup_variant as QuoteSetupVariant),
+        // A sent split is the truth and overrides the even counts; sending only
+        // even counts clears any split the record held.
+        tillsSplit: optionalTillsSplit(body),
       };
       const priced = priceQuote(config, office.vat_rate);
+      const resolved = resolveQuoteConfig(config);
       current = updateQuotePricing(quote.id, {
-        stores: config.stores,
-        tills: config.tills,
-        addons: config.addons,
-        setupVariant: config.setup,
+        stores: resolved.stores,
+        tills: resolved.tills,
+        addons: resolved.addons,
+        setupVariant: resolved.setup,
         pricedLines: priced.lines,
         monthlyTotalCents: priced.monthlyTotalCents,
         setupCents: priced.setupCents,

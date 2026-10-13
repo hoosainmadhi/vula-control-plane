@@ -48,6 +48,30 @@ const slugify = (value: string): string =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
 
+/**
+ * The per-store list a panel's text field describes, or null when the text is
+ * not a list ("2, 3, 1"). Blank is not invalid — it means "the even split".
+ */
+const parseSplitInput = (value: string): number[] | null => {
+  const parts = value.split(/[,\s]+/).filter(Boolean);
+  if (parts.length === 0) return null;
+  const numbers = parts.map(Number);
+  return numbers.every((n) => Number.isInteger(n) && n >= 1 && n <= 50) ? numbers : null;
+};
+
+const splitActive = (value: string): boolean => value.trim() !== '';
+
+/** A live summary of the split while it is typed, or null when it is not a list yet. */
+const splitSummary = (value: string): string | null => {
+  const split = parseSplitInput(value);
+  if (!split) return null;
+  const total = split.reduce((sum, tills) => sum + tills, 0);
+  return `= ${total} tills across ${split.length} store${split.length === 1 ? '' : 's'}`;
+};
+
+/** The record's own split, as a panel's text field shows it. */
+const splitText = (quote: Quote): string => quote.priced.lines[0]?.split?.join(', ') ?? '';
+
 interface VocabularyFeature {
   key: string;
   label: string;
@@ -78,6 +102,7 @@ export default function QuotesPage() {
   const [sendStores, setSendStores] = useState('1');
   const [sendTills, setSendTills] = useState('1');
   const [sendSetup, setSendSetup] = useState('assisted');
+  const [sendSplit, setSendSplit] = useState('');
   const [sendAddons, setSendAddons] = useState<Set<string>>(new Set());
   const [sendBusy, setSendBusy] = useState(false);
   const [sendError, setSendError] = useState('');
@@ -95,6 +120,7 @@ export default function QuotesPage() {
   const [createStores, setCreateStores] = useState('1');
   const [createTills, setCreateTills] = useState('1');
   const [createSetup, setCreateSetup] = useState('assisted');
+  const [createSplit, setCreateSplit] = useState('');
   const [createAddons, setCreateAddons] = useState<Set<string>>(new Set());
   const [createBusy, setCreateBusy] = useState(false);
   const [createError, setCreateError] = useState('');
@@ -114,6 +140,7 @@ export default function QuotesPage() {
   const [editStores, setEditStores] = useState('1');
   const [editTills, setEditTills] = useState('1');
   const [editSetup, setEditSetup] = useState('assisted');
+  const [editSplit, setEditSplit] = useState('');
   const [editAddons, setEditAddons] = useState<Set<string>>(new Set());
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState('');
@@ -188,6 +215,7 @@ export default function QuotesPage() {
     // multiple starts at one per store.
     setSendTills(String(quote.tills % quote.stores === 0 ? quote.tills / quote.stores : 1));
     setSendSetup(quote.setupVariant);
+    setSendSplit(splitText(quote));
     setSendAddons(new Set(quote.addons));
     setSendError('');
     setNotice('');
@@ -228,8 +256,14 @@ export default function QuotesPage() {
 
   const sendQuote = async (): Promise<void> => {
     if (!detail) return;
-    setSendBusy(true);
     setSendError('');
+    const splitRaw = sendSplit.trim();
+    const split = splitRaw ? parseSplitInput(splitRaw) : undefined;
+    if (splitRaw && !split) {
+      setSendError('The split is per-store till counts, e.g. 2, 3, 1');
+      return;
+    }
+    setSendBusy(true);
     try {
       const res = await api<{ quote: Quote }>(`/quotes/${detail.id}/send`, {
         method: 'POST',
@@ -238,6 +272,7 @@ export default function QuotesPage() {
           tills: Number(sendStores) * Number(sendTills),
           addons: Array.from(sendAddons),
           setup: sendSetup,
+          ...(split ? { tillsSplit: split } : {}),
         },
       });
       updateQuote(res.quote);
@@ -326,6 +361,7 @@ export default function QuotesPage() {
     setCreateStores('1');
     setCreateTills('1');
     setCreateSetup('assisted');
+    setCreateSplit('');
     setCreateAddons(new Set());
     setCreateError('');
     setNotice('');
@@ -342,8 +378,14 @@ export default function QuotesPage() {
   };
 
   const createQuote = async (): Promise<void> => {
-    setCreateBusy(true);
     setCreateError('');
+    const splitRaw = createSplit.trim();
+    const split = splitRaw ? parseSplitInput(splitRaw) : undefined;
+    if (splitRaw && !split) {
+      setCreateError('The split is per-store till counts, e.g. 2, 3, 1');
+      return;
+    }
+    setCreateBusy(true);
     try {
       const res = await api<{ quote: Quote }>('/quotes', {
         method: 'POST',
@@ -358,6 +400,7 @@ export default function QuotesPage() {
           tills: Number(createStores) * Number(createTills),
           addons: Array.from(createAddons),
           setup: createSetup,
+          ...(split ? { tillsSplit: split } : {}),
         },
       });
       setQuotes((list) => [res.quote, ...list]);
@@ -383,6 +426,7 @@ export default function QuotesPage() {
     setEditStores(String(quote.stores));
     setEditTills(String(quote.tills % quote.stores === 0 ? quote.tills / quote.stores : 1));
     setEditSetup(quote.setupVariant);
+    setEditSplit(splitText(quote));
     setEditAddons(new Set(quote.addons));
     setEditError('');
     setNotice('');
@@ -403,8 +447,14 @@ export default function QuotesPage() {
 
   const saveEdit = async (): Promise<void> => {
     if (!detail) return;
-    setEditBusy(true);
     setEditError('');
+    const splitRaw = editSplit.trim();
+    const split = splitRaw ? parseSplitInput(splitRaw) : undefined;
+    if (splitRaw && !split) {
+      setEditError('The split is per-store till counts, e.g. 2, 3, 1');
+      return;
+    }
+    setEditBusy(true);
     try {
       const res = await api<{ quote: Quote }>(`/quotes/${detail.id}`, {
         method: 'PUT',
@@ -419,6 +469,7 @@ export default function QuotesPage() {
           tills: Number(editStores) * Number(editTills),
           addons: Array.from(editAddons),
           setup: editSetup,
+          ...(split ? { tillsSplit: split } : {}),
         },
       });
       updateQuote(res.quote);
@@ -694,6 +745,7 @@ export default function QuotesPage() {
                   value={createStores}
                   onChange={(e) => setCreateStores(e.target.value)}
                   className={inputCls}
+                  disabled={splitActive(createSplit)}
                 />
               </label>
               <label className="block">
@@ -705,9 +757,12 @@ export default function QuotesPage() {
                   value={createTills}
                   onChange={(e) => setCreateTills(e.target.value)}
                   className={inputCls}
+                  disabled={splitActive(createSplit)}
                 />
                 <span className="mt-1 block text-[11px] text-slate-400">
-                  = {Number(createStores) * Number(createTills)} tills total
+                  {splitActive(createSplit)
+                    ? 'the split below sets these'
+                    : `= ${Number(createStores) * Number(createTills)} tills total`}
                 </span>
               </label>
               <label className="block">
@@ -721,6 +776,23 @@ export default function QuotesPage() {
                   <option value="self">Self — R 1 500 once off</option>
                 </select>
               </label>
+              <div className="sm:col-span-3">
+                <label className="block">
+                  <span className={labelCls}>…or the real split — tills per store (optional)</span>
+                  <input
+                    value={createSplit}
+                    onChange={(e) => setCreateSplit(e.target.value)}
+                    className={inputCls}
+                    placeholder="e.g. 2, 3, 1 — a list here sets the store count"
+                  />
+                  <span className="mt-1 block text-[11px] text-slate-400">
+                    {splitSummary(createSplit) ??
+                      (splitActive(createSplit)
+                        ? 'Not a list yet — whole counts, e.g. 2, 3, 1'
+                        : 'Leave blank for the even split above.')}
+                  </span>
+                </label>
+              </div>
             </div>
             <div>
               <span className={labelCls}>Add-ons</span>
@@ -892,6 +964,7 @@ export default function QuotesPage() {
                       value={sendStores}
                       onChange={(e) => setSendStores(e.target.value)}
                       className={inputCls}
+                      disabled={splitActive(sendSplit)}
                     />
                   </label>
                   <label className="block">
@@ -903,9 +976,12 @@ export default function QuotesPage() {
                       value={sendTills}
                       onChange={(e) => setSendTills(e.target.value)}
                       className={inputCls}
+                      disabled={splitActive(sendSplit)}
                     />
                     <span className="mt-1 block text-[11px] text-slate-400">
-                      = {Number(sendStores) * Number(sendTills)} tills total
+                      {splitActive(sendSplit)
+                        ? 'the split below sets these'
+                        : `= ${Number(sendStores) * Number(sendTills)} tills total`}
                     </span>
                   </label>
                   <label className="block">
@@ -919,6 +995,25 @@ export default function QuotesPage() {
                       <option value="self">Self — R 1 500 once off</option>
                     </select>
                   </label>
+                  <div className="sm:col-span-3">
+                    <label className="block">
+                      <span className={labelCls}>
+                        …or the real split — tills per store (optional)
+                      </span>
+                      <input
+                        value={sendSplit}
+                        onChange={(e) => setSendSplit(e.target.value)}
+                        className={inputCls}
+                        placeholder="e.g. 2, 3, 1 — a list here sets the store count"
+                      />
+                      <span className="mt-1 block text-[11px] text-slate-400">
+                        {splitSummary(sendSplit) ??
+                          (splitActive(sendSplit)
+                            ? 'Not a list yet — whole counts, e.g. 2, 3, 1'
+                            : 'Leave blank for the even split above.')}
+                      </span>
+                    </label>
+                  </div>
                 </div>
                 <div>
                   <span className={labelCls}>Add-ons</span>
@@ -1031,6 +1126,7 @@ export default function QuotesPage() {
                       value={editStores}
                       onChange={(e) => setEditStores(e.target.value)}
                       className={inputCls}
+                      disabled={splitActive(editSplit)}
                     />
                   </label>
                   <label className="block">
@@ -1042,9 +1138,12 @@ export default function QuotesPage() {
                       value={editTills}
                       onChange={(e) => setEditTills(e.target.value)}
                       className={inputCls}
+                      disabled={splitActive(editSplit)}
                     />
                     <span className="mt-1 block text-[11px] text-slate-400">
-                      = {Number(editStores) * Number(editTills)} tills total
+                      {splitActive(editSplit)
+                        ? 'the split below sets these'
+                        : `= ${Number(editStores) * Number(editTills)} tills total`}
                     </span>
                   </label>
                   <label className="block">
@@ -1058,6 +1157,25 @@ export default function QuotesPage() {
                       <option value="self">Self — R 1 500 once off</option>
                     </select>
                   </label>
+                  <div className="sm:col-span-3">
+                    <label className="block">
+                      <span className={labelCls}>
+                        …or the real split — tills per store (optional)
+                      </span>
+                      <input
+                        value={editSplit}
+                        onChange={(e) => setEditSplit(e.target.value)}
+                        className={inputCls}
+                        placeholder="e.g. 2, 3, 1 — a list here sets the store count"
+                      />
+                      <span className="mt-1 block text-[11px] text-slate-400">
+                        {splitSummary(editSplit) ??
+                          (splitActive(editSplit)
+                            ? 'Not a list yet — whole counts, e.g. 2, 3, 1'
+                            : 'Leave blank for the even split above.')}
+                      </span>
+                    </label>
+                  </div>
                 </div>
                 <div>
                   <span className={labelCls}>Add-ons</span>
