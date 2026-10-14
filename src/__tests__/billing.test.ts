@@ -323,9 +323,7 @@ describe('L3 Billing & Invoicing', () => {
 
   it('bills the licensed terminal quantity: the purchased count × the plan`s rate', async () => {
     const company = await makeCompany({ licensedTerminalCount: 3 });
-    expect(company.subscription.recurringAmountCents).toBe(
-      3 * company.subscription.rateCents,
-    );
+    expect(company.subscription.recurringAmountCents).toBe(3 * company.subscription.rateCents);
 
     const invoice = await request(app)
       .post('/api/billing/invoices')
@@ -349,13 +347,15 @@ describe('L3 Billing & Invoicing', () => {
       .set(auth())
       .send({ companyId: company.id, purpose: 'renewal', includeOnboarding: false })
       .expect(201);
-    expect(bigger.body.amountCents).toBe(9 * 12_000); // 9 × R120 (vula-grow)
+    // No trading stores yet, so every licensed till prices at the additional-till
+    // rate (vula-grow: R49 since 2026-10-14).
+    expect(bigger.body.amountCents).toBe(9 * 4_900);
     expect(bigger.body.terminalCount).toBe(9);
   });
 
   it('charges the once-off onboarding fee once — never on a renewal', async () => {
     const company = await makeCompany({ licensedTerminalCount: 4 });
-    expect(company.subscription.setupFeeCents).toBe(300_000); // R3 000 (vula-grow)
+    expect(company.subscription.setupFeeCents).toBe(150_000); // R1 500 (vula-grow: the self setup price)
     expect(company.subscription.setupFeeStatus).toBe('not_invoiced');
 
     // The first (initial) invoice carries onboarding + the recurring line.
@@ -364,8 +364,8 @@ describe('L3 Billing & Invoicing', () => {
       .set(auth())
       .send({ companyId: company.id, purpose: 'initial' })
       .expect(201);
-    expect(first.body.setupFeeCents).toBe(300_000); // R3 000 (vula-grow)
-    expect(first.body.amountCents).toBe(4 * 12_000 + 300_000);
+    expect(first.body.setupFeeCents).toBe(150_000); // R1 500 (vula-grow: the self setup price)
+    expect(first.body.amountCents).toBe(4 * 4_900 + 150_000);
 
     const afterFirst = await request(app)
       .get(`/api/companies/${company.id}`)
@@ -380,7 +380,7 @@ describe('L3 Billing & Invoicing', () => {
       .send({ companyId: company.id, purpose: 'initial' })
       .expect(201);
     expect(second.body.setupFeeCents).toBeNull();
-    expect(second.body.amountCents).toBe(4 * 12_000);
+    expect(second.body.amountCents).toBe(4 * 4_900);
 
     const renew = await request(app)
       .post('/api/billing/invoices')
@@ -388,7 +388,7 @@ describe('L3 Billing & Invoicing', () => {
       .send({ companyId: company.id, purpose: 'renewal' })
       .expect(201);
     expect(renew.body.setupFeeCents).toBeNull();
-    expect(renew.body.amountCents).toBe(4 * 12_000);
+    expect(renew.body.amountCents).toBe(4 * 4_900);
   });
 
   it('marks the onboarding charge paid when the invoice that carried it settles', async () => {
@@ -398,7 +398,7 @@ describe('L3 Billing & Invoicing', () => {
       .set(auth())
       .send({ companyId: company.id, purpose: 'initial' })
       .expect(201);
-    expect(created.body.setupFeeCents).toBe(300_000); // R3 000 (vula-grow)
+    expect(created.body.setupFeeCents).toBe(150_000); // R1 500 (vula-grow: the self setup price)
 
     await request(app)
       .post(`/api/billing/invoices/${created.body.id}/pay`)
@@ -413,7 +413,7 @@ describe('L3 Billing & Invoicing', () => {
   it('charges each client its own setup fee — assisted and self on one plan', async () => {
     // The plan carries the self-setup default; assisted setup is a per-client
     // figure, so the two variants coexist on a single plan (2026-10-12).
-    const planId = await planIdByCode('vula-grow'); // setup fee R3 000
+    const planId = await planIdByCode('vula-grow'); // setup fee R1 500 (self)
     const self = await makeCompany({ slug: 'self-setup-co', planId });
     const assisted = await makeCompany({
       slug: 'assisted-setup-co',
@@ -422,11 +422,9 @@ describe('L3 Billing & Invoicing', () => {
     });
 
     // Both quotes agree with what was chosen, on the same plan.
-    expect(self.subscription.setupFeeCents).toBe(300_000);
+    expect(self.subscription.setupFeeCents).toBe(150_000);
     expect(assisted.subscription.setupFeeCents).toBe(500_000);
-    expect(assisted.subscription.recurringAmountCents).toBe(
-      self.subscription.recurringAmountCents,
-    );
+    expect(assisted.subscription.recurringAmountCents).toBe(self.subscription.recurringAmountCents);
 
     // The invoice carries each client's own figure…
     const selfInvoice = await request(app)
@@ -434,7 +432,7 @@ describe('L3 Billing & Invoicing', () => {
       .set(auth())
       .send({ companyId: self.id, purpose: 'initial' })
       .expect(201);
-    expect(selfInvoice.body.setupFeeCents).toBe(300_000);
+    expect(selfInvoice.body.setupFeeCents).toBe(150_000);
     const assistedInvoice = await request(app)
       .post('/api/billing/invoices')
       .set(auth())
@@ -443,19 +441,23 @@ describe('L3 Billing & Invoicing', () => {
     expect(assistedInvoice.body.setupFeeCents).toBe(500_000);
 
     // …and editing the PLAN's default afterwards moves neither client.
-    await request(app).put(`/api/plans/${planId}`).set(auth()).send({ setupFeeCents: 900_000 }).expect(200);
+    await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ setupFeeCents: 900_000 })
+      .expect(200);
     const selfAfter = await request(app).get(`/api/clients/${self.id}`).set(auth()).expect(200);
     const assistedAfter = await request(app)
       .get(`/api/clients/${assisted.id}`)
       .set(auth())
       .expect(200);
-    expect(selfAfter.body.subscription.setupFeeCents).toBe(300_000);
+    expect(selfAfter.body.subscription.setupFeeCents).toBe(150_000);
     expect(assistedAfter.body.subscription.setupFeeCents).toBe(500_000);
   });
 
   it('sets the client`s setup fee through the subscription editor', async () => {
     const company = await makeCompany({ slug: 'editor-setup-co' });
-    expect(company.subscription.setupFeeCents).toBe(300_000);
+    expect(company.subscription.setupFeeCents).toBe(150_000);
 
     const updated = await request(app)
       .put(`/api/clients/${company.id}`)
@@ -678,8 +680,9 @@ describe('L3 Billing & Invoicing', () => {
     const items = invoiceLineItems(getInvoiceById(created.body.id)!);
     expect(items.filter((item) => item.included)).toHaveLength(0);
     // Vocabulary order, not request order: the feature keys are normalised on write.
+    // No trading stores on this fixture, so the tills read as additional ones.
     expect(items.map((item) => item.label)).toEqual([
-      'Licensed terminals',
+      'Additional tills',
       'Credit accounts',
       'AI Copilot',
     ]);
@@ -728,7 +731,14 @@ describe('L3 Billing & Invoicing', () => {
           'layby',
           'ecommerce_bridges',
         ],
-        stores: [{ name: 'Urban Threads Main', slug: 'urban-threads-main', terminalCount: 6, licensedTerminalCount: 6 }],
+        stores: [
+          {
+            name: 'Urban Threads Main',
+            slug: 'urban-threads-main',
+            terminalCount: 6,
+            licensedTerminalCount: 6,
+          },
+        ],
       })
       .expect(201);
 
@@ -745,10 +755,7 @@ describe('L3 Billing & Invoicing', () => {
     expect(client.addons).toHaveLength(6);
     expect(client.recurringAmountCents).toBe(103_800);
 
-    const detail = await request(app)
-      .get(`/api/companies/${client.id}`)
-      .set(auth())
-      .expect(200);
+    const detail = await request(app).get(`/api/companies/${client.id}`).set(auth()).expect(200);
     expect(detail.body.subscription.recurringAmountCents).toBe(103_800);
 
     const invoice = await request(app)
@@ -955,7 +962,7 @@ describe('emailing a subscription invoice', () => {
       .set(auth())
       .send({ companyId: company.id, purpose: 'initial' })
       .expect(201);
-    expect(both.body.setupFeeCents).toBe(300_000); // R3 000 (vula-grow)
+    expect(both.body.setupFeeCents).toBe(150_000); // R1 500 (vula-grow: the self setup price)
     expect(both.body.terminalCount).toBe(3);
 
     await request(app)
@@ -966,7 +973,7 @@ describe('emailing a subscription invoice', () => {
 
     const html = (transport.sendMail.mock.calls[0][0] as { html: string }).html;
     const onceOff = html.indexOf('Vula onboarding and deployment');
-    const recurring = html.indexOf('Licensed terminals');
+    const recurring = html.indexOf('Additional tills');
     expect(onceOff).toBeGreaterThan(-1);
     expect(recurring).toBeGreaterThan(-1);
     expect(onceOff).toBeLessThan(recurring);
@@ -1039,7 +1046,7 @@ describe('once-off charges', () => {
     // capture it on whichever invoice is raised next.
     const company = await makeCompany();
     const before = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
-    expect(before.body.subscription.setupFeeDueCents).toBe(300_000); // R3 000 (vula-grow)
+    expect(before.body.subscription.setupFeeDueCents).toBe(150_000); // R1 500 (vula-grow: the self setup price)
 
     const handPriced = await request(app)
       .post('/api/billing/invoices')
@@ -1047,9 +1054,9 @@ describe('once-off charges', () => {
       .send({ companyId: company.id, amountCents: 250000, description: 'Installation' })
       .expect(201);
     // The hand-priced charge plus the once-off, itemised separately.
-    // The hand-priced amount plus the plan's once-off: R2 500 + R3 000.
-    expect(handPriced.body.amountCents).toBe(550_000);
-    expect(handPriced.body.setupFeeCents).toBe(300_000);
+    // The hand-priced amount plus the plan's once-off: R2 500 + R1 500.
+    expect(handPriced.body.amountCents).toBe(400_000);
+    expect(handPriced.body.setupFeeCents).toBe(150_000);
     expect(handPriced.body.description).toBe('Installation');
 
     // Captured once: the next invoice for the same client does not repeat it.
@@ -1075,8 +1082,8 @@ describe('once-off charges', () => {
       .send({ companyId: company.id, purpose: 'renewal' })
       .expect(201);
     // The period's terminals plus the once-off, in one invoice.
-    expect(first.body.amountCents).toBe(3 * 12_000 + 300_000);
-    expect(first.body.setupFeeCents).toBe(300_000); // R3 000 (vula-grow)
+    expect(first.body.amountCents).toBe(3 * 4_900 + 150_000);
+    expect(first.body.setupFeeCents).toBe(150_000); // R1 500 (vula-grow: the self setup price)
     // The invoice names the charge the way the client reads it on the document.
     expect(first.body.description).toContain('Vula onboarding and deployment');
 
@@ -1085,7 +1092,7 @@ describe('once-off charges', () => {
       .set(auth())
       .send({ companyId: company.id, purpose: 'renewal' })
       .expect(201);
-    expect(second.body.amountCents).toBe(3 * 12_000); // recurring only, no repeat once-off
+    expect(second.body.amountCents).toBe(3 * 4_900); // recurring only, no repeat once-off
     expect(second.body.setupFeeCents).toBeNull();
     expect(second.body.description).not.toContain('onboarding');
   });
@@ -1106,7 +1113,7 @@ describe('once-off charges', () => {
 
     const detail = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
     expect(detail.body.subscription.setupFeeStatus).toBe('not_invoiced');
-    expect(detail.body.subscription.setupFeeDueCents).toBe(300_000); // R3 000 (vula-grow)
+    expect(detail.body.subscription.setupFeeDueCents).toBe(150_000); // R1 500 (vula-grow: the self setup price)
 
     // Bill it on its own and settle it; after that no invoice picks it up again.
     const onboarding = await request(app)

@@ -27,10 +27,11 @@ const validQuote = (over: Record<string, unknown> = {}): Record<string, unknown>
   addons: ['multi_store'],
   setup: 'assisted',
   lines: [
-    { label: '6 tills (3 stores × 2)', amount: 'R 594,00' },
-    { label: 'Head Office', amount: 'R 99,00' },
+    { label: '3 stores (first till included)', amount: 'R 597,00' },
+    { label: '3 additional tills', amount: 'R 147,00' },
+    { label: 'Head Office', amount: 'R 199,00' },
   ],
-  monthlyTotal: 'R 693,00',
+  monthlyTotal: 'R 943,00',
   setupLabel: 'Set-up, once off (assisted, includes provisioning all 3 stores)',
   setupAmount: 'R 5 000,00',
   ...over,
@@ -73,19 +74,20 @@ describe('a request becomes a numbered, priced record', () => {
     const row = rows[0];
     expect(row.quote_number).toMatch(/^VULA-Q-\d{4}-000001$/);
     expect(row.status).toBe('new');
-    expect(row.monthly_total_cents).toBe(69300);
+    expect(row.monthly_total_cents).toBe(94300);
     expect(row.setup_cents).toBe(500000);
     expect(row.drift).toBe(0);
     expect(row.addons_json).toBe('["multi_store"]');
     expect(JSON.parse(row.priced_lines_json)).toEqual([
       {
-        label: '6 tills',
-        detail: '(2 tills per store × 3 stores)',
-        cents: 59400,
-        rateCents: 9900,
-        quantity: 6,
+        label: '3 stores',
+        detail: 'first till included · (2 tills per store)',
+        cents: 59700,
+        rateCents: 19_900,
+        quantity: 3,
       },
-      { label: 'Head Office', detail: '', cents: 9900 },
+      { label: '3 additional tills', detail: '', cents: 14700, rateCents: 4_900, quantity: 3 },
+      { label: 'Head Office', detail: '', cents: 19_900, rateCents: 19_900, quantity: 1 },
     ]);
     // The email went out and the record says so.
     expect(row.emailed_at).toBeTruthy();
@@ -102,13 +104,49 @@ describe('a request becomes a numbered, priced record', () => {
       .expect(200);
     const row = quoteRows()[0];
     expect(row.drift).toBe(1);
-    expect(row.monthly_total_cents).toBe(69300);
+    expect(row.monthly_total_cents).toBe(94300);
     expect(row.requested_monthly_cents).toBe(100);
     // The desk's copy names both figures; the visitor's copy keeps their own.
     const deskText = String(payloadAt(0).text);
     expect(deskText).toContain('1,00');
-    expect(deskText).toContain('693,00');
+    expect(deskText).toMatch(/943,00/);
     expect(String(payloadAt(1).text)).toContain('R 1,00');
+  });
+
+  it('prices the set-up from Office Settings, not a constant (2026-10-14)', async () => {
+    // The once-off pair has one home: the office's own settings. A price change
+    // must follow through to the quote the desk records AND to the list the
+    // marketing page hydrates from — without a deploy.
+    const token = await loginAsOffice(app);
+    await request(app)
+      .put('/api/settings')
+      .set(authHeader(token))
+      .send({ setupFeeAssistedCents: 750_000, setupFeeSelfCents: 200_000 })
+      .expect(200);
+
+    await request(app)
+      .post('/api/public/quote-request')
+      .send(validQuote({ setupAmount: 'R 7 500,00' }))
+      .expect(200);
+    expect(quoteRows()[0].setup_cents).toBe(750_000);
+
+    const list = await request(app).get('/api/public/pricing').expect(200);
+    expect(list.body.pricing.setup).toEqual({ assisted: 750_000, self: 200_000 });
+
+    // And the desk's own drafts price from the same pair.
+    const draft = await request(app)
+      .post('/api/quotes')
+      .set(authHeader(token))
+      .send({
+        business: 'Settings Co',
+        email: 'x@example.com',
+        stores: 1,
+        tills: 1,
+        addons: [],
+        setup: 'self',
+      })
+      .expect(201);
+    expect(draft.body.quote.priced.setupCents).toBe(200_000);
   });
 
   it('a honeypot fill records nothing and sends nothing', async () => {
@@ -193,8 +231,8 @@ describe('the desk is office-only', () => {
     const quote = list.body.quotes[0];
     expect(quote.number).toMatch(/^VULA-Q-/);
     expect(quote.drift).toBe(false);
-    expect(quote.priced.monthlyTotalCents).toBe(69300);
-    expect(quote.requested.monthlyCents).toBe(69300);
+    expect(quote.priced.monthlyTotalCents).toBe(94300);
+    expect(quote.requested.monthlyCents).toBe(94300);
 
     const detail = await request(app)
       .get(`/api/quotes/${quote.id}`)
@@ -261,10 +299,10 @@ describe('sending the quotation', () => {
       .expect(200);
 
     expect(sent.body.quote.addons).toEqual([]);
-    expect(sent.body.quote.priced.monthlyTotalCents).toBe(39600);
+    expect(sent.body.quote.priced.monthlyTotalCents).toBe(49600);
     expect(sent.body.quote.priced.setupCents).toBe(150000);
     const row = quoteRows()[0];
-    expect(row.requested_monthly_cents).toBe(69300);
+    expect(row.requested_monthly_cents).toBe(94300);
     expect(row.requested_setup_cents).toBe(500000);
   });
 
@@ -427,9 +465,9 @@ describe('the pipeline', () => {
       .prepare('SELECT * FROM company_subscriptions WHERE company_id = ?')
       .get(created.body.company.id) as Record<string, unknown>;
     expect(subscription.licensed_terminal_count).toBe(6);
-    expect(subscription.rate_cents).toBe(9900);
+    expect(subscription.rate_cents).toBe(4900);
     expect(subscription.setup_fee_cents).toBe(500000);
-    expect(JSON.parse(String(subscription.addon_prices_json))).toEqual({ multi_store: 9900 });
+    expect(JSON.parse(String(subscription.addon_prices_json))).toEqual({ multi_store: 19_900 });
 
     // One client per quote.
     await request(app)
@@ -486,8 +524,9 @@ describe('the office drafts its own quote', () => {
       .expect(201);
     expect(res.body.quote.source).toBe('office');
     expect(res.body.quote.status).toBe('new');
-    // 3 tills × R99 + Head Office R99 + Lay-by R49, self set-up.
-    expect(res.body.quote.priced.monthlyTotalCents).toBe(44500);
+    // 2 stores × R199 + 1 additional till × R49 + Head Office R199 + 2 stores ×
+    // Lay-by R49, self set-up (2026-10-14: stores, and per-store add-ons).
+    expect(res.body.quote.priced.monthlyTotalCents).toBe(74400);
     expect(res.body.quote.priced.setupCents).toBe(150000);
     // No page, so nothing to disagree with — and no request email to send.
     expect(res.body.quote.requested.monthlyCents).toBeNull();
@@ -568,10 +607,10 @@ describe('editing and deleting a quote', () => {
       .send({ business: 'Corner Motors (Pty) Ltd', stores: 3, tills: 3, addons: [], setup: 'self' })
       .expect(200);
     expect(res.body.quote.business).toBe('Corner Motors (Pty) Ltd');
-    expect(res.body.quote.priced.monthlyTotalCents).toBe(29700);
+    expect(res.body.quote.priced.monthlyTotalCents).toBe(59700);
     expect(res.body.quote.priced.setupCents).toBe(150000);
     const row = quoteRows()[0];
-    expect(row.requested_monthly_cents).toBe(69300);
+    expect(row.requested_monthly_cents).toBe(94300);
   });
 
   it('refuses a nameless edit, the fewer-tills-than-stores typo, and a settled quote', async () => {
@@ -644,14 +683,21 @@ describe('the real per-store split', () => {
       .expect(201);
     expect(res.body.quote.stores).toBe(3);
     expect(res.body.quote.tills).toBe(6);
-    expect(res.body.quote.priced.monthlyTotalCents).toBe(59400);
+    expect(res.body.quote.priced.monthlyTotalCents).toBe(74400);
     expect(res.body.quote.priced.lines[0]).toEqual({
-      label: '6 tills',
-      detail: '(2 + 3 + 1 across 3 stores)',
-      cents: 59400,
-      rateCents: 9900,
-      quantity: 6,
+      label: '3 stores',
+      detail: 'first till included · (2 + 3 + 1 across 3 stores)',
+      cents: 59700,
+      rateCents: 19_900,
+      quantity: 3,
       split: [2, 3, 1],
+    });
+    expect(res.body.quote.priced.lines[1]).toEqual({
+      label: '3 additional tills',
+      detail: '(1 + 2 + 0 extra across 3 stores)',
+      cents: 14700,
+      rateCents: 4_900,
+      quantity: 3,
     });
   });
 
@@ -669,8 +715,10 @@ describe('the real per-store split', () => {
     expect(res.body.quote.tills).toBe(6);
     // The visitor's snapshot is untouched — they saw the even builder.
     const row = quoteRows()[0];
-    expect(row.requested_monthly_cents).toBe(69300);
-    expect(JSON.parse(row.priced_lines_json)[0].detail).toBe('(2 + 3 + 1 across 3 stores)');
+    expect(row.requested_monthly_cents).toBe(94300);
+    expect(JSON.parse(row.priced_lines_json)[0].detail).toBe(
+      'first till included · (2 + 3 + 1 across 3 stores)',
+    );
   });
 
   it('refuses a malformed split, and the even path still needs its pair', async () => {

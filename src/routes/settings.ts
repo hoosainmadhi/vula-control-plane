@@ -95,6 +95,22 @@ settingsRouter.put(
     if (body['vatRate'] !== undefined) {
       patch.vat_rate = requireInt(body, 'vatRate', { min: 0, max: 100 });
     }
+    // The once-off onboarding pair (2026-10-14): the one home for both figures,
+    // in whole cents, VAT-inclusive like every other price this office states.
+    // R50 000 is the ceiling — beyond that it is a negotiated deal, not a list
+    // price, and the per-client figure on a subscription is where that lives.
+    if (body['setupFeeSelfCents'] !== undefined) {
+      patch.setup_fee_self_cents = requireInt(body, 'setupFeeSelfCents', {
+        min: 0,
+        max: 5_000_000,
+      });
+    }
+    if (body['setupFeeAssistedCents'] !== undefined) {
+      patch.setup_fee_assisted_cents = requireInt(body, 'setupFeeAssistedCents', {
+        min: 0,
+        max: 5_000_000,
+      });
+    }
     if (body['smtpPort'] !== undefined) {
       patch.smtp_port = requireInt(body, 'smtpPort', { min: 1, max: 65535 });
     }

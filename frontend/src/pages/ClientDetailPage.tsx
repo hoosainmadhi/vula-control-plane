@@ -22,10 +22,17 @@ import type {
   StoreFormValues,
 } from '../types';
 import { SETUP_FEE_LABEL, type Notice } from '../lib/storeVocab';
-import { addonLinesFor, rand, PERIOD_LABEL, perTerminalLabel } from '../lib/money';
+import {
+  addonLinesFor,
+  ASSISTED_SETUP_CENTS,
+  perStoreLabel,
+  perTerminalLabel,
+  PERIOD_LABEL,
+  rand,
+} from '../lib/money';
+import { officeSetupFees } from '../lib/officeFees';
 
 /** The site's assisted-setup price, offered as a quick pick beside the plan's self figure. */
-const ASSISTED_SETUP_CENTS = 500_000;
 
 const SETUP_FEE_LABELS: Record<SetupFeeStatus, string> = {
   not_invoiced: 'Not invoiced yet',
@@ -45,12 +52,15 @@ const SETUP_FEE_LABELS: Record<SetupFeeStatus, string> = {
 function SubscriptionQuotePreview({
   plan,
   licensed,
+  stores,
   addonOptions,
   selected,
   agreedPrices,
 }: {
   plan: Plan | undefined;
   licensed: number;
+  /** The client's trading stores — what a per-store plan bills. */
+  stores: number;
   /** What the plan sells and at what price — the lines the ticks can produce. */
   addonOptions: Array<{ key: string; cents: number; label: string }>;
   selected: string[];
@@ -58,11 +68,18 @@ function SubscriptionQuotePreview({
   agreedPrices: Record<string, number>;
 }) {
   if (!plan) return null;
-  const addonLines = addonLinesFor(addonOptions, selected, agreedPrices);
+  const addonLines = addonLinesFor(addonOptions, selected, agreedPrices, stores);
   const addonsCents = addonLines.reduce((sum, line) => sum + line.cents, 0);
   const period = plan.billingPeriod === 'once-off' ? '' : PERIOD_LABEL[plan.billingPeriod];
   const custom = plan.pricingMode === 'custom';
-  const terminalsCents = custom ? 0 : plan.terminalPriceCents * licensed;
+  const perStore = plan.pricingMode === 'per_store';
+  const additional = Math.max(0, licensed - stores);
+  const storesCents = perStore ? stores * plan.storePriceCents : 0;
+  const terminalsCents = custom
+    ? 0
+    : perStore
+      ? additional * plan.terminalPriceCents
+      : plan.terminalPriceCents * licensed;
   return (
     <div className="rounded-xl bg-slate-50 px-3.5 py-3 text-xs">
       {custom ? (
@@ -72,22 +89,47 @@ function SubscriptionQuotePreview({
         </div>
       ) : (
         <>
-          <div className="flex justify-between">
-            <span className="text-slate-500">
-              Licensed terminals ({licensed} × {rand(plan.terminalPriceCents)})
-            </span>
-            <span className="font-mono text-slate-700">{rand(terminalsCents)}</span>
-          </div>
+          {perStore ? (
+            <>
+              <div className="flex justify-between">
+                <span className="text-slate-500">
+                  Stores ({stores} × {rand(plan.storePriceCents)})
+                </span>
+                <span className="font-mono text-slate-700">{rand(storesCents)}</span>
+              </div>
+              <div className="mt-1 flex justify-between">
+                <span className="text-slate-500">
+                  Additional tills ({additional} × {rand(plan.terminalPriceCents)})
+                </span>
+                <span className="font-mono text-slate-700">{rand(terminalsCents)}</span>
+              </div>
+            </>
+          ) : (
+            <div className="flex justify-between">
+              <span className="text-slate-500">
+                Licensed terminals ({licensed} × {rand(plan.terminalPriceCents)})
+              </span>
+              <span className="font-mono text-slate-700">{rand(terminalsCents)}</span>
+            </div>
+          )}
           {addonLines.map((line) => (
             <div key={line.key} className="mt-1 flex justify-between">
-              <span className="text-slate-500">{line.label}</span>
+              <span className="text-slate-500">
+                {line.label}
+                {line.quantity > 1 ? (
+                  <span className="text-slate-400">
+                    {' '}
+                    ({line.quantity} × {rand(line.unitCents)})
+                  </span>
+                ) : null}
+              </span>
               <span className="font-mono text-slate-700">{rand(line.cents)} / month</span>
             </div>
           ))}
           <div className="mt-1 flex justify-between border-t border-slate-200 pt-1.5">
             <span className="font-semibold text-slate-600">Recurring</span>
             <span className="font-mono font-black text-slate-900">
-              {rand(terminalsCents + addonsCents)} {period}
+              {rand(storesCents + terminalsCents + addonsCents)} {period}
             </span>
           </div>
         </>
@@ -135,6 +177,8 @@ export default function ClientDetailPage() {
   const [subSetupFeeStatus, setSubSetupFeeStatus] = useState<SetupFeeStatus>('not_invoiced');
   /** The client's once-off charge in cents, as text for the input. */
   const [subSetupFee, setSubSetupFee] = useState('0');
+  /** The office's assisted-setup figure — Settings owns it, not this editor. */
+  const [assistedSetupCents, setAssistedSetupCents] = useState(ASSISTED_SETUP_CENTS);
   /** The paid add-ons the client holds — what the editor's ticks will send. */
   const [subFeatures, setSubFeatures] = useState<string[]>([]);
   const [subAllocations, setSubAllocations] = useState<
@@ -228,6 +272,10 @@ export default function ClientDetailPage() {
   };
 
   useEffect(() => {
+    void officeSetupFees().then((fees) => setAssistedSetupCents(fees.assisted));
+  }, []);
+
+  useEffect(() => {
     loadData();
   }, [id]);
 
@@ -250,9 +298,7 @@ export default function ClientDetailPage() {
     setSubPlanId(data.client.planId ? String(data.client.planId) : '');
     setSubLicensed(String(sub?.licensedTerminalCount ?? data.client.licensedTerminalCount ?? 0));
     setSubSetupFeeStatus(sub?.setupFeeStatus ?? data.client.setupFeeStatus ?? 'not_invoiced');
-    setSubSetupFee(
-      String(sub?.setupFeeCents ?? data.client.setupFeeCents ?? 0),
-    );
+    setSubSetupFee(String(sub?.setupFeeCents ?? data.client.setupFeeCents ?? 0));
     setSubFeatures((sub?.addons ?? []).map((a) => a.key));
     setSubAllocations(
       (data.stores ?? []).map((store) => {
@@ -285,10 +331,7 @@ export default function ClientDetailPage() {
    * disown tills that exist, only refuse new ones. The editor shows this floor
    * so the refusal is visible before the save.
    */
-  const subConfiguredTotal = (data?.stores ?? []).reduce(
-    (n, s) => n + (s.terminalCount || 0),
-    0,
-  );
+  const subConfiguredTotal = (data?.stores ?? []).reduce((n, s) => n + (s.terminalCount || 0), 0);
   const subAllocatedTotal = subAllocations.reduce((n, a) => n + (Number(a.licensed) || 0), 0);
   /** What this client already agreed to pay per add-on — the editor must show that, not the plan's. */
   const agreedAddonPrices: Record<string, number> = Object.fromEntries(
@@ -969,9 +1012,21 @@ export default function ClientDetailPage() {
                   <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2">
                     <div className="flex items-start justify-between gap-3">
                       <span className="text-[11px] font-medium text-amber-900">
-                        {subscription.midPeriodCharge.extraTerminals} extra terminal
-                        {subscription.midPeriodCharge.extraTerminals === 1 ? '' : 's'} bought
-                        mid-period
+                        {[
+                          subscription.midPeriodCharge.extraStores
+                            ? `${subscription.midPeriodCharge.extraStores} extra store${
+                                subscription.midPeriodCharge.extraStores === 1 ? '' : 's'
+                              }`
+                            : '',
+                          subscription.midPeriodCharge.extraTerminals
+                            ? `${subscription.midPeriodCharge.extraTerminals} extra terminal${
+                                subscription.midPeriodCharge.extraTerminals === 1 ? '' : 's'
+                              }`
+                            : '',
+                        ]
+                          .filter(Boolean)
+                          .join(' and ') || 'An increase'}{' '}
+                        bought mid-period
                         <span className="block text-amber-700">
                           {subscription.midPeriodCharge.daysRemaining} of{' '}
                           {subscription.midPeriodCharge.periodDays} days left ·{' '}
@@ -1479,7 +1534,6 @@ export default function ClientDetailPage() {
                 </select>
               </div>
 
-
               <div className="flex justify-end gap-2 pt-3">
                 <button
                   type="button"
@@ -1522,9 +1576,11 @@ export default function ClientDetailPage() {
                   {plans.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
-                      {p.pricingMode === 'per_terminal'
-                        ? ` — ${perTerminalLabel(p.terminalPriceCents, p.billingPeriod)}`
-                        : ' — custom pricing'}
+                      {p.pricingMode === 'per_store'
+                        ? ` — ${perStoreLabel(p.storePriceCents, p.terminalPriceCents, p.billingPeriod)}`
+                        : p.pricingMode === 'per_terminal'
+                          ? ` — ${perTerminalLabel(p.terminalPriceCents, p.billingPeriod)}`
+                          : ' — custom pricing'}
                     </option>
                   ))}
                 </select>
@@ -1579,8 +1635,8 @@ export default function ClientDetailPage() {
                   </label>
                   <p className="mt-0.5 text-[11px] text-slate-400">
                     The quantity the client has purchased — what the recurring fee is charged on.
-                    Raise it first when they buy more, then distribute it below. Each store's
-                    signed licence permits exactly its allocation.
+                    Raise it first when they buy more, then distribute it below. Each store's signed
+                    licence permits exactly its allocation.
                   </p>
                   <div className="mt-2 flex items-center gap-3">
                     <input
@@ -1596,9 +1652,8 @@ export default function ClientDetailPage() {
                       className="w-28 rounded-lg border border-slate-300 p-2 text-center text-sm font-bold"
                     />
                     <span className="text-[11px] text-slate-400">
-                      allocated{' '}
-                      {subAllocations.reduce((n, a) => n + (Number(a.licensed) || 0), 0)} /{' '}
-                      licensed {Number(subLicensed) || 0}
+                      allocated {subAllocations.reduce((n, a) => n + (Number(a.licensed) || 0), 0)}{' '}
+                      / licensed {Number(subLicensed) || 0}
                     </span>
                   </div>
                   <p id="licensed-floor" className="mt-1 text-[11px] text-slate-400">
@@ -1671,6 +1726,9 @@ export default function ClientDetailPage() {
                 // form states, whatever is distributed so far — otherwise the
                 // preview understates while a raise is being typed.
                 licensed={Number(subLicensed) || 0}
+                // A per-store plan bills the trading stores; a warehouse is not
+                // one (the server's own rule — `countStoresForCompany`).
+                stores={(data.stores ?? []).filter((s) => s.kind !== 'warehouse').length}
                 addonOptions={subAddonOptions}
                 selected={subFeatures}
                 agreedPrices={agreedAddonPrices}
@@ -1693,15 +1751,15 @@ export default function ClientDetailPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setSubSetupFee(String(ASSISTED_SETUP_CENTS))}
-                    aria-pressed={subSetupFee === String(ASSISTED_SETUP_CENTS)}
+                    onClick={() => setSubSetupFee(String(assistedSetupCents))}
+                    aria-pressed={subSetupFee === String(assistedSetupCents)}
                     className={`rounded-lg border px-3 py-1.5 text-[11px] font-semibold ${
-                      subSetupFee === String(ASSISTED_SETUP_CENTS)
+                      subSetupFee === String(assistedSetupCents)
                         ? 'border-brand-500 bg-brand-50 text-brand-700'
                         : 'border-slate-300 text-slate-600 hover:bg-slate-50'
                     }`}
                   >
-                    Assisted — {rand(ASSISTED_SETUP_CENTS)}
+                    Assisted — {rand(assistedSetupCents)}
                   </button>
                   <input
                     type="number"

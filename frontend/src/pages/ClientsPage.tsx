@@ -2,7 +2,14 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../api';
 import type { ClientListItem, Plan, StoreVertical } from '../types';
-import { rand, perTerminalLabel, PERIOD_LABEL } from '../lib/money';
+import {
+  ASSISTED_SETUP_CENTS,
+  perStoreLabel,
+  perTerminalLabel,
+  PERIOD_LABEL,
+  rand,
+} from '../lib/money';
+import { officeSetupFees } from '../lib/officeFees';
 
 /**
  * Clients, and the onboarding wizard that creates one.
@@ -121,6 +128,8 @@ export default function ClientsPage() {
    * client — one plan, two setup offers (2026-10-12).
    */
   const [setupFeeCents, setSetupFeeCents] = useState<number | null>(null);
+  /** The office's assisted-setup figure — Settings owns it, not this form. */
+  const [assistedCents, setAssistedCents] = useState(ASSISTED_SETUP_CENTS);
 
   // Single store inputs
   const [singleStoreName, setSingleStoreName] = useState('');
@@ -163,6 +172,12 @@ export default function ClientsPage() {
 
   useEffect(() => {
     loadData();
+  }, []);
+
+  // The assisted-setup figure comes from Office Settings, where both onboarding
+  // prices live (2026-10-14) — this form only displays it.
+  useEffect(() => {
+    void officeSetupFees().then((fees) => setAssistedCents(fees.assisted));
   }, []);
 
   const handleNameChange = (name: string) => {
@@ -635,9 +650,11 @@ export default function ClientsPage() {
                         .map((p) => (
                           <option key={p.id} value={p.id}>
                             {p.name}
-                            {p.pricingMode === 'per_terminal'
-                              ? ` — ${perTerminalLabel(p.terminalPriceCents, p.billingPeriod)}`
-                              : ' — custom pricing'}
+                            {p.pricingMode === 'per_store'
+                              ? ` — ${perStoreLabel(p.storePriceCents, p.terminalPriceCents, p.billingPeriod)}`
+                              : p.pricingMode === 'per_terminal'
+                                ? ` — ${perTerminalLabel(p.terminalPriceCents, p.billingPeriod)}`
+                                : ' — custom pricing'}
                           </option>
                         ))}
                     </select>
@@ -663,22 +680,26 @@ export default function ClientsPage() {
                       </button>
                       <button
                         type="button"
-                        onClick={() => setSetupFeeCents(500_000)}
-                        aria-pressed={setupFeeCents === 500_000}
+                        onClick={() => setSetupFeeCents(assistedCents)}
+                        aria-pressed={setupFeeCents === assistedCents}
                         className={`rounded-lg border px-3 py-2 text-xs font-semibold ${
-                          setupFeeCents === 500_000
+                          setupFeeCents === assistedCents
                             ? 'border-brand-500 bg-brand-50 text-brand-700'
                             : 'border-slate-300 text-slate-600 hover:bg-slate-50'
                         }`}
                       >
-                        Assisted — {rand(500_000)}
+                        Assisted — {rand(assistedCents)}
                       </button>
                     </div>
                     <p className="mt-1 text-[11px] text-slate-400">
                       Self setup is the plan's figure
-                      {setupFeeCents !== null
-                        ? `; assisted adds ${rand(setupFeeCents - (selectedPlan?.setupFeeCents ?? 0))} for the client.`
-                        : ' — switch to Assisted if we build it with them.'}
+                      {setupFeeCents === null
+                        ? ' — switch to Assisted if we build it with them.'
+                        : setupFeeCents === (selectedPlan?.setupFeeCents ?? 0)
+                          ? '; this plan charges the same either way.'
+                          : setupFeeCents > (selectedPlan?.setupFeeCents ?? 0)
+                            ? `; assisted adds ${rand(setupFeeCents - (selectedPlan?.setupFeeCents ?? 0))} for the client.`
+                            : `; note assisted is BELOW this plan's self figure (${rand(selectedPlan?.setupFeeCents ?? 0)}) — check the plan.`}
                     </p>
                   </div>
                   <div>
@@ -703,11 +724,12 @@ export default function ClientsPage() {
                 {addonOptions.length > 0 ? (
                   <div className="mt-4">
                     <label className="block text-xs font-bold text-slate-700">
-                      Add-ons <span className="font-normal text-slate-400">(monthly, per plan)</span>
+                      Add-ons{' '}
+                      <span className="font-normal text-slate-400">(monthly, per plan)</span>
                     </label>
                     <p className="mt-0.5 text-[11px] text-slate-400">
-                      What this client buys on top of the per-till rate. Unticked can be added
-                      later from the client's subscription.
+                      What this client buys on top of the per-till rate. Unticked can be added later
+                      from the client's subscription.
                     </p>
                     <div className="mt-2 grid gap-2 sm:grid-cols-2">
                       {addonOptions.map((option) => (

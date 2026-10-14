@@ -31,6 +31,13 @@ export interface OfficeSettingsOut {
   vatRegNo: string;
   /** The rate its VAT-inclusive prices are quoted at. */
   vatRate: number;
+  /**
+   * The once-off onboarding pair the office prices from (2026-10-14): the self
+   * price and the assisted price. One home for both figures — the desk's quotes,
+   * the onboarding form and the marketing page all read these.
+   */
+  setupFeeSelfCents: number;
+  setupFeeAssistedCents: number;
   smtpHost: string;
   smtpPort: number;
   smtpUser: string;
@@ -57,6 +64,8 @@ export const toOfficeSettingsOut = (
   invoiceFooter: row.invoice_footer,
   vatRegNo: row.vat_reg_no,
   vatRate: row.vat_rate,
+  setupFeeSelfCents: row.setup_fee_self_cents,
+  setupFeeAssistedCents: row.setup_fee_assisted_cents,
   smtpHost: row.smtp_host,
   smtpPort: row.smtp_port,
   smtpUser: row.smtp_user,

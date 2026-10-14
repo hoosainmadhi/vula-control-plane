@@ -24,7 +24,7 @@ off-host enforcement, restore rehearsal.
 
 ## 2026-10-03 — production is live: vula-cp-prod deployed, healthy, clean, logins verified
 
-Owner: *"secrets done"* — the production licence keypair, JWT secret and admin
+Owner: _"secrets done"_ — the production licence keypair, JWT secret and admin
 password saved to the password manager and passed file-to-file (`~/Notes/
 vula-prod-*.txt`), with the office email confirmed as hello@vula-app.co.za.
 
@@ -52,16 +52,16 @@ vula-prod-*.txt`), with the office email confirmed as hello@vula-app.co.za.
 
 ## 2026-10-02 (night) — names are provisioned, the till warns before checkout, and the licence hole got its teeth
 
-Owner reports from driving the rehearsal stores: *"single store should not
-have the menu item Head Office"* (done — tenant `51fd5a9`), *"Paused
-Rehearsal Two North -> but can still access POS and ring up sale"*,
-*"why is Store name 'Vula Store' for all stores?"*, *"I think we need a
-popup"* for the suspension refusal, and the rehearsal's biggest catch: a sale
+Owner reports from driving the rehearsal stores: _"single store should not
+have the menu item Head Office"_ (done — tenant `51fd5a9`), _"Paused
+Rehearsal Two North -> but can still access POS and ring up sale"_,
+_"why is Store name 'Vula Store' for all stores?"_, _"I think we need a
+popup"_ for the suspension refusal, and the rehearsal's biggest catch: a sale
 rang up on a **suspended** client's store.
 
 - **The licence enforcement hole (tenant `e4b94ff`):** the CP signs
   `billingState` into every licence, but the tenant's acceptance path
-  flattened it — a null paid-period mapped to *active* ("no billing
+  flattened it — a null paid-period mapped to _active_ ("no billing
   configured" — a pre-redesign assumption), and the paid path never consulted
   manual suspension. Fixed: the signed state is the authority for suspension;
   the date math refines active↔past_due only. The stores rebuild into
@@ -85,7 +85,7 @@ rang up on a **suspended** client's store.
 
 ## 2026-10-02 (evening) — the outlet's login goes out by email, and the store row finally keeps its admin address
 
-Owner: *"go ahead - no forced change in PW"* — the credentials email is a
+Owner: _"go ahead - no forced change in PW"_ — the credentials email is a
 feature, and the tenant confirmed the temp password works until changed (no
 forced first-login reset), which makes the delivery the credential itself.
 
@@ -121,7 +121,7 @@ forced first-login reset), which makes the delivery the credential itself.
 
 ## 2026-10-02 (later) — the full §7 rehearsal sequence ran green end to end
 
-Owner: *"github grant done"*. Job 1 resumed at `head_office_deploy` and, after
+Owner: _"github grant done"_. Job 1 resumed at `head_office_deploy` and, after
 two more truthfully-failed retries, completed all seven steps.
 
 - **The grant worked; the retry proved no-duplicate resumption.** The Head
@@ -151,7 +151,7 @@ two more truthfully-failed retries, completed all seven steps.
 
 ## 2026-10-02 — the rehearsal earned its keep: two payload fixes, one permissions gate
 
-Owner: *"ran the wizard. nothing happening on coolify"* — the first §7 rehearsal
+Owner: _"ran the wizard. nothing happening on coolify"_ — the first §7 rehearsal
 onboarding, which failed truthfully at `head_office_deploy` and surfaced three
 real defects in one run.
 
@@ -185,7 +185,7 @@ real defects in one run.
 
 ## 2026-10-01 (later) — the staging control plane is live
 
-Owner: *"look at .env in ~/apps/optimed-control-plane"* — the Coolify
+Owner: _"look at .env in ~/apps/optimed-control-plane"_ — the Coolify
 credentials, which opened the whole staging build.
 
 - **Stood up entirely through the API.** The five `COOLIFY_*` settings were
@@ -221,7 +221,7 @@ credentials, which opened the whole staging build.
 
 ## 2026-10-01 — cutover prep: the promotion was already on the remote, and the gate holds with the unowned hunk
 
-Owner: *"ok so continue"* then *"carry on"* — proceeding with the repo-side half
+Owner: _"ok so continue"_ then _"carry on"_ — proceeding with the repo-side half
 of the cutover order (everything after it is Coolify/host work).
 
 - **All three branches already carry everything.** `origin/main`,
@@ -252,9 +252,9 @@ of the cutover order (everything after it is Coolify/host work).
 
 ## 2026-09-30 — the optimed comparison, and a Coolify probe
 
-Owner: *"go ahead"* on the CP `dev → main` promotion (done — `origin/main` at
-`d19016f`, fast-forward, 11 commits / 57 files) and *"look at
-~/apps/optimed-control-plane to see coolify integration"*.
+Owner: _"go ahead"_ on the CP `dev → main` promotion (done — `origin/main` at
+`d19016f`, fast-forward, 11 commits / 57 files) and _"look at
+~/apps/optimed-control-plane to see coolify integration"_.
 
 - **Comparison:** optimed's client wraps the whole lifecycle (stop/start/
   restart, domain read/update, delete, probe, manual-onboarding instructions);
@@ -273,9 +273,10 @@ Owner: *"go ahead"* on the CP `dev → main` promotion (done — `origin/main` a
   arguments where it takes one.
 
 ## 2026-09-25 — Pass 4 (continued): the frontend suite exists
+
 ## 2026-09-25 — Pass 4 (continued): the frontend suite exists
 
-Owner: *"go ahead with next task"*. The review's §27 — frontend coverage was
+Owner: _"go ahead with next task"_. The review's §27 — frontend coverage was
 effectively zero.
 
 - **Harness:** `frontend/jest.config.cjs` on jsdom, through the repo's existing
@@ -286,7 +287,7 @@ effectively zero.
   production build never needs Jest's types.
 - **Three suites, 22 tests:** the money formatter (`rand`'s em-dash for a missing
   amount, `toCents` never returning a float, and the price label that says
-  *incl. VAT*); the `api` wrapper (bearer header from the token store, body
+  _incl. VAT_); the `api` wrapper (bearer header from the token store, body
   serialisation, `ApiError` carrying the server's own message); and
   `StoreFormModal` (edit prefill, the credential field that starts empty and
   never echoes a stored token, the payload it emits — untouched fields included —
@@ -301,9 +302,10 @@ effectively zero.
   handled, and those pages are monolithic.
 
 ## 2026-09-25 — Pass 4: the daily billing tick, and nested onboarding payloads
+
 ## 2026-09-25 — Pass 4: the daily billing tick, and nested onboarding payloads
 
-Owner: *"go ahead with next task"*. The review's §19 and §22.
+Owner: _"go ahead with next task"_. The review's §19 and §22.
 
 - **`overdue` finally gets written.** `markOverdueInvoices` flips `pending`
   invoices whose due date has passed — the status had been in the schema, the UI
@@ -330,9 +332,10 @@ Remaining from the review: **frontend test coverage** (§27, needs tooling) and 
 `registryDb.ts` split (§26, deferred to the next schema change).
 
 ## 2026-09-25 — Pass 2 of the production review: the trust boundary
+
 ## 2026-09-25 — Pass 2 of the production review: the trust boundary
 
-Owner: *"push / move on to phase 2"*. The review's §8, §9, §12 and §13 — the
+Owner: _"push / move on to phase 2"_. The review's §8, §9, §12 and §13 — the
 outbound-call and login surfaces.
 
 - **One managed-endpoint policy, everywhere.** `requireBaseUrl` (shape) plus
@@ -342,13 +345,13 @@ outbound-call and login surfaces.
   next licence push would carry the store's token there — that is the hole
   this closes.
 - **Production address policy:** `https` required, and private / loopback /
-  link-local / CGNAT / metadata addresses refused as literals *and* as
+  link-local / CGNAT / metadata addresses refused as literals _and_ as
   resolution results; metadata hostnames and internal suffixes refused. An
   unreachable URL is refused in production too (the token leaves on the first
   push) but still allowed in development, where the fleet is loopback and rows
   precede containers.
 - **Proxy-aware login limiter:** `CP_TRUST_PROXY_HOPS` (default 0 — ignore
-  `X-Forwarded-For` entirely), enforced per address *and* per account, with a
+  `X-Forwarded-For` entirely), enforced per address _and_ per account, with a
   refused request no longer extending the window, and expired buckets swept.
 - **Dev credentials hint** behind `import.meta.env.DEV`, and `npm run build`
   now fails if it survives minification (`scripts/check-dist.mjs`).
@@ -368,7 +371,7 @@ the specific rule named. Live registry untouched.
 
 ## 2026-09-25 — Pass 3 of the production review: client lifecycle
 
-Owner: *"lets go ahead with pass 3"*. Four items, each verified against the
+Owner: _"lets go ahead with pass 3"_. Four items, each verified against the
 review's claim before being fixed:
 
 - **Company delete blocks on financial history** — `companyBlockers` now counts
@@ -400,8 +403,8 @@ remains queued.
 
 ## 2026-09-25 — Pass 1 of the production review: settlement → entitlement
 
-Owner: *"see attached and advise"* on `review-23Sep2026.md`, then *"continue with
-Phase 1"* after "we are only on dev at the moment so testing". Every P0 claim in
+Owner: _"see attached and advise"_ on `review-23Sep2026.md`, then _"continue with
+Phase 1"_ after "we are only on dev at the moment so testing". Every P0 claim in
 the review was verified against the code first; all checked out.
 
 - **Settlement is purpose-gated.** Only `initial`/`renewal` advance
@@ -441,9 +444,10 @@ delivers 1 licence with 0 errors. The live registry itself was untouched.
 Doctrine: CONTEXT §2b (register states) and §5e (settling).
 
 ## 2026-09-17 — the health sweep runs on a timer
+
 ## 2026-09-17 — the health sweep runs on a timer
 
-Owner: *"ok go ahead"* after the recommendation list — the first item (land the tree)
+Owner: _"ok go ahead"_ after the recommendation list — the first item (land the tree)
 is committed, and this is the first piece of item three: making the panel stop
 answering "is the fleet okay" from an old probe.
 
@@ -455,7 +459,7 @@ answering "is the fleet okay" from an old probe.
 - **`services/sweepScheduler.ts`** runs `healthSweep` every
   `HEALTH_SWEEP_INTERVAL_MINUTES` (default 10, `0` = manual only), started from
   `server.ts` next to `listen`. The manual `POST /api/stores/health-sweep` stays.
-- **Two guards, both tested:** a tick is *skipped, not queued*, while a sweep is
+- **Two guards, both tested:** a tick is _skipped, not queued_, while a sweep is
   still in flight (verified by removing the guard — the test then shows three
   overlapping sweeps); and the first sweep is one interval after boot rather than at
   boot, so a restart loop cannot hammer the fleet. A sweep that throws logs and the
@@ -471,7 +475,7 @@ answering "is the fleet okay" from an old probe.
 
 ## 2026-09-17 — a client's stores, in name order
 
-Owner: *"CP - clients - put stores in alphabetical order."*
+Owner: _"CP - clients - put stores in alphabetical order."_
 
 - **Sorted at the source, not in the card.** The chips under each client (and the
   client's Stores tab) come from two places in `routes/clients.ts` that both filtered
@@ -2408,10 +2412,10 @@ instead of queueing behind ten rebuilds.
 
 ## 2026-10-07 — two new demo verticals, a rename, and the deployment plumbing straightened out
 
-Owner brief: *"I want to add more demo store types — Hardware / Pharmacy"*,
-*"so dont need to backup the demo stores"*, *"change the name of the
-Restaurant — myDiner is a real restuarant name"*, later *"HO: make Base URL
-clickable so can navigate to store"* and *"update all docs"*.
+Owner brief: _"I want to add more demo store types — Hardware / Pharmacy"_,
+_"so dont need to backup the demo stores"_, _"change the name of the
+Restaurant — myDiner is a real restuarant name"_, later _"HO: make Base URL
+clickable so can navigate to store"_ and _"update all docs"_.
 
 - **Demo Hardware** (`demo-hardware.vula-app.co.za`) and **Demo Pharmacy**
   (`demo-pharmacy.vula-app.co.za`) are live. Seeded from the dev fleet's
@@ -2454,7 +2458,7 @@ on this host (one to two minutes — sometimes not at all), so the manual
 trigger I use when it goes quiet raced it, and the same commit built twice,
 serially. For two apps released by hand anyway, deterministic beats
 convenient: push, then deploy once (`POST /api/v1/deploy?uuid=…`, or the UI's
-Redeploy). The setting lives on the application's *settings*, not the
+Redeploy). The setting lives on the application's _settings_, not the
 applications row (`is_auto_deploy_enabled` reads NULL on the model; the
 `application_settings` relation holds it). Documented in
 `prompts/deploy-coolify-control-plane.md`; the store apps keep auto-deploy on
@@ -2478,7 +2482,7 @@ nothing.
 Owner question ("HO: IBT should we have warehouse to branch transfer"), then the two
 decisions that shape it: a warehouse **does not consume the plan's store allowance**, and it
 **runs no tills**. The transfer machinery never needed them — a transfer's two ends are
-`stores` rows and the branch-side dispatch works on the *calling* store's own catalogue by SKU
+`stores` rows and the branch-side dispatch works on the _calling_ store's own catalogue by SKU
 (decrement with an oversell refusal) — so the work was the label and its consequences, not the
 movement.
 
@@ -2515,7 +2519,7 @@ The plan catalogue in code had drifted from the catalogue we sell: `SEED_PLANS` 
 every tier at **R500/till and R10 000 once-off**, while the live registry's rows — priced by
 hand on the Plans page — say **R100–R150/till with R3 000–R6 000 setup**. Nothing broke, and
 that is the point of the finding below: `refreshSeedPlanDefaults` only fills plans that are still
-*unpriced*, so a fresh registry would have come up quoting R500/till to a new client while
+_unpriced_, so a fresh registry would have come up quoting R500/till to a new client while
 production says R100–R150.
 
 `SEED_PLANS` now carries the live rates, setup fees and the operator's sort order, with a comment
@@ -2524,13 +2528,13 @@ an existing client's price changes — a live client's price is a snapshot, neve
 
 Repricing the seed moved 20 assertions across five suites (billing, pricing, subscription,
 companies, migration), which is the measure of how deeply the old figures were baked in. Where a
-test is about the *arithmetic* (quantity × rate, the once-off added once) it now derives from the
+test is about the _arithmetic_ (quantity × rate, the once-off added once) it now derives from the
 payload's own `rateCents`/`setupFeeCents`, so the next price change touches one place — the seed —
-instead of five files; where a test pins a *price*, it states the new number with the plan it came
+instead of five files; where a test pins a _price_, it states the new number with the plan it came
 from. 365 tests green, typecheck clean.
 
 **Still to do — the add-on model (owner picked it, one call outstanding).** The approved pricing
-page sells six monthly add-ons, and the product can only *grant*, not *bill*, features: a plan's
+page sells six monthly add-ons, and the product can only _grant_, not _bill_, features: a plan's
 `features_json` is a list with no price, so an invoice has no line for "Head Office R99". Adding
 that means per-feature prices on the plan, the purchased set on the client's subscription, a line
 per add-on on the invoice, and the licence's `features[]` coming from what was bought. The one
@@ -2544,7 +2548,7 @@ pairs into one priced item. Recorded in `tidbits.md`.
 ## 2026-10-10 — the keys are split, and the add-ons can be sold
 
 Owner: **"split the keys"** — the call I asked for. The pricing page sells six monthly add-ons, and
-the product could only *grant* features: a plan's `features_json` was a list with no prices, so an
+the product could only _grant_ features: a plan's `features_json` was a list with no prices, so an
 invoice had no line for "Head Office R99". Two of those six had no entitlement of their own —
 lay-bys were gated on `customer_credit`, and the supplier-invoice importer was gated on **nothing
 at all** (with an AI key configured, anyone had it, while the page sold it at R99).
@@ -2571,7 +2575,7 @@ offers the ones the plan prices but does not already include — selling a clien
 have is not a thing the UI should offer.
 
 **Two things the rehearsal caught, which is why it is run.** The additive pass's `addColumn`
-helper guards on `PRAGMA table_info(stores)` — it is store-specific — so using it for a *plans*
+helper guards on `PRAGMA table_info(stores)` — it is store-specific — so using it for a _plans_
 column silently ALTERed `stores` instead, and the next boot failed with "table plans has no column
 named feature_prices_json". Plans now have their own adder, and any database that ran the bad
 build drops the stray column on boot (the treatment `vat_reg_no` got when it stopped belonging on
@@ -2585,10 +2589,10 @@ all 8 plans end up priced, every credit plan gains `layby`, the two AI plans gai
 `layby`, and `CONTEXT.md` records the vocabulary. CP tests 369 (+4), UI 24, typecheck clean.
 
 **Same day — the plan form was missing its half.** The owner went to create a new plan and found no
-Add-ons block: the price fields existed on the *client's* subscription editor, but a plan could not
+Add-ons block: the price fields existed on the _client's_ subscription editor, but a plan could not
 be given prices through the UI at all, and `POST /api/plans` did not read or store them either
 (`createPlan` had no `feature_prices_json` in its INSERT). A plan's add-on prices could therefore
-only be set by editing an *existing* plan. Fixed on both paths: create now validates and stores
+only be set by editing an _existing_ plan. Fixed on both paths: create now validates and stores
 `featurePrices` (an unknown key is refused by name), and the form has an **Add-ons** section
 listing the six priced features with a price each — hiding any feature the plan already includes,
 because a price on an included feature is a price nobody ever pays. A new plan also now starts from
@@ -2598,8 +2602,8 @@ add-ons), and a plan that prices nothing is legal — it bundles everything it o
 Verified through the UI on the local control plane: created a plan, confirmed the six prices in the
 registry, deleted it again (8 plans, as before). CP 370 tests (+1) and 24 UI, typecheck clean.
 
-**Same day — the office speaks the page's language now.** Owner, looking at the Plans form: *"cp and
-marketing dont match... upload invoice should have ai assisted"*. Two separate faults behind one
+**Same day — the office speaks the page's language now.** Owner, looking at the Plans form: _"cp and
+marketing dont match... upload invoice should have ai assisted"_. Two separate faults behind one
 symptom:
 
 - **The names disagreed.** The CP named the same six features "Customer credit", "Multi-store",
@@ -2608,7 +2612,7 @@ symptom:
   "E-commerce", "AI Copilot", "Inter-branch transfers", "Upload invoice **(AI assisted)**". A
   client reading an invoice saw one name and the office setting the price saw another. The
   vocabulary's labels now ARE the page's words, and `FEATURE_LABELS` (the invoice/quote map) is
-  *derived* from them, so the two can never drift again.
+  _derived_ from them, so the two can never drift again.
 - **The plan form's own feature toggles listed only six keys** — a static `FEATURE_KEYS` in the
   frontend predating `layby` and `invoice_import` — so the office could not mark a plan as
   including either, and the toggles were the last place a hand-maintained vocabulary lived. Both
@@ -2621,23 +2625,23 @@ assisted), and the add-on rows read Head Office · AI Copilot · Upload invoice 
 Credit accounts · Lay-by · E-commerce — the last four words identical to the pricing page. CP 370
 tests + 24 UI green, typecheck clean.
 
-**The same afternoon — three more from the owner's read of the Plans screen.** *"is marketing updated
+**The same afternoon — three more from the owner's read of the Plans screen.** _"is marketing updated
 as well: Upload invoice AI assisted / should CP plan not also show total price / features included in
-plan should be separated and not something to choose."*
+plan should be separated and not something to choose."_
 
 1. **The page now uses the same words as the office** — "Upload invoice (AI assisted)" in the add-on
-   card *and* in the quote builder's toggle (the builder reads its lines from `data-label`, so the
+   card _and_ in the quote builder's toggle (the builder reads its lines from `data-label`, so the
    quote a customer receives says it too). It had said "Upload invoice" with a separate "AI assisted"
    chip, which is the same mismatch the vocabulary change was about, one turned the other way.
 2. **A plan row states its total.** Rate and once-off were there; now the row adds the one total a
    catalogue row can state honestly — the plan at ITS OWN ceiling, since the billable quantity
-   belongs to each client: *"R 150,00 / month at 1 terminal per store · + R 444,00 if every add-on is
-   taken"*. Both figures are arithmetic on the plan's own fields (`PlanTotalLine`).
+   belongs to each client: _"R 150,00 / month at 1 terminal per store · + R 444,00 if every add-on is
+   taken"_. Both figures are arithmetic on the plan's own fields (`PlanTotalLine`).
 3. **Features are a statement, not a picker.** The per-plan toggle list is gone. The form now reads
-   *"Every plan includes Advanced reports · Inter-branch transfers — the product's own capabilities,
-   not a per-plan choice"*, and for a tier that bundles — Vula Start is one — *"This plan also
+   _"Every plan includes Advanced reports · Inter-branch transfers — the product's own capabilities,
+   not a per-plan choice"_, and for a tier that bundles — Vula Start is one — _"This plan also
    includes Credit accounts · E-commerce · Lay-by — its clients have these without buying them, so
-   they are not priced below"*. Nothing is chosen; what a plan SELLS is the Add-ons block. Which keys
+   they are not priced below"_. Nothing is chosen; what a plan SELLS is the Add-ons block. Which keys
    are add-ons now comes from the vocabulary's `soldMonthly` (served by `GET /plans/features`), so the
    frontend's last hand-kept feature list is gone. A new plan is created including the base set and
    pricing the six add-ons at the vocabulary's defaults; **editing a plan never rewrites its features**,
@@ -2647,8 +2651,8 @@ Verified in the running UI: Vula Start's row shows the new total line; its edit 
 included bundles and offers add-ons for the three it does not include; a new plan shows the base set
 and all six add-ons. CP 370 tests + 24 UI green, typecheck clean, marketing rebuilt.
 
-**Evening — the six are chargeable, so no plan may bundle them.** Owner, reading the page: *"but all
-of these are chargeable"* with the six add-on cards. He was right, and the CP was the side that
+**Evening — the six are chargeable, so no plan may bundle them.** Owner, reading the page: _"but all
+of these are chargeable"_ with the six add-on cards. He was right, and the CP was the side that
 disagreed: **every tier bundled three to six of them** (Vula Network all six, Vula Start three), so
 its clients were getting Credit accounts, Lay-by, E-commerce, Head Office, AI Copilot and Upload
 invoice for nothing while the page sells them at R49/R99 a month. Nothing bought a single add-on
@@ -2657,7 +2661,7 @@ invoice for nothing while the page sells them at R49/R99 a month. Nothing bought
 Three changes, and a rule behind them:
 
 - **A plan may not include a chargeable feature.** Refused by name at both plan write paths —
-  *"customer_credit is chargeable — price it as an add-on instead of including it in the plan"* —
+  _"customer_credit is chargeable — price it as an add-on instead of including it in the plan"_ —
   so the office cannot reintroduce a bundle. A plan's `features_json` is the product's base set;
   what it SELLS is `feature_prices_json`.
 - **The existing bundles became PURCHASED add-ons.** The migration moves each plan's bundled
@@ -2669,7 +2673,7 @@ Three changes, and a rule behind them:
   +R98.
 - **Multi-store topology IS the Head Office add-on** — the deep end of this change. The wizard's
   and the upgrade's gate was "does the plan include `multi_store`", which is now "does the plan SELL
-  it", and choosing multi-store **buys** it for the client (at the plan's price, audited) *before*
+  it", and choosing multi-store **buys** it for the client (at the plan's price, audited) _before_
   its stores and Head Office exist, so the licences that follow carry it. A plan that prices nothing
   cannot offer the topology at all.
 
@@ -2681,34 +2685,34 @@ Tests updated to the new model (six assertions across three suites: what a plan 
 licence carries, what a new plan may be created with), plus a test that a chargeable feature cannot
 be bundled and its refusal says so. CP 371 tests (+1) and 24 UI green, typecheck clean, UI rebuilt.
 
-**Same evening — choosing an add-on, and the wizard was missing it.** The owner, testing: *"now i can
-choose an addon?"* and *"i cant choose plgin when creating a new client"*. Two answers, one of them a
+**Same evening — choosing an add-on, and the wizard was missing it.** The owner, testing: _"now i can
+choose an addon?"_ and _"i cant choose plgin when creating a new client"_. Two answers, one of them a
 bug of mine.
 
-- **Where you choose one:** the client, not the plan — *Clients → a client → Edit subscription →
-  Add-ons*, six ticked rows priced from that client's plan. Verified in the UI: HM Spares shows R297
+- **Where you choose one:** the client, not the plan — _Clients → a client → Edit subscription →
+  Add-ons_, six ticked rows priced from that client's plan. Verified in the UI: HM Spares shows R297
   a month with its three migrated add-ons ticked (Credit accounts, Lay-by, E-commerce).
 - **A bug found while checking:** the add-on block had been inserted into the **Edit Client** modal
   instead of the **subscription editor** (my anchor matched the wrong `<select>`), and the Edit
   Client modal never sends `features` — so ticking there looked like it worked and did nothing. Moved
   to the subscription editor, where the state is seeded from the client's add-ons and the save sends
   them.
-- **The wizard now sells add-ons too.** *New Client → step 1* offers the six the chosen plan prices,
+- **The wizard now sells add-ons too.** _New Client → step 1_ offers the six the chosen plan prices,
   and `POST /api/clients` accepts them: bought before any store exists, so the licences that follow
   carry them. A multi-store deployment buys Head Office whether or not it was ticked — the topology
   needs the capability — and the wizard shows that row forced. An add-on the plan does not sell is
-  refused by name *before* the company row is created.
+  refused by name _before_ the company row is created.
 
 CP 373 tests (+2: the onboarding purchase and the refusal) and 24 UI green, typecheck clean, UI
 rebuilt.
 
-**Where the two AI add-ons actually live (owner's question, 2026-10-10):** *"is there AI copilot or
-similar for single stores - not upload invoice / is there upload invoice Ai assisted for HO?"*
+**Where the two AI add-ons actually live (owner's question, 2026-10-10):** _"is there AI copilot or
+similar for single stores - not upload invoice / is there upload invoice Ai assisted for HO?"_
 
 Checked the code rather than assume, and the answer is a useful pair of facts:
 
 - **AI Copilot is a STORE capability, and single stores have it.** It is the store's own assistant —
-  *Dashboard → Ask AI* → `/api/ai/*`, admin-only, gated on `ai_assistant` — answering from that shop's
+  _Dashboard → Ask AI_ → `/api/ai/*`, admin-only, gated on `ai_assistant` — answering from that shop's
   own figures, and it needs no Head Office. It is its own key, separate from the importer, so a client
   can buy the assistant without Upload invoice (the distinction the owner was drawing). One extra
   thing worth knowing: the **same key lights the panel's "Executive Retail AI Copilot"** (the panel
@@ -2733,7 +2737,7 @@ pinned:
 
 - **`invoices.addons_json` was in the DDL and in no column migration.** The invoice writer names the
   column unconditionally, so an existing registry (every real installation, including the live dev
-  one) failed with "no column named addons_json" on its *next* invoice; only fresh test databases had
+  one) failed with "no column named addons_json" on its _next_ invoice; only fresh test databases had
   it, which is why 373 green tests said nothing. `addInvoiceColumn('addons_json', …)` plus three
   migration tests that boot against a **pre-add-on** database shape — including that a document raised
   before the model keeps `NULL` rather than being given invented add-on lines.
@@ -2797,7 +2801,7 @@ and Coolify answers it with a 503 that reads like a dead deployment.
 
 ## 2026-10-10 — Resend, and a form that actually sends
 
-Owner: *"we can use resend as we do for Optimed — I need to set up resend for vula-app"*. So the
+Owner: _"we can use resend as we do for Optimed — I need to set up resend for vula-app"_. So the
 quote request is no longer a `mailto:` that cannot send anything: the site has a form, and the
 control plane sends it through **the same delivery optimed uses** — the office's SMTP mailbox
 when it has one, otherwise Resend's HTTP API, no SDK, `RESEND_API_KEY` + `RESEND_FROM` read at
@@ -2824,7 +2828,7 @@ call time so a sender change needs a restart and never a rebuild.
   own state. The email the office receives leads with those fields — Business, Contact, Email,
   Mobile, Trade — then the quote, and replies go to the visitor. A failed
   post opens the visitor's mail app with the same quote instead, so the worst case is what the
-  old button did. With JavaScript off the form's action *is* that mailto, carrying the default
+  old button did. With JavaScript off the form's action _is_ that mailto, carrying the default
   quote, which is how the page already treats every other figure.
 
 Verified: 9 new endpoint tests (payload to both addresses with `reply_to` the visitor; QUOTE_TO
@@ -2898,7 +2902,7 @@ clean, and the tenant repo's 682/682 + 52/52 re-run as the cross-app gate. Not c
 
 ## The quote desk records (2026-10-13) — P1 backend, uncommitted
 
-Owner: *"ok lets implement invoicing"* — the desk's first phase: the record under the
+Owner: _"ok lets implement invoicing"_ — the desk's first phase: the record under the
 marketing form's request. The endpoint that already emailed the office and the visitor now
 records first and emails second. A transport failure keeps the lead (the row survives with
 `email_error` stamped; the page's 502 → mailto fallback is unchanged), a honeypot fill or a
@@ -2918,7 +2922,7 @@ by name: an unknown add-on, a missing setup choice, Head Office on a single-stor
 The page now posts its add-on keys and setup choice (`ADDON_KEY` maps its toggle shorthand
 to the curated vocabulary) — **deploy the page before the CP**; the old endpoint ignores
 the extra fields, so that order has no window. Reading the payload closely also caught the
-old `tills` cap: the wire carries the *total* across stores, so 3 stores × 20 tills was
+old `tills` cap: the wire carries the _total_ across stores, so 3 stores × 20 tills was
 refused by a bound of 50 — 500 now, with the reason in a comment.
 
 **The desk reads it back.** `routes/quotes.ts` (office-only): `GET /api/quotes` with a
@@ -3046,7 +3050,7 @@ ships in the built UI and is served. Not committed.
 
 ## The line item spells the split out (2026-10-13)
 
-Owner, reading the quotation: *"the till line item must be specific (1 till 3 stores)"*. The
+Owner, reading the quotation: _"the till line item must be specific (1 till 3 stores)"_. The
 priced line said `3 tills (3 × 1)` — terse enough that the desk itself once read it the wrong
 way round. It now reads `3 tills (1 till per store × 3 stores)`, and a single-store quote
 prints no split at all. One source (`priceQuote`) so the desk, the PDF and both emails say the
@@ -3064,8 +3068,8 @@ renders exactly as before, so records priced earlier are untouched until an edit
 re-send re-prices them. The owner asked comparing the quotation to the invoice:
 quantity × rate in the description is this house's document convention.
 
-**And an uneven estate is stateable (same day, the owner's own case).** *"how will quote
-work if 1 store wants 2 till anther 3 and another 1?"* — before this, the forms multiplied
+**And an uneven estate is stateable (same day, the owner's own case).** _"how will quote
+work if 1 store wants 2 till anther 3 and another 1?"_ — before this, the forms multiplied
 evenly, so 3 stores × 2 priced 2/3/1 correctly but the words implied an even split. The
 create/send/edit panels gained an optional "real split" field (`…or the real split — tills
 per store`): typed as a list (`2, 3, 1`) it sets both the store count and the total, the
@@ -3085,3 +3089,178 @@ Tills 3" — which reads as three tills per store if you are thinking per store,
 misreading the line item invited. The tile says "Tills (total)" now, and the list rows
 read "3 stores · 3 tills (1/store) · Assisted set-up", the qualifier the forms already
 use ("= 3 tills total").
+
+## The per-store price, and the add-ons follow it (2026-10-14)
+
+The owner's list — R199 per store (first till included), R99 per additional till, Head Office
+R199 for the business — landed as S1–S5 of the pricing plan, and mid-build the owner amended it
+once more: _"the addons must be charge per store, no? so if three stores - laybuy must be
+charged per store"_. So the five capability add-ons (lay-by, credit accounts, e-commerce, AI
+Copilot, upload invoice) are now charged once per trading store; Head Office stays one charge,
+because there is one panel for the company.
+
+What that took, in order:
+
+- **The plan carries the mode.** `plans.pricing_mode` gained `'per_store'` (the CHECK widening
+  is a guarded table rebuild — the same pattern the stores table uses) and `store_price_cents`.
+  The eight seeded tiers moved to it: 19900 per store, 9900 per additional till. A plan that
+  already carried a rate keeps it; only never-priced tiers pick the catalogue up, so nothing
+  live re-prices by a boot.
+- **One arithmetic.** `calculateRecurringAmount(terms, licensed, stores)` is
+  `stores × storeRate + max(0, licensed − stores) × tillRate` on `per_store`, `tills × rate` on
+  `per_terminal`, and the agreed amount (or null) on `custom`; `quoteForSubscription` and
+  `calculateRecurringSubscriptionAmount` are readers of it. The trading-store count is
+  `countStoresForCompany` — `kind = 'store'` rows only, so a warehouse is never billed.
+- **Grandfathering survives the mode.** The subscription snapshots the agreed per-store rate
+  (`store_rate_cents`) beside the per-till rate, and the client's `addon_prices_json` snapshot
+  keeps covering the add-ons — so a plan edit still re-prices nobody who has agreed terms.
+- **The documents state both facts.** Invoices snapshot `store_count`/`store_price_cents`;
+  `terminal_count` keeps meaning the licensed TOTAL so the additional count is the difference
+  and pro-rata baselines still read from one column. The PDF/email lines read `Stores · 3 ×
+R 199,00` and `Additional tills · 3 × R 99,00`, and a per-store add-on reads `Lay-by · Per
+month · 3 × R 49,00` (older addon snapshots without the pair still render as they did).
+- **Pro-rata follows the formula's own delta**, so a mid-period store-with-its-first-till moves
+  the bill by `199 − 99 = R100`, not by a hand-written rule that could drift. `ProRataCharge`
+  gained `extraStores` and the invoice description and the client card say "1 extra store and
+  2 extra terminals" when that is what happened.
+- **The desk quotes the list**, per store and per additional till, with each add-on multiplied
+  by the stores it covers; the real-split feature answers with `(2 + 3 + 1 across 3 stores)` on
+  the stores line and `(1 + 2 + 0 extra across 3 stores)` on the additional one.
+- **The page follows the desk.** The pricing section was rewritten around the new model and now
+  hydrates from `GET /api/public/pricing` (S5) — the markup's `data-store-cents`/`data-till-cents`
+  are the no-JS default, each add-on button carries `data-per="store"` (or `company` for Head
+  Office), and a failed fetch changes nothing.
+- **The office's own surfaces** (Plans editor, the subscription editor's live preview, the
+  client card's mid-period note) read the store figures too.
+
+Verified on the local fleet: the page's default configuration (3 stores × 2 tills + Head
+Office + credit + e-commerce) renders **R 1 387,00/m**, and `POST /api/quotes` for the same
+configuration records the identical total and the identical lines; the page's request to
+control-plane.localhost:3240/api/public/pricing lands in the browser. CP 455/455 (the pricing,
+subscription, billing, companies, orchestration, quotes, migration and PDF suites all updated
+to the new arithmetic — the old numbers asserted the per-till list), frontend build clean, and
+the marketing page loads with the new section in a real browser. Not committed.
+
+## The same day, two corrections (2026-10-14)
+
+**The additional till is R49.** The owner weighed R99 / R50 / R25 against the list they had
+just set and settled on R49 — "ok lets charge 49" — which is the number that makes the whole
+price list uniform: R199 a store, R99 for the AI tier, R49 for everything else (a till, lay-by,
+credit accounts, e-commerce). Implemented where the list lives: `LIST_TILL_RATE_CENTS`
+(`services/quotePricing.ts`), the eight catalogue tiers' `terminalPriceCents`
+(`SEED_PLANS`), and the page's `data-till-cents` no-JS default. The marketing page needed
+nothing else — it hydrates from `GET /api/public/pricing`, so it followed the desk on its own.
+Verified end to end on the local fleet: the page's default configuration reads **R1 237,00/m**
+(3 stores 597 + 3 additional tills 147 + Head Office 199 + credit 147 + e-commerce 147) and
+`POST /api/quotes` for the same configuration records exactly that. The eight live local plan
+rows were moved to `per_store` 19900/4900 through the API. CP 457/457.
+
+**A migration guard that could not fail, and did nothing.** Moving the plans surfaced a real
+bug, the kind that only a live registry shows: `migratePlansPerStore` widened the
+`pricing_mode` CHECK "unless the DDL already contains per_store" — and **the column
+`max_terminals_per_store` contains that substring**, so the guard was true on every registry
+that already had the modern plans table. The rebuild never ran, the CHECK stayed at
+`('per_terminal', 'custom')`, and the office's attempt to move a plan to the per-store model
+failed with `SQLITE_CONSTRAINT_CHECK`. A fresh database never sees it (its DDL starts widened)
+and the older fixtures in `migration.test.ts` had their plans table rebuilt by
+`restructurePlans` before this migration ever ran — which is exactly why 455 green tests did not
+catch it. Fixed by reading the CHECK itself (`/pricing_mode\s+IN\s*\(([^)]*)\)/`) instead of
+searching the DDL for a word, and pinned by a new fixture shaped like the live registry (current
+table, old two-mode CHECK) asserting both that the widened CHECK accepts `per_store` and that
+the rebuild keeps every row's id and rates. The lesson generalises: **a guard that reads a
+schema by substring can be satisfied by a name elsewhere in the same text** — read the
+constraint, not the document. Had this shipped, staging and production would have refused the
+per-store mode silently, on the databases that matter.
+
+**The self setup price is R1 500, and the plan says so (2026-10-14).** The office asked why the
+new-client form offered "Self — R3 000" beside "Assisted — R5 000": the answer was that the two
+buttons came from different places — assisted is a fixed R5 000 (a service the office performs,
+stored on the client's subscription when chosen), while self rendered **the selected plan's own
+`setup_fee_cents`**, and the catalogue's tiers carried R3 000 (R5 000 on Vula Network, R6 000 on
+the three larger ones). Meanwhile the marketing page and the desk's list have always advertised
+self at R1 500, so a client onboarded from a quote paid R1 500 and one onboarded straight onto a
+plan paid R3 000 — two prices for one thing. The owner settled it: **self is R1 500**. All eight
+seeded tiers now carry 150_000, the live local plans were moved to match (their own
+`vula-standard` plan already sat there), and the page and desk needed nothing — they were right.
+
+Found while fixing it: on the three R6 000 tiers the form's note computed `assisted − plan` and
+would have read **"assisted adds −R 1 000,00"**. The note now states a difference only when
+there is one, says so plainly when the plan charges the same either way, and warns the operator
+when a plan's self figure is ABOVE the assisted price ("check the plan") instead of printing a
+negative. The assisted figure itself moved to one constant (`frontend/src/lib/money.ts`) so the
+onboarding form and the subscription editor cannot drift apart again.
+
+Also found by opening the form: the plan dropdown read **"custom pricing"** for every catalogue
+tier — the label only knew `per_terminal` and fell through to `custom` for the new mode. It now
+reads `perStoreLabel`, e.g. "Vula Grow — R 199,00 / store / month (first till included) + R 49,00
+per extra till" (both in the onboarding form and in the subscription editor's plan picker).
+
+Verified in the browser on the local control plane: the form offers Self R 1 500,00 / Assisted
+R 5 000,00 with the note "…assisted adds R 3 500,00 for the client", and the plan list states the
+per-store pair. CP 457/457, frontend build clean.
+
+## The onboarding pair gets one home (2026-10-14)
+
+Asked whether the Plans editor's single "Onboarding (R)" field was right, the answer was "yes in
+shape, no in labelling and no in plumbing": the plan carries one figure (its self-setup default)
+while the assisted price lived as a constant in three places — the CP form, the desk's list and
+the page's markup — so changing it meant a deploy, and only a deploy could keep them in step.
+Done in one pass:
+
+- **Office Settings gained the pair** (`setup_fee_self_cents` 150 000, `setup_fee_assisted_cents`
+  500 000 — additive columns on the singleton, seeded with the published figures), exposed on
+  `GET /api/settings` and editable from the Settings page. `priceQuote` now takes the fees
+  (`officeSetupFees()`, the constants only as a fallback), and `GET /api/public/pricing` serves
+  the same pair — so the desk, the onboarding form, the subscription editor and the marketing
+  page all read one place. Changing the assisted price to R6 000 in Settings and reloading the
+  page moves the cards and the builder button to R 6 000,00 — verified in the browser.
+- **The plan's field is the per-tier override**: relabelled "Onboarding — self setup (R)" with a
+  hint naming the assisted figure and where to change it, placeholder fixed off the stale
+  `10000.00`, and a plan created without a figure now starts from the office's self price instead
+  of a silent R0 (`resolvePlanPricing` returns undefined rather than 0 on a create). A deliberate
+  0 still means "this tier waives onboarding".
+- **The page hydrates the pair too** (cards and builder buttons), so the site follows Settings.
+
+**And a browser-only bug the whole suite was blind to.** The page's hydration still showed the
+old figures after the change: `GET /api/public/pricing` was registered ABOVE the router's CORS
+middleware, and Express answers whatever matches first — so the route replied without
+`Access-Control-Allow-Origin`, the browser refused to read the response, and the page silently
+kept its static defaults. `curl` never shows this (no Origin header, no CORS needed) and neither
+did the tests; only opening the page did. The route now sits below the middleware with a comment
+saying why, and two tests pin it: the response must carry the site's origin, and the figures must
+come from Office Settings. CP 461/461.
+
+The generalisable lesson, alongside the substring-guard one: **middleware that a route's consumers
+depend on must be registered before every route in its router**, and a failure the browser hides
+(`.catch(() => undefined)`) needs a test that asserts the header, not just the body.
+
+**E-commerce moves to the per-company side (2026-10-14).** The owner, looking at the page:
+_"ecommerce should be for the whole business and not per store..."_ — and it should: the bridge is
+ONE storefront connection (WooCommerce/Shopify) for the business, and a second branch does not
+open a second online shop, so per-store billing charged the same integration again for every
+branch. The per-company set is now explicit rather than a special case for Head Office:
+`PER_COMPANY_FEATURE_KEYS = ['multi_store', 'ecommerce_bridges']` in `services/features.ts`,
+applied by the one helper every reader shares (`addonQuantity`), served to the page as
+`perStore: false` on `/api/public/pricing`, and mirrored in the CP frontend's `addonLinesFor`
+(`PER_COMPANY_ADDONS`). The marketing page's e-commerce button is `data-per="company"` and its
+card reads "/ month, for the business", with the no-JS default recomputed: the page's own default
+configuration (3 stores × 2 tills, Head Office, credit accounts, e-commerce) is now
+**R1 139,00/m** — 597 + 147 + 199 + 147 + 49 — and `POST /api/quotes` for the same configuration
+records exactly that, with the e-commerce line stated as ×1 and credit accounts as ×3.
+
+The rule as it now stands: **R199 per trading store (first till included), R49 per extra till,
+R199 Head Office and R49 e-commerce once per business, and R49/R99 per store for the four
+per-store capabilities** (credit accounts, lay-by, the assistant, the invoice importer). Pinned by
+a new pricing test (the per-company lines stay ×1 on a three-store quote while lay-by multiplies)
+and by the public-list test asserting `perStore: false` for e-commerce. CP 462/462.
+
+**Production SMTP is Zoho (owner, 2026-10-14).** Recorded so the earlier finding does not have to
+be rediscovered: the CP sends its invoices and quotations over SMTP, and production will use the
+Zoho mailbox that owns `billing@vula-app.co.za`. The trap that made this necessary is already in
+the Settings page's own copy — a provider accepts a From it does not own and then drops the mail
+silently, which is how the Gmail attempt looked successful and delivered nothing. The host field
+now names Zoho's settings outright (`smtp.zoho.com:587`, or the account's region, with an
+app-specific password when 2FA is on) beside the existing From-ownership warning, so configuring
+it is a copy of two values rather than a search. What remains is the owner's action: set the host,
+username, app password and From on the production control plane, then use "Send a test email to"
+— which is the only check that proves delivery rather than acceptance.

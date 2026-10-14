@@ -47,8 +47,22 @@ beforeEach(() => {
         generatedAt: new Date().toISOString(),
         sync: { lastSyncAt: new Date().toISOString(), pendingEvents: 0, failedEvents: 0 },
         terminals: [
-          { till: 1, name: 'Till 1', claimed: true, deviceId: 'dev-a', sessionOpen: true, lastSeenAt: new Date().toISOString() },
-          { till: 2, name: 'Till 2', claimed: true, deviceId: 'dev-b', sessionOpen: false, lastSeenAt: new Date().toISOString() },
+          {
+            till: 1,
+            name: 'Till 1',
+            claimed: true,
+            deviceId: 'dev-a',
+            sessionOpen: true,
+            lastSeenAt: new Date().toISOString(),
+          },
+          {
+            till: 2,
+            name: 'Till 2',
+            claimed: true,
+            deviceId: 'dev-b',
+            sessionOpen: false,
+            lastSeenAt: new Date().toISOString(),
+          },
         ],
       });
     }
@@ -133,12 +147,16 @@ const decodedLicenceClaims = (): {
 describe('a client purchases terminal licences', () => {
   it('allocates the terminals a store is created with, and reports licensed vs allocated', async () => {
     const company = await makeCompany({ licensedTerminalCount: 9 });
-    const cape = await makeStore({ slug: 'cape-town', terminalCount: 3, companyId: company.id }).then(
-      (r) => r.body.store as { id: number; licensedTerminalCount: number },
-    );
-    const durban = await makeStore({ slug: 'durban', terminalCount: 2, companyId: company.id }).then(
-      (r) => r.body.store as { id: number; licensedTerminalCount: number },
-    );
+    const cape = await makeStore({
+      slug: 'cape-town',
+      terminalCount: 3,
+      companyId: company.id,
+    }).then((r) => r.body.store as { id: number; licensedTerminalCount: number });
+    const durban = await makeStore({
+      slug: 'durban',
+      terminalCount: 2,
+      companyId: company.id,
+    }).then((r) => r.body.store as { id: number; licensedTerminalCount: number });
     expect(cape.licensedTerminalCount).toBe(3);
     expect(durban.licensedTerminalCount).toBe(2);
 
@@ -146,16 +164,19 @@ describe('a client purchases terminal licences', () => {
     expect(detail.body.subscription.licensedTerminalCount).toBe(9);
     expect(detail.body.subscription.allocatedTerminals).toBe(5);
     expect(detail.body.subscription.unallocatedTerminals).toBe(4);
-    expect(detail.body.subscription.rateCents).toBe(10_000); // R100 (vula-network)
-    expect(detail.body.subscription.recurringAmountCents).toBe(
-      9 * detail.body.subscription.rateCents,
-    );
+    expect(detail.body.subscription.rateCents).toBe(4_900); // the additional-till rate (vula-network)
+    expect(detail.body.subscription.storeRateCents).toBe(19_900);
+    // Two trading stores (each one's first till included in its rate) + 7
+    // additional tills — the store count, not the allocation, drives it.
+    expect(detail.body.subscription.recurringAmountCents).toBe(2 * 19_900 + 7 * 4_900);
     // The allocation list names the stores, so the office can see 3 / 2 / 4.
     const bySlug = new Map(
-      (detail.body.subscription.allocations as Array<{
-        storeSlug: string;
-        licensedTerminalCount: number;
-      }>).map((a) => [a.storeSlug, a.licensedTerminalCount]),
+      (
+        detail.body.subscription.allocations as Array<{
+          storeSlug: string;
+          licensedTerminalCount: number;
+        }>
+      ).map((a) => [a.storeSlug, a.licensedTerminalCount]),
     );
     expect(bySlug.get('cape-town')).toBe(3);
     expect(bySlug.get('durban')).toBe(2);
@@ -185,12 +206,16 @@ describe('a client purchases terminal licences', () => {
 
   it('lets the office reallocate between branches, and refuses a total it did not buy', async () => {
     const company = await makeCompany({ licensedTerminalCount: 6 });
-    const cape = await makeStore({ slug: 'cape-town', terminalCount: 3, companyId: company.id }).then(
-      (r) => r.body.store as { id: number },
-    );
-    const durban = await makeStore({ slug: 'durban', terminalCount: 2, companyId: company.id }).then(
-      (r) => r.body.store as { id: number },
-    );
+    const cape = await makeStore({
+      slug: 'cape-town',
+      terminalCount: 3,
+      companyId: company.id,
+    }).then((r) => r.body.store as { id: number });
+    const durban = await makeStore({
+      slug: 'durban',
+      terminalCount: 2,
+      companyId: company.id,
+    }).then((r) => r.body.store as { id: number });
 
     // Cape Town gives one to Durban: 2 / 3, still 5 of 6 allocated.
     const ok = await request(app)
@@ -235,12 +260,16 @@ describe('a client purchases terminal licences', () => {
     // and they sit 3/3/5. The server applies the quantity BEFORE the
     // allocations, so 11 may be distributed in the same request that raises it.
     const company = await makeCompany({ licensedTerminalCount: 9 });
-    const cape = await makeStore({ slug: 'cape-town', terminalCount: 3, companyId: company.id }).then(
-      (r) => r.body.store as { id: number },
-    );
-    const durban = await makeStore({ slug: 'durban', terminalCount: 3, companyId: company.id }).then(
-      (r) => r.body.store as { id: number },
-    );
+    const cape = await makeStore({
+      slug: 'cape-town',
+      terminalCount: 3,
+      companyId: company.id,
+    }).then((r) => r.body.store as { id: number });
+    const durban = await makeStore({
+      slug: 'durban',
+      terminalCount: 3,
+      companyId: company.id,
+    }).then((r) => r.body.store as { id: number });
     const jhb = await makeStore({ slug: 'jhb', terminalCount: 3, companyId: company.id }).then(
       (r) => r.body.store as { id: number },
     );
@@ -259,9 +288,12 @@ describe('a client purchases terminal licences', () => {
       .expect(200);
     expect(res.body.licensedTerminalCount).toBe(11);
     expect(res.body.allocatedTerminals).toBe(11);
-    // The fee follows the raised quantity: 11 × the agreed rate.
+    // The fee follows the raised quantity: three stores (first till each
+    // included) + 8 additional tills at the agreed rates.
     const detail = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
-    expect(res.body.recurringAmountCents).toBe(11 * detail.body.subscription.rateCents);
+    expect(res.body.recurringAmountCents).toBe(
+      3 * detail.body.subscription.storeRateCents + 8 * detail.body.subscription.rateCents,
+    );
 
     // The distribution landed: 3 / 3 / 5 across the branches.
     const bySlug = new Map(
@@ -344,12 +376,15 @@ describe('a client purchases terminal licences', () => {
 describe('the fee follows the purchased quantity, not device state', () => {
   it('does not move when the store is configured for a different number of tills', async () => {
     const company = await makeCompany({ licensedTerminalCount: 9 });
-    const store = await makeStore({ slug: 'cape-town', terminalCount: 3, companyId: company.id }).then(
-      (r) => r.body.store as { id: number },
-    );
+    const store = await makeStore({
+      slug: 'cape-town',
+      terminalCount: 3,
+      companyId: company.id,
+    }).then((r) => r.body.store as { id: number });
     const before = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+    // One trading store (its first till included) + 8 additional tills.
     expect(before.body.subscription.recurringAmountCents).toBe(
-      9 * before.body.subscription.rateCents,
+      before.body.subscription.storeRateCents + 8 * before.body.subscription.rateCents,
     );
 
     // One fewer configured till — a service change, not a commercial one.
@@ -361,16 +396,18 @@ describe('the fee follows the purchased quantity, not device state', () => {
 
     const after = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
     expect(after.body.subscription.recurringAmountCents).toBe(
-      9 * after.body.subscription.rateCents,
+      before.body.subscription.recurringAmountCents,
     );
     expect(after.body.subscription.licensedTerminalCount).toBe(9);
   });
 
   it('does not move when devices are claimed and tills are opened', async () => {
     const company = await makeCompany({ licensedTerminalCount: 3 });
-    const store = await makeStore({ slug: 'cape-town', terminalCount: 3, companyId: company.id }).then(
-      (r) => r.body.store as { id: number },
-    );
+    const store = await makeStore({
+      slug: 'cape-town',
+      terminalCount: 3,
+      companyId: company.id,
+    }).then((r) => r.body.store as { id: number });
     // The telemetry mock reports two claimed devices and one open till.
     const health = await request(app)
       .post(`/api/stores/${store.id}/health`)
@@ -383,23 +420,30 @@ describe('the fee follows the purchased quantity, not device state', () => {
     expect(storeOut.body.telemetry.terminals.open).toBeGreaterThanOrEqual(1);
 
     const client = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+    // One trading store (first till included) + 2 additional tills — unchanged by
+    // the claimed devices and the open till.
     expect(client.body.subscription.recurringAmountCents).toBe(
-      3 * client.body.subscription.rateCents,
+      client.body.subscription.storeRateCents + 2 * client.body.subscription.rateCents,
     );
     expect(client.body.subscription.licenceQuantitySource).toBeUndefined();
   });
 
   it('re-pushes licences with a new allowance when the purchased quantity changes', async () => {
     const company = await makeCompany({ licensedTerminalCount: 3 });
-    const store = await makeStore({ slug: 'cape-town', terminalCount: 3, companyId: company.id }).then(
-      (r) => r.body.store as { id: number },
-    );
+    const store = await makeStore({
+      slug: 'cape-town',
+      terminalCount: 3,
+      companyId: company.id,
+    }).then((r) => r.body.store as { id: number });
     expect(decodedLicenceClaims().maxTerminals).toBe(3);
 
     await request(app)
       .put(`/api/clients/${company.id}`)
       .set(auth())
-      .send({ licensedTerminalCount: 5, allocations: [{ storeId: store.id, licensedTerminalCount: 5 }] })
+      .send({
+        licensedTerminalCount: 5,
+        allocations: [{ storeId: store.id, licensedTerminalCount: 5 }],
+      })
       .expect(200);
 
     // The store now holds a licence that permits five terminals.
@@ -421,9 +465,11 @@ describe('the fee follows the purchased quantity, not device state', () => {
 describe('single store to multi-store upgrade keeps the subscription coherent', () => {
   it('adds the new branch to the purchased total without touching the original store', async () => {
     const company = await makeCompany({ licensedTerminalCount: 3 });
-    const cape = await makeStore({ slug: 'cape-town', terminalCount: 3, companyId: company.id }).then(
-      (r) => r.body.store as { id: number; baseUrl: string },
-    );
+    const cape = await makeStore({
+      slug: 'cape-town',
+      terminalCount: 3,
+      companyId: company.id,
+    }).then((r) => r.body.store as { id: number; baseUrl: string });
 
     // Add a branch: the client buys 2 more licences (3 + 2 = 5).
     const res = await request(app)

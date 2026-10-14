@@ -64,12 +64,66 @@ describe('proRataForIncrease', () => {
     // 2 extra terminals × R500 × 15/30 days = R500.
     expect(charge).toEqual({
       extraTerminals: 2,
+      extraStores: 0,
       amountCents: 50_000,
       daysRemaining: 15,
       periodDays: PERIOD_DAYS.monthly,
       from: '2026-09-15',
       to: '2026-09-30',
     });
+  });
+
+  it('pro-rates a per-store increase as the formula’s own delta (2026-10-14)', () => {
+    // A store added with its first till costs the net R199 − R49 = R150 when that
+    // till was already billed as an additional one: before 3 stores + 4 extra
+    // tills (7 licensed) = 3×R199 + 4×R49 = R793; after 4 stores + 3 extra = R943.
+    const charge = proRataForIncrease({
+      pricingMode: 'per_store',
+      storeRateCents: 19_900,
+      rateCents: 4_900,
+      licensedTerminalCount: 7,
+      tradingStoreCount: 4,
+      paidTerminalCount: 7,
+      paidStoreCount: 3,
+      paidThrough: '2026-09-30',
+      billingPeriod: 'monthly',
+      today,
+    })!;
+    expect(charge).toMatchObject({ extraStores: 1, extraTerminals: 0, daysRemaining: 15 });
+    // R150 × 15/30 = R75.
+    expect(charge.amountCents).toBe(7_500);
+
+    // The same client just buying an extra till still moves by the till rate.
+    const till = proRataForIncrease({
+      pricingMode: 'per_store',
+      storeRateCents: 19_900,
+      rateCents: 4_900,
+      licensedTerminalCount: 8,
+      tradingStoreCount: 4,
+      paidTerminalCount: 7,
+      paidStoreCount: 4,
+      paidThrough: '2026-09-30',
+      billingPeriod: 'monthly',
+      today,
+    })!;
+    expect(till).toMatchObject({ extraStores: 0, extraTerminals: 1, daysRemaining: 15 });
+    expect(till.amountCents).toBe(Math.round((4_900 * 15) / 30));
+
+    // A reduction is still never credited.
+    expect(
+      proRataForIncrease({
+        pricingMode: 'per_store',
+        storeRateCents: 19_900,
+        rateCents: 4_900,
+        licensedTerminalCount: 6,
+        tradingStoreCount: 3,
+        paidTerminalCount: 7,
+        paidStoreCount: 3,
+        paidThrough: '2026-09-30',
+        billingPeriod: 'monthly',
+        today,
+      }),
+    ).toBeNull();
   });
 
   it('has nothing to charge when the quantity did not grow', () => {
@@ -124,8 +178,9 @@ describe('mid-period increases', () => {
       .set(auth())
       .send({ companyId: client.id, purpose: 'initial', includeOnboarding: false })
       .expect(201);
-    // 8 licensed terminals × R120 = R960 (the seeded vula-grow rate).
-    expect(invoice.body.amountCents).toBe(96_000);
+    // 8 licensed terminals, no trading stores: the per-store catalogue prices
+    // every till at the additional-till rate, 8 × R49 = R392 (2026-10-14).
+    expect(invoice.body.amountCents).toBe(39_200);
     await request(app)
       .post(`/api/billing/invoices/${invoice.body.id}/pay`)
       .set(auth())
@@ -224,7 +279,7 @@ describe('the price a client agreed', () => {
   it('is recorded at onboarding, and a plan edit no longer re-prices them', async () => {
     const planId = await planIdByCode('vula-grow');
     const client = await makeClient({ licensedTerminalCount: 8 });
-    expect(client.subscription.recurringAmountCents).toBe(8 * 12_000); // 8 × R120 (vula-grow)
+    expect(client.subscription.recurringAmountCents).toBe(8 * 4_900); // 8 tills, no stores — the seeded rate
 
     const detail = await request(app).get(`/api/clients/${client.id}`).set(auth()).expect(200);
     expect(detail.body.subscription.pricingSource).toBe('agreed');
@@ -239,8 +294,8 @@ describe('the price a client agreed', () => {
       .expect(200);
 
     const after = await request(app).get(`/api/clients/${client.id}`).set(auth()).expect(200);
-    expect(after.body.subscription.rateCents).toBe(12_000); // what they agreed at onboarding
-    expect(after.body.subscription.recurringAmountCents).toBe(8 * 12_000);
+    expect(after.body.subscription.rateCents).toBe(4_900); // what they agreed at onboarding
+    expect(after.body.subscription.recurringAmountCents).toBe(8 * 4_900);
 
     // A client onboarded after the change pays the new rate.
     const fresh = await makeClient({ name: 'Fresh Co', slug: 'fresh-co' });
@@ -262,7 +317,7 @@ describe('the price a client agreed', () => {
       .send({})
       .expect(200);
     expect(repriced.body.rateCents).toBe(60_000);
-    expect(repriced.body.previousRecurringAmountCents).toBe(96_000); // 8 × R120
+    expect(repriced.body.previousRecurringAmountCents).toBe(39_200); // 8 tills × R49, the agreed rate
     expect(repriced.body.recurringAmountCents).toBe(480_000);
 
     const entry = (await import('../config/registryDb.js'))
@@ -286,7 +341,7 @@ describe('the price a client agreed', () => {
     expect(detail.body.subscription.planId).toBe(otherPlanId);
     expect(detail.body.subscription.pricingSource).toBe('agreed');
     // Vula Network's rate, not the old plan's.
-    expect(detail.body.subscription.rateCents).toBe(10_000);
+    expect(detail.body.subscription.rateCents).toBe(4_900);
   });
 
   it('says so when a client has no agreed price, rather than implying one', async () => {

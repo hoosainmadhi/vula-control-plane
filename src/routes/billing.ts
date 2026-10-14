@@ -47,8 +47,13 @@ export interface InvoiceOut {
   amountCents: number;
   /** Licensed terminals on the recurring line; null on a manually-priced invoice. */
   terminalCount: number | null;
-  /** The per-terminal rate when the invoice was raised (a snapshot). */
+  /** The per-terminal rate when the invoice was raised (a snapshot). On a
+   *  per-store invoice: the ADDITIONAL-till rate. */
   terminalPriceCents: number | null;
+  /** Trading stores on a per_store recurring line; null on other invoices. */
+  storeCount: number | null;
+  /** The per-store rate when the invoice was raised (a snapshot). */
+  storePriceCents: number | null;
   /** Once-off onboarding charge when this invoice carried it. */
   setupFeeCents: number | null;
   /** What the charge is for — required on a hand-priced invoice. */
@@ -95,6 +100,8 @@ const invoiceToOut = (inv: InvoiceRecord): InvoiceOut => {
     amountCents: inv.amount_cents,
     terminalCount: inv.terminal_count ?? null,
     terminalPriceCents: inv.terminal_price_cents ?? null,
+    storeCount: inv.store_count ?? null,
+    storePriceCents: inv.store_price_cents ?? null,
     setupFeeCents: inv.setup_fee_cents ?? null,
     description: inv.description,
     purpose: inv.purpose,

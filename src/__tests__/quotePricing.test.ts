@@ -14,27 +14,36 @@ const base: QuoteConfig = {
 };
 
 describe('quote pricing', () => {
-  it("prices tills and add-ons from the list, in the vocabulary's order", () => {
+  it("prices the stores and their additional tills plus the add-ons, in the vocabulary's order", () => {
     const priced = priceQuote(base, 15);
     expect(priced.lines).toEqual([
       {
-        label: '6 tills',
-        detail: '(2 tills per store × 3 stores)',
-        cents: 59400,
-        rateCents: 9900,
-        quantity: 6,
+        label: '3 stores',
+        detail: 'first till included · (2 tills per store)',
+        cents: 59700,
+        rateCents: 19_900,
+        quantity: 3,
       },
-      { label: 'Head Office', detail: '', cents: 9900 },
-      { label: 'Credit accounts', detail: '', cents: 4900 },
+      {
+        label: '3 additional tills',
+        detail: '',
+        cents: 14700,
+        rateCents: 4_900,
+        quantity: 3,
+      },
+      // The add-ons are per-store capabilities: three stores' worth of credit
+      // accounts. Head Office is the one per-company add-on — one panel.
+      { label: 'Head Office', detail: '', cents: 19_900, rateCents: 19_900, quantity: 1 },
+      { label: 'Credit accounts', detail: '', cents: 14_700, rateCents: 4900, quantity: 3 },
     ]);
-    expect(priced.monthlyTotalCents).toBe(74200);
+    expect(priced.monthlyTotalCents).toBe(109_000);
     expect(priced.setupCents).toBe(SETUP_FEE_CENTS.assisted);
   });
 
   it('breaks the VAT out of the inclusive figures without losing a cent', () => {
     const priced = priceQuote(base, 15);
-    expect(priced.monthlyTotalCents - priced.monthlyVatCents).toBe(64522);
-    expect(priced.monthlyVatCents).toBe(9678);
+    expect(priced.monthlyTotalCents - priced.monthlyVatCents).toBe(94_783);
+    expect(priced.monthlyVatCents).toBe(14_217);
     expect(priced.setupVatCents).toBe(65217);
     expect(priced.setupCents - priced.setupVatCents).toBe(434783);
   });
@@ -56,26 +65,61 @@ describe('quote pricing', () => {
     expect(priced.lines.filter((line) => line.label === 'Lay-by')).toHaveLength(1);
   });
 
-  it('falls back to the store count when the tills do not divide evenly', () => {
+  it('charges the per-company add-ons once, however many stores there are (2026-10-14)', () => {
+    // Head Office and the e-commerce bridges are one thing for the business; the
+    // rest are per-store capabilities. Owner: "ecommerce should be for the whole
+    // business and not per store".
+    const priced = priceQuote(
+      { stores: 3, tills: 3, addons: ['multi_store', 'layby', 'ecommerce_bridges'], setup: 'self' },
+      15,
+    );
+    const line = (label: string) => priced.lines.find((l) => l.label === label)!;
+    expect(line('Head Office')).toMatchObject({ cents: 19_900, rateCents: 19_900, quantity: 1 });
+    expect(line('E-commerce')).toMatchObject({ cents: 4900, rateCents: 4900, quantity: 1 });
+    // A per-store capability on the same quote still multiplies.
+    expect(line('Lay-by')).toMatchObject({ cents: 14_700, rateCents: 4900, quantity: 3 });
+    // Three stores (first till in each) + the two per-company add-ons + 3 × lay-by.
+    expect(priced.monthlyTotalCents).toBe(3 * 19_900 + 19_900 + 4900 + 3 * 4900);
+  });
+
+  it('keeps the stores line plain when the tills do not divide evenly', () => {
+    // 7 tills across 3 stores: no per-store claim to make — the stores line says
+    // what it is, and the 4 tills beyond the included first ones price as
+    // additional ones.
     const priced = priceQuote({ stores: 3, tills: 7, addons: [], setup: 'self' }, 15);
     expect(priced.lines[0]).toEqual({
-      label: '7 tills',
-      detail: '(across 3 stores)',
-      cents: 69300,
-      rateCents: 9900,
-      quantity: 7,
+      label: '3 stores',
+      detail: 'first till included',
+      cents: 59700,
+      rateCents: 19_900,
+      quantity: 3,
     });
+    expect(priced.lines[1]).toEqual({
+      label: '4 additional tills',
+      detail: '',
+      cents: 19600,
+      rateCents: 4_900,
+      quantity: 4,
+    });
+    expect(priced.monthlyTotalCents).toBe(79_300);
     expect(priced.setupCents).toBe(SETUP_FEE_CENTS.self);
   });
 
   it('leaves the split off a single-store quote — there is nothing to split', () => {
     const priced = priceQuote({ stores: 1, tills: 2, addons: [], setup: 'self' }, 15);
     expect(priced.lines[0]).toEqual({
-      label: '2 tills',
+      label: '1 store',
+      detail: 'first till included',
+      cents: 19_900,
+      rateCents: 19_900,
+      quantity: 1,
+    });
+    expect(priced.lines[1]).toEqual({
+      label: '1 additional till',
       detail: '',
-      cents: 19800,
-      rateCents: 9900,
-      quantity: 2,
+      cents: 4_900,
+      rateCents: 4_900,
+      quantity: 1,
     });
   });
 
@@ -87,14 +131,22 @@ describe('quote pricing', () => {
       15,
     );
     expect(priced.lines[0]).toEqual({
-      label: '6 tills',
-      detail: '(2 + 3 + 1 across 3 stores)',
-      cents: 59400,
-      rateCents: 9900,
-      quantity: 6,
+      label: '3 stores',
+      detail: 'first till included · (2 + 3 + 1 across 3 stores)',
+      cents: 59700,
+      rateCents: 19_900,
+      quantity: 3,
       split: [2, 3, 1],
     });
-    expect(priced.monthlyTotalCents).toBe(59400);
+    // The tills beyond each store's included first one, store by store.
+    expect(priced.lines[1]).toEqual({
+      label: '3 additional tills',
+      detail: '(1 + 2 + 0 extra across 3 stores)',
+      cents: 14700,
+      rateCents: 4_900,
+      quantity: 3,
+    });
+    expect(priced.monthlyTotalCents).toBe(74_400);
   });
 });
 

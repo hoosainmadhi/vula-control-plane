@@ -50,9 +50,9 @@ audit (`layby` on its own key) was verified already done in `za-pos`.
       table, the suspension rule), §2a (the seeded catalogue still read as the retired
       four tiers at R500) and §5 (the add-on model, `company_subscriptions`, `invoices`).
 - Verification: control plane typecheck + `npm run build` clean, backend **405/405 across
-      33 suites**, frontend **28/28**; the tenant `za-pos` store+Head Office suites
-      **682/682** and its vitest **52/52** (unchanged tree, re-run as the cross-app gate).
-      Not committed.
+  33 suites**, frontend **28/28**; the tenant `za-pos` store+Head Office suites
+  **682/682** and its vitest **52/52** (unchanged tree, re-run as the cross-app gate).
+  Not committed.
 
 ## Phase: launch hardening — the 10 October review (2026-10-10 → 10-11) — complete, uncommitted
 
@@ -140,7 +140,7 @@ Rolling with the deployment:
   new demo verticals ship through the same onboarding path real clients will.
 
 Previous — **Pass 4 of the production review — operations (2026-09-25, complete).** Owner:
-*"go ahead with next task"*. `markOverdueInvoices` gives the `overdue` status its
+_"go ahead with next task"_. `markOverdueInvoices` gives the `overdue` status its
 first writer; a daily billing tick (`BILLING_TICK_INTERVAL_MINUTES`, 0 disables)
 marks lapsed invoices and runs the renewal sweep, never settling anything; the
 two scheduled jobs share one implementation of the guards
@@ -167,7 +167,7 @@ change).
 
 Previous — **Pass 2 of the production review — the trust boundary (2026-09-25,
 complete).**
-Owner: *"push / move on to phase 2"*. One managed-endpoint policy
+Owner: _"push / move on to phase 2"_. One managed-endpoint policy
 (`requireBaseUrl` + `assertManagedEndpoint`) now backs store create, store edit,
 Head Office create and Head Office edit — the two edit routes previously changed
 a base URL with no probe, so a row could be repointed and the next licence push
@@ -175,7 +175,7 @@ would send that store's token to the new host. Production refuses plaintext,
 private/loopback/link-local/CGNAT/metadata addresses (literal and resolved) and
 unreachable hosts; development keeps allowing loopback and unreachable rows, as
 the fleet requires. The login limiter is proxy-aware
-(`CP_TRUST_PROXY_HOPS`, default 0), enforced per address *and* per account, and
+(`CP_TRUST_PROXY_HOPS`, default 0), enforced per address _and_ per account, and
 no longer extended by the requests it refuses. The dev-credentials hint is
 DEV-only and `npm run build` fails if it survives minification. Tests CP **328
 green (25 suites)**; typecheck and both builds clean; verified in production
@@ -186,7 +186,7 @@ and tidbits' limiter-storage and DNS-rebind items.
 
 Previous — **Pass 3 of the production review — client lifecycle (2026-09-25,
 complete).**
-Owner: *"lets go ahead with pass 3"*. Company delete now blocks on invoice
+Owner: _"lets go ahead with pass 3"_. Company delete now blocks on invoice
 history (financial records are retained; suspension is the off-ramp, and a
 successful delete is audited `company_deleted`); `updateCompany` switched from
 COALESCE to presence-flag semantics so an explicit `null` clears `paid_through` /
@@ -204,8 +204,8 @@ remains queued.
 
 Previous — **Pass 1 of the production review — settlement → entitlement
 (2026-09-25).**
-Owner: *"see attached and advise"* on `review-23Sep2026.md`, verified claim by
-claim, then *"continue with Phase 1"* (fleet is dev-only, so strictness is safe).
+Owner: _"see attached and advise"_ on `review-23Sep2026.md`, verified claim by
+claim, then _"continue with Phase 1"_ (fleet is dev-only, so strictness is safe).
 Shipped: `purpose` persisted on invoices and returned by GET; settlement
 extends `paid_through` only for `initial`/`renewal`; the recorded amount must
 equal the invoice total; the financial writes are one transaction with the licence
@@ -220,7 +220,7 @@ financial blocker, COALESCE null-clearing, atomic client edits, panel teardown),
 Pass 4 (overdue tick, nested validation, frontend tests, registryDb split), plus
 the unowned `companies.ts` change and the prettier decision.
 
-Previous — **The health sweep runs on a timer (2026-09-17).** Owner: *"ok go ahead"* on the
+Previous — **The health sweep runs on a timer (2026-09-17).** Owner: _"ok go ahead"_ on the
 recommendation list. The tree is committed (three commits: the licence-counter
 repair, the client roster row + store ordering, the session docs), and the first
 piece of the "make the panel tell the truth" item is done: `server.ts` now starts
@@ -242,12 +242,12 @@ auto-provisioning, blocked on DNS; item 6 is integration tests for the money and
 entitlement paths. The prettier reformat is deliberately untouched while another
 session is editing this tree.
 
-**Two owner reports fixed (2026-09-16, eleventh pass).** Owner: *"CP : Clients -> 1
-Client per line"* + *"Client Details-> Multiple Stores-> Push License : Store POST
-/api/internal/licence failed: Licence sequence 6 is older than the stored 10 retry"*.
+**Two owner reports fixed (2026-09-16, eleventh pass).** Owner: _"CP : Clients -> 1
+Client per line"_ + _"Client Details-> Multiple Stores-> Push License : Store POST
+/api/internal/licence failed: Licence sequence 6 is older than the stored 10 retry"_.
 
 - **The licence counter is a mirror of what the deployment holds, and now asks it.**
-  `panels.id=1` (`urban-threads-ho`, the *Multi-Store* client's Head Office) held 6
+  `panels.id=1` (`urban-threads-ho`, the _Multi-Store_ client's Head Office) held 6
   while the deployment held 10, so every push was refused and every retry moved the
   number one step. `services/licenceDelivery.ts` is now the single place a licence is
   signed and delivered (used by all six issuing paths, not just the two buttons); it
@@ -266,7 +266,7 @@ Tests CP **273 green (21 suites)**; backend typecheck, frontend `tsc -b` and the
 production build clean. Doctrine: CONTEXT §4.
 
 Previous — **Phase 3 complete — pro-rata, grandfathering and print CSS (2026-09-16).**
-Owner: *"pro-rata+gf then print css"*.
+Owner: _"pro-rata+gf then print css"_.
 
 - **Grandfathering**: the agreed price terms live on the subscription and are
   stamped only when the office onboards, moves or explicitly re-prices a client, so
@@ -291,7 +291,7 @@ commercial items (reduction credits, per-client overrides, bulk re-price, the
 payment gateway) are in tidbits.md.
 
 Previous — **Phase 3 (partial) — invoice numbering and VAT on inclusive prices
-(2026-09-16, complete).** Owner: *"fix invoice numbering"* + *"prices inc VAT"* —
+(2026-09-16, complete).** Owner: _"fix invoice numbering"_ + _"prices inc VAT"_ —
 the two items that stood between this panel and an invoice usable with a real
 client:
 
@@ -312,8 +312,8 @@ production build clean. Doctrine: CONTEXT §5e ("VAT and invoice numbering").
 What is left of Phase 3: print CSS.
 
 Previous — **Phase 2d — the invoice's line order and one name for the once-off
-(2026-09-16, complete).** Owner: *"alway have the Vula onboarding and deployment
-first line item when applicable in invoice."* The charge now leads the lines on
+(2026-09-16, complete).** Owner: _"alway have the Vula onboarding and deployment
+first line item when applicable in invoice."_ The charge now leads the lines on
 the PDF, the emailed invoice, the Billing detail view and the Raise-an-Invoice
 preview; the label is one constant per side of the build
 (`SETUP_FEE_LINE_LABEL` / `SETUP_FEE_LABEL`), so the client reads the same words
@@ -322,9 +322,9 @@ looked like an uncharged line and displaced the first real item. Test: the email
 rows are asserted to put the once-off before the recurring line. Tests CP **234
 green (19 suites)**, typecheck, frontend build clean. Doctrine: CONTEXT §5e.
 
-Previous — **Phase 2c — capturing the once-off, and what is *not* chargeable
-(2026-09-16, complete).** Owner: *"when creating an invoice: check if once-off has
-been payed. if not it invoice it"* + *"Allow to bill for support as well"*.
+Previous — **Phase 2c — capturing the once-off, and what is _not_ chargeable
+(2026-09-16, complete).** Owner: _"when creating an invoice: check if once-off has
+been payed. if not it invoice it"_ + _"Allow to bill for support as well"_.
 
 - **The once-off is captured automatically.** It used to ride only on an `initial`
   invoice — so a client invoiced once before the charge existed kept an unbilled
@@ -369,7 +369,7 @@ frontend `tsc -b` and the production build clean. Doctrine: CONTEXT §5e. What i
 left of Phase 3: invoice numbering and the stored VAT split (see tidbits.md).
 
 Previous — **Control-plane settings & the real mailer — Phase 2 of the SPOG/demo plan
-(2026-09-16, complete).** Owner: *"continue with phase 2"* (the phased plan set
+(2026-09-16, complete).** Owner: _"continue with phase 2"_ (the phased plan set
 with the Head Office branch-picker work; Phase 1 = CP → panel store roster and the
 picker, closed 2026-09-16; Phase 3 = invoice numbering, stored VAT split, PDF,
 print CSS). A **settings singleton for the control plane's own identity**, a
@@ -399,14 +399,15 @@ Also carried in this phase, from the same day's owner reports:
   push credential, which is the gap the first bullet closes.
 
 Status: **complete** — `office_settings` singleton + `services/officeSettings.ts`
-+ `services/mailer.ts` (nodemailer, transport per send) + `routes/settings.ts`
-(`GET/PUT /api/settings`, `POST /api/settings/test-email`) + the Settings page and
-nav entry; the invoice email route now really sends (400 `smtp_not_configured` /
-502 `mailer_failed` / 200 with `emailed_at`+`emailed_to` and an audit row that
-matches the outcome); `invoice_due_days` replaces the hard-coded 14-day term.
-Tests **218 green (18 suites)**; backend typecheck, frontend `tsc -b` and the
-production build clean. Doctrine: CONTEXT §5e. Phase 3 (invoice numbering, VAT
-split, PDF/print CSS) is the next slice; see tidbits.md.
+
+- `services/mailer.ts` (nodemailer, transport per send) + `routes/settings.ts`
+  (`GET/PUT /api/settings`, `POST /api/settings/test-email`) + the Settings page and
+  nav entry; the invoice email route now really sends (400 `smtp_not_configured` /
+  502 `mailer_failed` / 200 with `emailed_at`+`emailed_to` and an audit row that
+  matches the outcome); `invoice_due_days` replaces the hard-coded 14-day term.
+  Tests **218 green (18 suites)**; backend typecheck, frontend `tsc -b` and the
+  production build clean. Doctrine: CONTEXT §5e. Phase 3 (invoice numbering, VAT
+  split, PDF/print CSS) is the next slice; see tidbits.md.
 
 Previous — **Subscription model redesign — licensed terminals × rate + once-off onboarding
 (2026-09-13, complete).** The owner brief
@@ -544,7 +545,7 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       The spec's grouped nav (§39) is the obvious follow-up now that four
       surfaces exist.
 - [x] **SPOG — Deployments page** (2026-09-14, §33, read-only): `GET
-      /api/deployments` exposes the orchestration history fleet-wide (until now
+/api/deployments` exposes the orchestration history fleet-wide (until now
       only per client) with a one-query step tally, and
       `GET /api/deployments/:id` adds the steps (status, attempts, warnings,
       error). A job records no image version, environment or operator — those
@@ -562,7 +563,7 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       Page + nav + build filter. Doctrine: CONTEXT §5c. Tests: CP **188 green**.
 - [x] **SPOG — Devices page** (2026-09-14, §25): every configured till of every
       store (claimed or not) plus one entry per Head Office, from `GET
-      /api/devices`. Derived, not stored: per-till `claimed`/`deviceId`/
+/api/devices`. Derived, not stored: per-till `claimed`/`deviceId`/
       `sessionOpen`/`lastSeenAt` come from `last_telemetry_json` and the roster
       decides which tills exist. A bound till reads **Claimed**, not Online —
       `lastSeenAt` is a reserved null until the tenant ships device heartbeats —
@@ -572,7 +573,7 @@ cap, block and offer an upgrade · curated feature gating (6 keys).
       list, store detail and Devices page share. Page + nav + type filter +
       status filter. Doctrine: CONTEXT §5b. Tests: CP **181 green (15 suites)**.
 - [x] **SPOG — Errors page** (2026-09-14, §30 observability): the panel was
-      blind by construction — a store's row keeps only the *latest* failure, so
+      blind by construction — a store's row keeps only the _latest_ failure, so
       "how often, since when, how many stores" was unanswerable, and the
       2026-09-14 health-probe incident showed a bare "Offline" with no reason.
       New `error_events` feed (one row per fingerprint × source × entity,
@@ -825,8 +826,7 @@ run as the tenant workstream in parallel.
       auto-renewal no longer records a synthetic payment — the sweep only
       creates the invoice, settlement is explicit
       (`BILLING_SIMULATE_RENEWAL_SETTLEMENT=true` restores demo behaviour).
-      **Superseded by the 2026-09-13 redesign** (licensed quantity + allocations
-      + per-terminal pricing + once-off onboarding): per-store pricing is
+      **Superseded by the 2026-09-13 redesign** (licensed quantity + allocations + per-terminal pricing + once-off onboarding): per-store pricing is
       expressed as allocations, and subscription snapshots remain deferred
       (tidbits.md).
 - [x] **P2 (partial) Privacy boundary** (2026-09-12) — `vat_reg_no` dropped
@@ -839,13 +839,13 @@ run as the tenant workstream in parallel.
 - [ ] **Integration tests** (per the review's §38): single-store onboarding,
       multi-store onboarding, retry-without-duplicates, single→multi upgrade
       preserving the original store, expire→grace→suspend→resume, and
-      CP-vs-HO token isolation suites. *Partially covered:* the new
+      CP-vs-HO token isolation suites. _Partially covered:_ the new
       orchestration suite covers fail-truthfully, UUID persistence +
       retry-without-duplicates, two-way wiring, and warnings-not-fake-success.
 
 ## Phase set (2026-10-10): the add-on model, complete
 
-Owner: *"split the keys"*, then *"but all of these are chargable"* — the plans sell features per
+Owner: _"split the keys"_, then _"but all of these are chargable"_ — the plans sell features per
 month, nothing chargeable is bundled, and what a client buys is snapshotted at the price agreed.
 
 - [x] **A1 The three-layer entitlement model.** `plans.features_json` (included),
@@ -861,7 +861,7 @@ month, nothing chargeable is bundled, and what a client buys is snapshotted at t
       snapshotted, editing a plan re-prices nobody, `requireSellableFeature` gates multi-store on
       buying the Head Office add-on.
 - [x] **A4 The office sells them in both UIs.** Plans page: an **Add-ons** price block (only what the
-      plan does not include) and an *Included* statement. Clients wizard and the subscription editor:
+      plan does not include) and an _Included_ statement. Clients wizard and the subscription editor:
       the add-on ticks, with the plan's prices, forced Head Office for multi-store.
 - [x] **A5 Two defects found by using it (2026-10-10, warehouse demo).**
       `invoices.addons_json` had a DDL line and no column migration — every existing registry failed
@@ -872,7 +872,7 @@ month, nothing chargeable is bundled, and what a client buys is snapshotted at t
 
 ## Phase set (planned 2026-10-13): the quote desk — the CP sends the site's quotes as documents
 
-Owner: *"should we use the CP to send quotes? We dont have a that feature. lets plan"* — the
+Owner: _"should we use the CP to send quotes? We dont have a that feature. lets plan"_ — the
 sending half already exists; what the office does not have is the desk around it.
 
 **What already exists, verified live 2026-10-13.** The marketing `#pricing` builder posts its
@@ -880,10 +880,10 @@ quote to `POST /api/public/quote-request` (deployed: CORS preflight from `vula-a
 answers 204, `/health` ok). The route mails the office (`QUOTE_TO`) and the visitor, Reply-To
 the visitor, through SMTP-or-Resend (`routes/public.ts`, `services/quoteMail.ts`, 9 tests).
 What is missing: **nothing persists** (no `quotes` table — the schema's only "quote" is the
-pricing arithmetic — and no office screen); the visitor receives a copy of their *request*, not
+pricing arithmetic — and no office screen); the visitor receives a copy of their _request_, not
 a quotation; and the route trusts the page's figures (`money()` only shape-checks).
 
-**Vocabulary.** A *quote* (this feature) is a document sent to a prospect.
+**Vocabulary.** A _quote_ (this feature) is a document sent to a prospect.
 `SubscriptionQuote` / `quoteForSubscription` (`services/pricing.ts`) is the arithmetic of what
 an existing client pays — a different concept; CONTEXT gains §5f with the distinction when P1
 lands.
@@ -904,12 +904,11 @@ lands.
       rate, `DEFAULT_FEATURE_PRICES`, and the R5 000 assisted / R1 500 self setup pair, whose
       assisted figure currently has no home server-side and needs one: settings or a constant)
       and stores what the visitor saw beside what the catalogue says. The office email names a
-      difference; the visitor's copy keeps their builder's numbers. Office API `GET /api/quotes`
-      + `/:id` and a read-only Quotes page beside Billing in the CP frontend; the lead email
+      difference; the visitor's copy keeps their builder's numbers. Office API `GET /api/quotes` + `/:id` and a read-only Quotes page beside Billing in the CP frontend; the lead email
       carries the number and a deep link. Tests: numbering (monotonic, never reused, self-heal),
       record-on-request, honeypot records nothing, transport failure keeps the row, pricing +
       drift, list/detail; `publicQuotes.test.ts` updated for the new behaviour.
-      *P1 progress (2026-10-13): the backend is in — `quotes` + `quote_sequences` and
+      _P1 progress (2026-10-13): the backend is in — `quotes` + `quote_sequences` and
       `nextQuoteNumber` in the registry, `services/quotePricing.ts` (the list price and the
       assisted/self setup pair as constants there; P4 moves them to a served endpoint), the
       public route recording first and emailing second (desk copy with the number and any
@@ -919,7 +918,7 @@ lands.
       extra fields, so that order is safe). The read-only Quotes page landed the same day
       (`frontend/src/pages/QuotesPage.tsx`: status filter, drift and email-failed chips, a
       detail modal with both figure sets; labels come from `/plans/features`, never a local
-      copy) — **P1 is complete, P2 (PDF + send) next**.*
+      copy) — **P1 is complete, P2 (PDF + send) next**._
 - [x] **P2 The document.** `services/quotePdf.ts` on the `invoicePdf.ts` pattern (A4, 48pt
       margins; the money column and wrap rules asserted the same way): vendor identity from
       office settings, "Quotation" + number, date and valid-until, prospect block, lines, the
@@ -931,19 +930,19 @@ lands.
       prospect receives the PDF with `hello@` as Reply-To, status → `quoted`, audit row; the
       mailer's honest-outcomes table applies. The request email stays as it is — the quotation
       is a separate message.
-      *P2 progress (2026-10-13): landed — the office setting, `services/quotePdf.ts`, the PDF
+      _P2 progress (2026-10-13): landed — the office setting, `services/quotePdf.ts`, the PDF
       and send routes, the page's Download/Send actions and the inline send panel (stores,
       tills, set-up, add-ons from the vocabulary). Deviations from the plan above, recorded
       rather than quietly dropped: the invoice footer is **not** printed on a quotation
       (payment instructions belong to an invoice — nobody owes anything yet; a validity line
       stands in its place); the per-send `validDays` override exists in the API but the UI
       leaves validity to the setting; and editing the prospect's note was not built — it
-      lands with P3's accept/decline pass.*
+      lands with P3's accept/decline pass._
 - [x] **P3 The pipeline.** Accept/decline recorded by the office; `expired` derived from
       `valid_until` (never stored, no cron — the subscription-state rule). **Create client from
       this quote** pre-fills the existing onboarding (`POST /companies`, `recordAgreedPricing`,
       setup fee) and stores `company_id` back on the quote. Audit every action.
-      *P3 progress (2026-10-13): landed — `accept`/`decline` (audited; a settled quote refuses a
+      _P3 progress (2026-10-13): landed — `accept`/`decline` (audited; a settled quote refuses a
       second verdict with 409), `expired` derived in `quoteOut` and surfaced as an Expired
       filter/chip, and `create-client`: a quote-driven creation reusing the onboarding machinery
       (`createCompany`, `setLicensedTerminalCount`, the pricing setters) but with the **quote's
@@ -962,7 +961,7 @@ lands.
       `PUT /api/quotes/:id` edits a live quote (re-priced, audited, the visitor's snapshot
       untouched) and `DELETE /api/quotes/:id` removes any quote that never became a client
       (audited; numbers retired). Still open from P2's note: the per-send validity override in
-      the UI (the note edit landed with the edit panel).*
+      the UI (the note edit landed with the edit panel)._
 - [ ] **P4 (optional, decide after P2) One price source.** `GET /api/public/pricing` from the
       CP; the site's script hydrates its figures from it with the static `data-cents` kept as
       the no-JS default. Then the P1 drift flag becomes a canary, not a routine.
@@ -980,4 +979,124 @@ own; the vendor plane must not carry merchant content.
 **Acceptance.** After P3: a visitor builds a quote on the live site → a numbered, server-priced
 record appears in the CP → the office sends a PDF quotation the prospect receives and can reply
 to → acceptance is recorded → the client is created from the quote at the agreed prices and the
-quote links to it. Suites green, typecheck clean, uncommitted (house rule).
+quote links to it. Suites green and typecheck clean; landed and committed on the owner's word
+(2026-10-13/14) and deployed to both control planes.
+
+## Phase set (planned 2026-10-14): the per-store price
+
+Owner: _"R199 / store / month — First till + hosting included; Additional till R99/month;
+Standard hosting and backups included; Software updates included; Standard support included"_,
+then _"Head Office hosting + software R199/m"_ and _"setup/add ons unchanged"_. Asked whether
+the warehouse — which exists in the local fleet as Central DC — carries its own line:
+_"the warehouse holds stock and IBT happens from the WH. we should not complicate things. Also
+should not be charging separately."_ Then, watching the page: _"the addons must be charge per
+store, no? so if three stores - laybuy must be charged per store"_ — so the add-ons are
+per-store too, Head Office alone excepted.
+
+The model, settled: **R199/m per trading store (first till included), R49/m per additional
+till, R199/m Head Office and R49/m e-commerce once per business, the remaining four capabilities
+(credit accounts, lay-by, the assistant, the invoice importer) once per trading store, warehouses
+not charged, set-up R1 500 self / R5 000 assisted** — all VAT-inclusive, and the list is for **new business only**:
+existing clients keep their agreed prices (§5 grandfathering; their `addon_prices_json` covers
+the Head Office change too). Read structurally it is today's list plus a flat R100 per
+deployment — `199 + 99 × (tills − 1) = 99 × tills + 100` — and it finally prices what a store
+costs to run: a container, a volume, a backup job. A warehouse rides along unpriced and
+unregistered, which matches its role: stock, not trade.
+
+**All five landed 2026-10-14** (S1–S5 below). Landed together with them, from the same owner
+message: `addonQuantity(key, stores)` in `services/pricing.ts` — a per-store add-on multiplies
+by the client's trading stores (`max(1, stores)`, so a bought add-on never becomes free), Head
+Office stays ×1; the subscription quote carries `unitCents`/`quantity` per add-on, the invoice
+snapshot keeps them (older rows still read), and the editor, the desk and the page all state
+the multiplication. Verified end-to-end on the local fleet: the marketing page's default
+configuration (3 stores × 2 tills + Head Office + credit + e-commerce) reads **R1 387,00/m** on
+the page, and `POST /api/quotes` for the same configuration records exactly the same figure —
+one source, three surfaces. CP 455/455, frontend build clean.
+
+- [x] **S1 The plan carries the mode.** `plans` gained `pricing_mode: 'per_store'` with
+      `store_price_cents` (19900 — first till included) while `terminal_price_cents` became the
+      ADDITIONAL-till rate (settled at 4900 the same day); the catalogue's eight seeded tiers moved to it (the
+      `per_store` CHECK needed the same guarded table rebuild the stores table uses), the
+      Plans editor reads both figures (its at-ceiling total is store price +
+      (ceiling − 1) × till price, per store), and `resolvePlanPricing` refuses a per-store plan
+      with a zero store rate the way it refuses a zero per-terminal one.
+      `calculateRecurringAmount` (one arithmetic; `calculateRecurringSubscriptionAmount` is its
+      plan-shaped reader) is
+      `stores × store_price + max(0, licensed − stores) × terminal_price`, where **stores
+      counts `kind = 'store'` rows only** — a warehouse is not a billed unit. The subscription
+      snapshots the agreed store rate beside the till rate (`store_rate_cents`, additive), so
+      grandfathering holds on the new mode too. Mid-period increases pro-rate the formula's own
+      delta, so adding a store with its first till moves the bill by `199 − 99 = R100` (the same
+      invariant seen from below); `ProRataCharge` gained `extraStores` for the wording.
+      `DEFAULT_FEATURE_PRICES.multi_store` (Head Office) moved 9900 → **19900**; the other
+      add-ons stay R49/R99 per store; the additional-till rate settled at 4900 the same day.
+- [x] **S2 The document says it.** The invoice's recurring lines are now `Stores · Vula
+Network · 3 × R 199,00` and, when there are any, `Additional tills · 3 × R 49,00` — and a
+      per-store add-on reads `Lay-by · Per month · 3 × R 49,00`. `store_count`/`store_price_cents`
+      are snapshotted onto the invoice beside the terminal pair (additive columns, the house
+      migration); `terminal_count` keeps meaning the licensed TOTAL on every invoice, so the
+      additional count is the difference and pro-rata baselines still read from one column
+      (`paidStoresFor` is `paidTerminalsFor`'s counterpart).
+- [x] **S3 The desk quotes it.** `services/quotePricing.ts` prices the list: `3 stores (first
+till included · (2 tills per store)) · 3 × R 199,00` plus `3 additional tills · 3 ×
+R 49,00` when there are any, and each add-on at its own quantity — Head Office ×1,
+      everything else × the stores (`Lay-by · 3 × R 49,00`). The real-split feature feeds both
+      naturally (`(1 + 2 + 0 extra across 3 stores)`), and the rate/quantity/split snapshots and
+      the drift flag are unchanged.
+- [x] **S4 The page shows it.** The section reads "One rate per store", the banner states R199
+      per store with the first till included plus R49 per extra till, Head Office's card is
+      R199/month for the business while the other five cards say "/ store", and both the markup's
+      no-JS default and the builder's arithmetic were recomputed: 3 stores × 2 tills + Head
+      Office + credit + e-commerce = `3×199 + 3×49 + 199 + 3×49 + 3×49` = **R1 237,00/m**, set-up
+      R5 000. The builder's `data-per` attribute is what makes an add-on per store or per
+      company.
+- [x] **S5 One price source — the old P4, now earned.** `GET /api/public/pricing` serves the
+      desk's own list (store rate, additional-till rate, each add-on with its `perStore` flag,
+      the setup pair), and the page hydrates from it on load — verified live: the page's request
+      to `control-plane.localhost:3240/api/public/pricing` lands and the figures it renders are
+      the ones the desk records. A failed fetch changes nothing: the markup's published figures
+      stand (`data-store-cents` / `data-till-cents`).
+
+**E-commerce is per company (owner, 2026-10-14).** _"ecommerce should be for the whole
+business and not per store"_ — one storefront connection serves the business, not each branch, so
+`PER_COMPANY_FEATURE_KEYS` (`multi_store`, `ecommerce_bridges`) now names the two per-company
+add-ons explicitly, `addonQuantity` applies it for the desk and the invoice, and the page shows
+e-commerce as per-company. The page's default configuration reads R1 139,00/m.
+
+**The onboarding pair (owner, 2026-10-14).** The once-off setup has two prices — self and
+assisted — and both now live in **Office Settings** (`setup_fee_self_cents` 150 000 /
+`setup_fee_assisted_cents` 500 000), read by the desk's quotes, the onboarding form, the
+subscription editor and the marketing page (which hydrates the pair alongside the rates). A
+plan's own field is the per-tier override of the SELF price, and a plan created without one
+starts from the office figure. The self price settled at **R1 500** (the catalogue's eight tiers
+were aligned to it) and assisted at **R5 000**; the page's cards, the builder and the desk all
+follow Settings, so neither figure needs a deploy to change.
+
+**Warehouse correction (owner, 2026-10-14).** _"will the warehouse also be fixed - ie no POS"_ —
+the earlier "no warehouse enforcement work" ruling is superseded in one respect and stands in
+another: a warehouse is still not charged (S1's `kind = 'store'` billing rule is unchanged),
+but it must not have a register at all. **Landed:** the store makes the control plane's `kind`
+its own identity — a `settings.kind` column (baseline DDL + column migration, default
+`'store'`), persisted by `POST /api/internal/configure`. That field was validated and then
+thrown away, which is exactly why a warehouse behaved as "a store with zero tills" — read by
+the register as legacy mode, and sold from. It is now reported by `/internal/status`, echoed
+in the configure `applied` block, and published to the register through `runtime-config`.
+Three refusals follow it: **`checkout()` refuses every new sale at a warehouse** (403
+`warehouse`; placed after the idempotency lookup beside the subscription gate, so a sale
+recorded before the kind was pushed still replays, and covering all four new-sale funnels —
+the POS route, offline sync replay, customer-order collection, quotation conversion); **a
+configure that would arm a warehouse with tills is refused** (the mirror of the zero-till
+rule, validated against the recorded kind when the push omits it); and **the UI stops offering
+the register** — the `register`-tagged nav item is filtered for all three surfaces, Home's
+Sell tile and the three `/pos` action cards are replaced by a notice, Dashboard's "New sale"
+link hides, and `/pos` redirects home. Regression tests pin each rule. Verified on the local
+fleet (Central DC: status `kind`, runtime-config, a refused sale, and in the browser — /pos
+redirects, no Sell tile, the notice shown); store suite 706/706, typecheck and both frontend
+builds clean.
+
+**Acceptance.** A new quote prices at R199/store (first till in), R49 per extra till, R199 Head
+Office and every other add-on once per store, with the warehouse unmentioned; a client
+onboarded on the per-store plan invoices as `3 × R199 + 3 × R49 + HO + 3 × each add-on`; an
+existing client's bill does not move; the page and the desk state the same figures — and since
+S5 they are the same figures, served once; and a warehouse deployment has no register anywhere
+— menu, tiles, route or API.

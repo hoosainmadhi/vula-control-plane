@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { toCents, toRands } from '../lib/money';
 import { api, ApiError } from '../api';
 import ErrorBox from '../components/ErrorBox';
 import Spinner from '../components/Spinner';
@@ -28,6 +29,8 @@ interface Form {
   invoiceFooter: string;
   vatRegNo: string;
   vatRate: string;
+  setupFeeSelf: string;
+  setupFeeAssisted: string;
   smtpHost: string;
   smtpPort: string;
   smtpUser: string;
@@ -45,6 +48,8 @@ const toForm = (s: OfficeSettings): Form => ({
   invoiceFooter: s.invoiceFooter,
   vatRegNo: s.vatRegNo,
   vatRate: String(s.vatRate),
+  setupFeeSelf: toRands(s.setupFeeSelfCents),
+  setupFeeAssisted: toRands(s.setupFeeAssistedCents),
   smtpHost: s.smtpHost,
   smtpPort: String(s.smtpPort),
   smtpUser: s.smtpUser,
@@ -100,6 +105,8 @@ export default function SettingsPage() {
           invoiceFooter: form.invoiceFooter,
           vatRegNo: form.vatRegNo,
           vatRate: Number(form.vatRate),
+          setupFeeSelfCents: toCents(form.setupFeeSelf),
+          setupFeeAssistedCents: toCents(form.setupFeeAssisted),
           smtpHost: form.smtpHost,
           smtpPort: Number(form.smtpPort),
           smtpUser: form.smtpUser,
@@ -269,6 +276,36 @@ export default function SettingsPage() {
               </p>
             </div>
             <div>
+              <label className={labelCls}>Set-up, once off — self (R)</label>
+              <input
+                required
+                value={form.setupFeeSelf}
+                onChange={(e) => set({ setupFeeSelf: e.target.value })}
+                className={inputCls}
+                placeholder="1500.00"
+              />
+              <p className="mt-1 text-[11px] text-slate-400">
+                The once-off a client pays by default —{' '}
+                <strong>the one home for this figure</strong>. The desk quotes it, the site
+                publishes it, and a new plan starts from it (a plan may still override or waive it).
+                VAT-inclusive.
+              </p>
+            </div>
+            <div>
+              <label className={labelCls}>Set-up, once off — assisted (R)</label>
+              <input
+                required
+                value={form.setupFeeAssisted}
+                onChange={(e) => set({ setupFeeAssisted: e.target.value })}
+                className={inputCls}
+                placeholder="5000.00"
+              />
+              <p className="mt-1 text-[11px] text-slate-400">
+                The same service on any tier: we provision every store, load the catalogue and train
+                the team. Chosen per client when they are onboarded.
+              </p>
+            </div>
+            <div>
               <label className={labelCls}>Quote validity (days)</label>
               <input
                 required
@@ -321,8 +358,13 @@ export default function SettingsPage() {
                 value={form.smtpHost}
                 onChange={(e) => set({ smtpHost: e.target.value })}
                 className={inputCls}
-                placeholder="smtp.example.co.za"
+                placeholder="smtp.zoho.com"
               />
+              <p className="mt-1 text-[11px] text-slate-400">
+                Zoho: <span className="font-mono">smtp.zoho.com</span> on port 587 — or your
+                account&apos;s own region (smtp.zoho.eu, .in, …). With 2FA on, the password is an
+                app-specific one, not the mailbox password.
+              </p>
             </div>
             <div>
               <label className={labelCls}>Port</label>

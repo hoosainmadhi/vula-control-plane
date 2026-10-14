@@ -158,6 +158,12 @@ const INVOICES_DDL = `
     amount_cents         INTEGER NOT NULL,
     terminal_count       INTEGER,
     terminal_price_cents INTEGER,
+    -- The per_store recurring line's evidence (2026-10-14): the trading stores
+    -- billed and the store rate that applied. terminal_count keeps meaning the
+    -- licensed TOTAL on every invoice; the additional-till line is the
+    -- difference, so pro-rata baselines stay readable from one column.
+    store_count          INTEGER,
+    store_price_cents    INTEGER,
     setup_fee_cents      INTEGER,
     addons_json          TEXT,
     description          TEXT,
@@ -246,6 +252,14 @@ const OFFICE_SETTINGS_DDL = `
     vat_reg_no        TEXT    NOT NULL DEFAULT '',
     vat_rate          INTEGER NOT NULL DEFAULT 15
       CHECK (vat_rate BETWEEN 0 AND 100),
+    -- The once-off onboarding pair the whole office prices from (owner,
+    -- 2026-10-14): the self price and the assisted price. A plan carries its own
+    -- figure too — that field is the per-tier override, and a NEW plan defaults
+    -- to the self figure here; nothing else hardcodes these numbers.
+    setup_fee_self_cents     INTEGER NOT NULL DEFAULT 150000
+      CHECK (setup_fee_self_cents >= 0),
+    setup_fee_assisted_cents INTEGER NOT NULL DEFAULT 500000
+      CHECK (setup_fee_assisted_cents >= 0),
     smtp_host         TEXT    NOT NULL DEFAULT '',
     smtp_port         INTEGER NOT NULL DEFAULT 587,
     smtp_user         TEXT    NOT NULL DEFAULT '',
@@ -408,8 +422,9 @@ let registry: Database.Database | null = null;
  * Subscription plans. Seeded with four editable SA-retail tiers; the operator can
  * change every value, because the first ten customers each want something slightly
  * different. A plan grants a store-count cap, a per-store terminal ceiling, a
- * feature set and its pricing: a rate per licensed terminal, or `custom` when the
- * deal is negotiated (never auto-calculated).
+ * feature set and its pricing: a rate per licensed terminal, a rate per trading
+ * store with the first till included (`per_store`, 2026-10-14), or `custom` when
+ * the deal is negotiated (never auto-calculated).
  */
 const PLANS_DDL = `
   CREATE TABLE IF NOT EXISTS plans (
@@ -421,8 +436,13 @@ const PLANS_DDL = `
     features_json           TEXT    NOT NULL DEFAULT '[]',
     feature_prices_json     TEXT    NOT NULL DEFAULT '{}',
     pricing_mode            TEXT    NOT NULL DEFAULT 'per_terminal'
-      CHECK (pricing_mode IN ('per_terminal', 'custom')),
+      CHECK (pricing_mode IN ('per_terminal', 'per_store', 'custom')),
     terminal_price_cents    INTEGER NOT NULL DEFAULT 0 CHECK (terminal_price_cents >= 0),
+    -- A per_store plan's rate per trading store, the first till included
+    -- (R199/m). On that mode terminal_price_cents becomes the ADDITIONAL-till
+    -- rate (R49/m); a warehouse is not a trading store and carries no line
+    -- (services/pricing.ts, S1 of the 2026-10-14 plan).
+    store_price_cents       INTEGER NOT NULL DEFAULT 0 CHECK (store_price_cents >= 0),
     -- A custom plan's agreed charge per billing period (0 = negotiated per
     -- client, so the control plane refuses to invoice without an explicit
     -- amount). Ignored on a per_terminal plan, where the rate applies.
@@ -495,6 +515,10 @@ const COMPANY_SUBSCRIPTIONS_DDL = `
     -- falls back to the plan and says so.
     pricing_mode            TEXT,
     rate_cents              INTEGER,
+    -- The agreed rate per trading store, first till included — the per_store
+    -- counterpart of rate_cents (which then means the ADDITIONAL-till rate).
+    -- Snapshotted for the same reason: a plan edit must not re-price a client.
+    store_rate_cents        INTEGER,
     custom_amount_cents     INTEGER,
     setup_fee_cents         INTEGER,
     billing_period          TEXT,
@@ -555,20 +579,24 @@ const PANELS_DDL = `
   )`;
 
 /**
- * The four seeded tiers — a starting catalogue, not a closed one. Pricing is a
- * rate per licensed terminal per period plus a once-off onboarding fee; the
- * Enterprise tier is `custom`, so the control plane never invents a figure for a
- * negotiated deal. Every value is editable from the control plane.
+ * The four seeded tiers — a starting catalogue, not a closed one. Since
+ * 2026-10-14 pricing is a rate per **trading store** (first till included,
+ * R199/m) plus a rate per ADDITIONAL till (R49/m), matching the approved
+ * pricing page; the once-off is the SELF setup price (R1 500, owner
+ * 2026-10-14) — assisted setup is R5 000 and is chosen per client, not per
+ * plan; the Enterprise tier is `custom`, so the control plane never invents a
+ * figure for a negotiated deal. Every value is editable.
  */
 /**
  * The plan catalogue a FRESH registry is seeded with.
  *
  * These rates and setup fees are the prices on the approved pricing page, kept in
- * step with the live registry's plan rows (2026-10-09). They had drifted to
- * R500/till and R10 000 once-off, so a fresh install priced differently from
- * production. `refreshSeedPlanDefaults` deliberately only fills plans that are
- * still unpriced, so changing these numbers never reprices a live client — the
- * Plans page is how an existing client's price is changed.
+ * step with the live registry's plan rows (2026-10-09; repriced per store
+ * 2026-10-14). They had drifted to R500/till and R10 000 once-off once, so a
+ * fresh install priced differently from production. `refreshSeedPlanDefaults`
+ * deliberately only fills plans that are still unpriced, so changing these
+ * numbers never reprices a live client — the Plans page is how an existing
+ * client's price is changed.
  */
 const SEED_PLANS: Array<{
   code: string;
@@ -577,6 +605,9 @@ const SEED_PLANS: Array<{
   maxTerminals: number;
   features: string[];
   pricingMode: PlanPricingMode;
+  /** Per trading store, first till included. */
+  storePriceCents: number;
+  /** Per additional till. */
   terminalPriceCents: number;
   setupFeeCents: number;
   sortOrder: number;
@@ -589,9 +620,10 @@ const SEED_PLANS: Array<{
     maxStores: 1,
     maxTerminals: 1,
     features: ['advanced_reports', 'stock_transfers'],
-    pricingMode: 'per_terminal',
-    terminalPriceCents: 15_000,
-    setupFeeCents: 300_000,
+    pricingMode: 'per_store',
+    storePriceCents: 19_900,
+    terminalPriceCents: 4_900,
+    setupFeeCents: 150_000,
     sortOrder: 1,
   },
   {
@@ -600,9 +632,10 @@ const SEED_PLANS: Array<{
     maxStores: 1,
     maxTerminals: 3,
     features: ['advanced_reports', 'stock_transfers'],
-    pricingMode: 'per_terminal',
-    terminalPriceCents: 12_000,
-    setupFeeCents: 300_000,
+    pricingMode: 'per_store',
+    storePriceCents: 19_900,
+    terminalPriceCents: 4_900,
+    setupFeeCents: 150_000,
     sortOrder: 2,
   },
   {
@@ -611,9 +644,10 @@ const SEED_PLANS: Array<{
     maxStores: 3,
     maxTerminals: 2,
     features: ['advanced_reports', 'stock_transfers'],
-    pricingMode: 'per_terminal',
-    terminalPriceCents: 15_000,
-    setupFeeCents: 300_000,
+    pricingMode: 'per_store',
+    storePriceCents: 19_900,
+    terminalPriceCents: 4_900,
+    setupFeeCents: 150_000,
     sortOrder: 5,
   },
   {
@@ -622,9 +656,10 @@ const SEED_PLANS: Array<{
     maxStores: 5,
     maxTerminals: 3,
     features: ['advanced_reports', 'stock_transfers'],
-    pricingMode: 'per_terminal',
-    terminalPriceCents: 10_000,
-    setupFeeCents: 500_000,
+    pricingMode: 'per_store',
+    storePriceCents: 19_900,
+    terminalPriceCents: 4_900,
+    setupFeeCents: 150_000,
     sortOrder: 3,
   },
   {
@@ -633,9 +668,10 @@ const SEED_PLANS: Array<{
     maxStores: 1,
     maxTerminals: 10,
     features: ['advanced_reports', 'stock_transfers'],
-    pricingMode: 'per_terminal',
-    terminalPriceCents: 10_000,
-    setupFeeCents: 300_000,
+    pricingMode: 'per_store',
+    storePriceCents: 19_900,
+    terminalPriceCents: 4_900,
+    setupFeeCents: 150_000,
     sortOrder: 6,
   },
   {
@@ -644,9 +680,10 @@ const SEED_PLANS: Array<{
     maxStores: 10,
     maxTerminals: 15,
     features: ['advanced_reports', 'stock_transfers'],
-    pricingMode: 'per_terminal',
-    terminalPriceCents: 10_000,
-    setupFeeCents: 600_000,
+    pricingMode: 'per_store',
+    storePriceCents: 19_900,
+    terminalPriceCents: 4_900,
+    setupFeeCents: 150_000,
     sortOrder: 7,
   },
   {
@@ -655,9 +692,10 @@ const SEED_PLANS: Array<{
     maxStores: 50,
     maxTerminals: 20,
     features: ['advanced_reports', 'stock_transfers'],
-    pricingMode: 'per_terminal',
-    terminalPriceCents: 10_000,
-    setupFeeCents: 600_000,
+    pricingMode: 'per_store',
+    storePriceCents: 19_900,
+    terminalPriceCents: 4_900,
+    setupFeeCents: 150_000,
     sortOrder: 4,
   },
   {
@@ -666,9 +704,10 @@ const SEED_PLANS: Array<{
     maxStores: 50,
     maxTerminals: 5,
     features: ['advanced_reports', 'stock_transfers'],
-    pricingMode: 'per_terminal',
-    terminalPriceCents: 15_000,
-    setupFeeCents: 600_000,
+    pricingMode: 'per_store',
+    storePriceCents: 19_900,
+    terminalPriceCents: 4_900,
+    setupFeeCents: 150_000,
     sortOrder: 8,
   },
 ];
@@ -854,6 +893,7 @@ export const getRegistryDb = (): Database.Database => {
   // action (or it happens automatically the next time they change the plan).
   addSubColumn('pricing_mode', 'pricing_mode TEXT');
   addSubColumn('rate_cents', 'rate_cents INTEGER');
+  addSubColumn('store_rate_cents', 'store_rate_cents INTEGER');
   addSubColumn('custom_amount_cents', 'custom_amount_cents INTEGER');
   addSubColumn('setup_fee_cents', 'setup_fee_cents INTEGER');
   addSubColumn('billing_period', 'billing_period TEXT');
@@ -875,6 +915,16 @@ export const getRegistryDb = (): Database.Database => {
   addOfficeColumn('vat_reg_no', "vat_reg_no TEXT NOT NULL DEFAULT ''");
   addOfficeColumn('vat_rate', 'vat_rate INTEGER NOT NULL DEFAULT 15');
   addOfficeColumn('quote_valid_days', 'quote_valid_days INTEGER NOT NULL DEFAULT 30');
+  // The once-off pair (2026-10-14): the figures the desk, the onboarding form and
+  // the marketing page all read. Defaults are the published prices.
+  addOfficeColumn(
+    'setup_fee_self_cents',
+    'setup_fee_self_cents INTEGER NOT NULL DEFAULT 150000',
+  );
+  addOfficeColumn(
+    'setup_fee_assisted_cents',
+    'setup_fee_assisted_cents INTEGER NOT NULL DEFAULT 500000',
+  );
 
   // Where a quote came from (§5f). Existing rows are all website requests, which
   // is exactly what the default says.
@@ -889,6 +939,7 @@ export const getRegistryDb = (): Database.Database => {
   migratePlanCustomAmount(db);
   restructurePlans(db);
   widenPlanBillingPeriod(db);
+  migratePlansPerStore(db);
   renameRetailPlanToBusiness(db);
   renamePlansToNameCodes(db);
   seedPlans(db);
@@ -927,7 +978,7 @@ export const getRegistryDb = (): Database.Database => {
  * rebuild cannot silently drop a column.
  */
 const PLAN_COLUMNS =
-  'id, code, name, max_stores, max_terminals_per_store, features_json, feature_prices_json, pricing_mode, terminal_price_cents, custom_amount_cents, setup_fee_cents, billing_period, is_active, sort_order, created_at, updated_at';
+  'id, code, name, max_stores, max_terminals_per_store, features_json, feature_prices_json, pricing_mode, terminal_price_cents, store_price_cents, custom_amount_cents, setup_fee_cents, billing_period, is_active, sort_order, created_at, updated_at';
 const COMPANY_COLUMNS =
   'id, name, slug, billing_email, plan_id, paid_through, trial_ends_at, status, created_at, updated_at';
 
@@ -937,8 +988,9 @@ const seedPlans = (db: Database.Database): void => {
   const insert = db.prepare(
     `INSERT INTO plans (code, name, max_stores, max_terminals_per_store, features_json,
                         feature_prices_json,
-                        pricing_mode, terminal_price_cents, setup_fee_cents, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        pricing_mode, terminal_price_cents, store_price_cents, setup_fee_cents,
+                        sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const seed = db.transaction(() => {
     for (const plan of SEED_PLANS) {
@@ -952,6 +1004,7 @@ const seedPlans = (db: Database.Database): void => {
         JSON.stringify(DEFAULT_FEATURE_PRICES),
         plan.pricingMode,
         plan.terminalPriceCents,
+        plan.storePriceCents,
         plan.setupFeeCents,
         plan.sortOrder,
       );
@@ -962,19 +1015,23 @@ const seedPlans = (db: Database.Database): void => {
 
 /**
  * Fill in the recommended commercial values on seeded tiers that were never
- * priced, so an existing development database picks up the R500 / R10,000 model
+ * priced, so an existing development database picks up the current model
  * without touching anything the operator configured. A plan is treated as
- * "never priced" only when it is `per_terminal` with a zero rate: a plan that
- * carries a price (the old flat model included) is left exactly as it is and
- * shows as `custom` until the operator sets a per-terminal rate.
+ * "never priced" only when its own mode's rate is zero: a plan that carries a
+ * price (the old flat model included) is left exactly as it is and shows as
+ * `custom` until the operator sets a rate.
  */
 const refreshSeedPlanDefaults = (db: Database.Database): void => {
   const unpriced = db.prepare(
-    `SELECT id FROM plans WHERE code = ? AND pricing_mode = 'per_terminal' AND terminal_price_cents = 0`,
+    `SELECT id FROM plans
+      WHERE code = ?
+        AND ((pricing_mode = 'per_terminal' AND terminal_price_cents = 0)
+             OR (pricing_mode = 'per_store' AND store_price_cents = 0))`,
   );
   const refresh = db.prepare(
-    `UPDATE plans SET terminal_price_cents = ?, setup_fee_cents = ?,
-                      max_stores = ?, max_terminals_per_store = ?, updated_at = datetime('now')
+    `UPDATE plans SET pricing_mode = ?, terminal_price_cents = ?, store_price_cents = ?,
+                      setup_fee_cents = ?, max_stores = ?, max_terminals_per_store = ?,
+                      updated_at = datetime('now')
        WHERE id = ?`,
   );
   const run = db.transaction(() => {
@@ -982,7 +1039,9 @@ const refreshSeedPlanDefaults = (db: Database.Database): void => {
       const row = unpriced.get(seed.code) as { id: number } | undefined;
       if (!row) continue;
       refresh.run(
+        seed.pricingMode,
         seed.terminalPriceCents,
+        seed.storePriceCents,
         seed.setupFeeCents,
         seed.maxStores,
         seed.maxTerminals,
@@ -1105,6 +1164,9 @@ const restructurePlans = (db: Database.Database): void => {
     cols.has('feature_prices_json') ? 'feature_prices_json' : `'{}'`,
     modeExpr,
     rateExpr,
+    // A plan that predates the per-store mode carries no store rate; the
+    // catalogue's figures reach never-priced tiers via refreshSeedPlanDefaults.
+    '0',
     // Present on any database that has already booted this build (the additive
     // migration above runs first); a legacy shape arrives with 0.
     cols.has('custom_amount_cents') ? 'COALESCE(custom_amount_cents, 0)' : '0',
@@ -1117,6 +1179,30 @@ const restructurePlans = (db: Database.Database): void => {
   ].join(', ');
 
   rebuildTable(db, 'plans', PLAN_COLUMNS, PLANS_DDL, sourceSelect);
+};
+
+/**
+ * Plans gain the per-store mode (2026-10-14): `store_price_cents` — the rate per
+ * trading store with its first till included — and `'per_store'` in the
+ * pricing-mode CHECK. SQLite cannot widen a CHECK in place, so the mode needs a
+ * rebuild (the same guarded pattern the stores table uses); the additive column
+ * pass runs first so both an old and a fresh database converge on one shape.
+ * Prices are never touched: a plan that carries a rate keeps it, and the
+ * catalogue's R199/R99 reaches only tiers that were never priced.
+ */
+const migratePlansPerStore = (db: Database.Database): void => {
+  if (!tableExists(db, 'plans')) return;
+  if (!tableColumns(db, 'plans').has('store_price_cents')) {
+    db.exec('ALTER TABLE plans ADD COLUMN store_price_cents INTEGER NOT NULL DEFAULT 0');
+  }
+  // The guard must read the CHECK itself, never a bare substring of the DDL: the
+  // column `max_terminals_per_store` CONTAINS "per_store", so a naive
+  // `ddl.includes('per_store')` was always true and every registry that predated
+  // this build kept the old CHECK — the mode was silently unwritable on it while
+  // fresh installs worked (found on the live dev registry, 2026-10-14).
+  const modeCheck = /pricing_mode\s+IN\s*\(([^)]*)\)/i.exec(storedDdl(db, 'plans') ?? '');
+  if (modeCheck && modeCheck[1].includes("'per_store'")) return; // already widened
+  rebuildTable(db, 'plans', PLAN_COLUMNS, PLANS_DDL);
 };
 
 /**
@@ -1134,6 +1220,8 @@ const migrateInvoiceLines = (db: Database.Database): void => {
   for (const [name, ddl] of [
     ['terminal_count', 'terminal_count INTEGER'],
     ['terminal_price_cents', 'terminal_price_cents INTEGER'],
+    ['store_count', 'store_count INTEGER'],
+    ['store_price_cents', 'store_price_cents INTEGER'],
     ['setup_fee_cents', 'setup_fee_cents INTEGER'],
   ] as const) {
     if (!cols.has(name)) db.exec(`ALTER TABLE invoices ADD COLUMN ${ddl}`);
@@ -1813,9 +1901,13 @@ export const recordTelemetry = (id: number, input: TelemetryRecordInput): StoreR
  * licensed terminal quantity; `custom` means the deal is negotiated and the
  * control plane never auto-calculates an amount for it.
  */
-export type PlanPricingMode = 'per_terminal' | 'custom';
+export type PlanPricingMode = 'per_terminal' | 'per_store' | 'custom';
 
-export const PLAN_PRICING_MODES: readonly PlanPricingMode[] = ['per_terminal', 'custom'];
+export const PLAN_PRICING_MODES: readonly PlanPricingMode[] = [
+  'per_terminal',
+  'per_store',
+  'custom',
+];
 
 /**
  * The paid feature vocabulary lives in `services/features.ts` — it is the
@@ -1871,8 +1963,12 @@ export interface PlanRecord {
   /** Prices for the paid features, `{ "multi_store": 9900, … }`. */
   feature_prices_json: string;
   pricing_mode: PlanPricingMode;
-  /** Rate per licensed terminal per billing period (0 on a custom plan). */
+  /** Rate per licensed terminal per billing period (0 on a custom plan). On a
+   *  `per_store` plan this is the ADDITIONAL-till rate. */
   terminal_price_cents: number;
+  /** A `per_store` plan's rate per trading store, the first till included
+   *  (0 on the other modes). */
+  store_price_cents: number;
   /** A custom plan's agreed charge per billing period (0 = nothing agreed yet). */
   custom_amount_cents: number;
   /** Once-off onboarding charge for the client (and its first store). */
@@ -1903,6 +1999,7 @@ export interface PlanInput {
   featurePrices?: Record<string, number>;
   pricingMode?: PlanPricingMode;
   terminalPriceCents?: number;
+  storePriceCents?: number;
   customAmountCents?: number;
   setupFeeCents?: number;
   billingPeriod?: PlanPeriod;
@@ -1910,15 +2007,28 @@ export interface PlanInput {
 
 export const PLAN_PERIODS: readonly PlanPeriod[] = ['monthly', 'annual', 'once-off'];
 
+/**
+ * The self-setup figure a NEW plan starts from: the office's own setting, so the
+ * onboarding prices live in one place (owner, 2026-10-14). The plan's own field
+ * is the per-tier override — the office may raise or waive it deliberately.
+ */
+const defaultSelfSetupFeeCents = (db: Database.Database): number =>
+  (
+    db.prepare('SELECT setup_fee_self_cents AS c FROM office_settings WHERE id = 1').get() as
+      | { c: number }
+      | undefined
+  )?.c ?? 150_000;
+
 export const createPlan = (input: PlanInput): PlanRecord => {
   const db = getRegistryDb();
   const info = db
     .prepare(
       `INSERT INTO plans (code, name, max_stores, max_terminals_per_store, features_json,
                           feature_prices_json,
-                          pricing_mode, terminal_price_cents, custom_amount_cents, setup_fee_cents,
+                          pricing_mode, terminal_price_cents, store_price_cents,
+                          custom_amount_cents, setup_fee_cents,
                           billing_period, sort_order)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) + 1 FROM plans), 1))`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT MAX(sort_order) + 1 FROM plans), 1))`,
     )
     .run(
       input.code,
@@ -1929,8 +2039,9 @@ export const createPlan = (input: PlanInput): PlanRecord => {
       JSON.stringify(input.featurePrices ?? {}),
       input.pricingMode ?? 'per_terminal',
       input.terminalPriceCents ?? 0,
+      input.storePriceCents ?? 0,
       input.customAmountCents ?? 0,
-      input.setupFeeCents ?? 0,
+      input.setupFeeCents ?? defaultSelfSetupFeeCents(db),
       input.billingPeriod ?? 'monthly',
     );
   return getPlanById(Number(info.lastInsertRowid))!;
@@ -1954,6 +2065,7 @@ export const updatePlan = (
          feature_prices_json = COALESCE(?, feature_prices_json),
          pricing_mode = COALESCE(?, pricing_mode),
          terminal_price_cents = COALESCE(?, terminal_price_cents),
+         store_price_cents = COALESCE(?, store_price_cents),
          custom_amount_cents = COALESCE(?, custom_amount_cents),
          setup_fee_cents = COALESCE(?, setup_fee_cents),
          billing_period = COALESCE(?, billing_period),
@@ -1969,6 +2081,7 @@ export const updatePlan = (
       input.featurePrices ? JSON.stringify(input.featurePrices) : null,
       input.pricingMode ?? null,
       input.terminalPriceCents ?? null,
+      input.storePriceCents ?? null,
       input.customAmountCents ?? null,
       input.setupFeeCents ?? null,
       input.billingPeriod ?? null,
@@ -2058,6 +2171,10 @@ export interface InvoiceRecord {
   terminal_count: number | null;
   /** The plan's per-terminal rate when the invoice was raised (a snapshot). */
   terminal_price_cents: number | null;
+  /** Trading stores on a per_store recurring line; null on other invoices. */
+  store_count: number | null;
+  /** The plan's per-store rate when the invoice was raised (a snapshot). */
+  store_price_cents: number | null;
   /** Once-off onboarding charge, when this invoice carried it. Never on renewals. */
   setup_fee_cents: number | null;
   /**
@@ -2227,6 +2344,8 @@ export interface CompanySubscriptionRecord {
   /** The agreed terms; all NULL until an agreement is recorded (`priced_at`). */
   pricing_mode: PlanPricingMode | null;
   rate_cents: number | null;
+  /** The agreed per-store rate on a per_store deal (first till included). */
+  store_rate_cents: number | null;
   custom_amount_cents: number | null;
   setup_fee_cents: number | null;
   billing_period: PlanPeriod | null;
@@ -2238,6 +2357,7 @@ export interface CompanySubscriptionRecord {
 export interface SubscriptionPricing {
   pricingMode: PlanPricingMode;
   rateCents: number;
+  storeRateCents?: number;
   customAmountCents: number;
   setupFeeCents: number;
   billingPeriod: PlanPeriod | null;
@@ -2256,13 +2376,15 @@ export const setSubscriptionPricing = (
   getRegistryDb()
     .prepare(
       `UPDATE company_subscriptions
-          SET pricing_mode = ?, rate_cents = ?, custom_amount_cents = ?, setup_fee_cents = ?,
-              billing_period = ?, priced_at = datetime('now'), updated_at = datetime('now')
+          SET pricing_mode = ?, rate_cents = ?, store_rate_cents = ?, custom_amount_cents = ?,
+              setup_fee_cents = ?, billing_period = ?, priced_at = datetime('now'),
+              updated_at = datetime('now')
         WHERE company_id = ?`,
     )
     .run(
       pricing.pricingMode,
       pricing.rateCents,
+      pricing.storeRateCents ?? 0,
       pricing.customAmountCents,
       pricing.setupFeeCents,
       pricing.billingPeriod,
@@ -2719,6 +2841,9 @@ export interface InvoiceLines {
   purpose?: InvoicePurpose;
   terminalCount?: number | null;
   terminalPriceCents?: number | null;
+  /** A per_store recurring line's trading stores and rate (2026-10-14). */
+  storeCount?: number | null;
+  storePriceCents?: number | null;
   setupFeeCents?: number | null;
   /** The paid add-ons billed, as JSON `[{key,label,cents}]`. */
   addonsJson?: string | null;
@@ -3117,11 +3242,12 @@ export const createInvoice = (
   const info = db
     .prepare(
       `INSERT INTO invoices (company_id, invoice_number, amount_cents, due_date, status,
-                             terminal_count, terminal_price_cents, setup_fee_cents, addons_json,
+                             terminal_count, terminal_price_cents, store_count, store_price_cents,
+                             setup_fee_cents, addons_json,
                              description,
                              purpose, plan_code, plan_name, pro_rata_period,
                              subtotal_cents, vat_cents, vat_rate)
-       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       companyId,
@@ -3132,6 +3258,8 @@ export const createInvoice = (
       dueDate.toISOString().slice(0, 10),
       lines?.terminalCount ?? null,
       lines?.terminalPriceCents ?? null,
+      lines?.storeCount ?? null,
+      lines?.storePriceCents ?? null,
       lines?.setupFeeCents ?? null,
       lines?.addonsJson ?? null,
       lines?.description ?? null,
@@ -3320,6 +3448,10 @@ export interface OfficeSettingsRecord {
   vat_reg_no: string;
   /** The rate its VAT-inclusive prices are quoted at. */
   vat_rate: number;
+  /** The self-setup once-off (§ the onboarding pair, 2026-10-14). */
+  setup_fee_self_cents: number;
+  /** The assisted-setup once-off — the same service on any tier. */
+  setup_fee_assisted_cents: number;
   smtp_host: string;
   smtp_port: number;
   smtp_user: string;
@@ -3345,6 +3477,7 @@ export const updateOfficeSettings = (
           SET office_name = ?, office_email = ?, office_phone = ?, office_address = ?,
               invoice_due_days = ?, quote_valid_days = ?,
               invoice_footer = ?, vat_reg_no = ?, vat_rate = ?,
+              setup_fee_self_cents = ?, setup_fee_assisted_cents = ?,
               smtp_host = ?, smtp_port = ?, smtp_user = ?, smtp_pass = ?, smtp_from = ?,
               updated_at = datetime('now')
         WHERE id = 1`,
@@ -3359,6 +3492,8 @@ export const updateOfficeSettings = (
       next.invoice_footer,
       next.vat_reg_no,
       next.vat_rate,
+      next.setup_fee_self_cents,
+      next.setup_fee_assisted_cents,
       next.smtp_host,
       next.smtp_port,
       next.smtp_user,

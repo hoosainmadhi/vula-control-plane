@@ -236,6 +236,17 @@ export const paidTerminalsFor = (companyId: number): number | null => {
 };
 
 /**
+ * The stores the settled invoice billed — `paidTerminalsFor`'s counterpart on a
+ * per_store deal, so the formula's delta knows both quantities before and after.
+ */
+export const paidStoresFor = (companyId: number): number | null => {
+  const settled = listInvoices(companyId)
+    .filter((inv) => inv.status === 'paid')
+    .sort((a, b) => (a.paid_date ?? '').localeCompare(b.paid_date ?? '') || a.id - b.id);
+  return settled.length > 0 ? (settled[settled.length - 1].store_count ?? null) : null;
+};
+
+/**
  * The mid-period charge a client owes right now, or null when there is nothing to
  * charge. Computed from the AGREED rate — a plan edit must not change what an
  * existing client's increase costs.
@@ -254,8 +265,11 @@ export const currentProRata = (
   const charge = proRataForIncrease({
     pricingMode: priced.pricingMode,
     rateCents: priced.rateCents,
+    storeRateCents: priced.storeRateCents,
     licensedTerminalCount: priced.licensedTerminalCount,
+    tradingStoreCount: priced.licensedStoreCount,
     paidTerminalCount: paidTerminalsFor(company.id),
+    paidStoreCount: paidStoresFor(company.id),
     paidThrough: company.paid_through,
     billingPeriod: priced.billingPeriod,
   });
@@ -288,11 +302,23 @@ export interface InvoiceLineItem {
   included?: boolean;
 }
 
-/** The add-ons an invoice billed, from its own snapshot. */
-const parseAddons = (json: string | null): Array<{ key: string; label: string; cents: number }> => {
+/**
+ * The add-ons an invoice billed, from its own snapshot. `quantity`/`unitCents`
+ * arrived with the per-store add-on model (2026-10-14); rows snapshotted before
+ * it carry only the line total, which is what the line then reads.
+ */
+const parseAddons = (
+  json: string | null,
+): Array<{ key: string; label: string; cents: number; unitCents?: number; quantity?: number }> => {
   if (!json) return [];
   try {
-    const parsed = JSON.parse(json) as Array<{ key?: unknown; label?: unknown; cents?: unknown }>;
+    const parsed = JSON.parse(json) as Array<{
+      key?: unknown;
+      label?: unknown;
+      cents?: unknown;
+      unitCents?: unknown;
+      quantity?: unknown;
+    }>;
     if (!Array.isArray(parsed)) return [];
     return parsed
       .filter(
@@ -303,7 +329,17 @@ const parseAddons = (json: string | null): Array<{ key: string; label: string; c
           Number.isInteger(a.cents) &&
           a.cents > 0,
       )
-      .map((a) => ({ key: a.key as string, label: a.label as string, cents: a.cents as number }));
+      .map((a) => ({
+        key: a.key as string,
+        label: a.label as string,
+        cents: a.cents as number,
+        ...(typeof a.unitCents === 'number' && Number.isInteger(a.unitCents) && a.unitCents > 0
+          ? { unitCents: a.unitCents }
+          : {}),
+        ...(typeof a.quantity === 'number' && Number.isInteger(a.quantity) && a.quantity > 0
+          ? { quantity: a.quantity }
+          : {}),
+      }));
   } catch {
     return [];
   }
@@ -319,7 +355,38 @@ export const invoiceLineItems = (invoice: InvoiceRecord): InvoiceLineItem[] => {
       amountCents: invoice.setup_fee_cents!,
     });
   }
-  if (invoice.terminal_count !== null && invoice.terminal_price_cents !== null) {
+  if (invoice.store_count !== null && invoice.store_price_cents !== null) {
+    // A per_store recurring line states its own two facts: the trading stores
+    // (each one's first till included in its rate) and the ADDITIONAL tills —
+    // the difference between the licensed total and the stores, so
+    // `terminal_count` keeps one meaning on every invoice and pro-rata
+    // baselines stay readable from it.
+    if (invoice.store_count > 0) {
+      items.push({
+        label: 'Stores',
+        detail: [
+          invoice.plan_name,
+          `${invoice.store_count} × ${formatCents2(invoice.store_price_cents)}`,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+        amountCents: invoice.store_count * invoice.store_price_cents,
+      });
+    }
+    const additional =
+      invoice.terminal_count === null
+        ? 0
+        : Math.max(0, invoice.terminal_count - invoice.store_count);
+    if (additional > 0 && invoice.terminal_price_cents !== null) {
+      items.push({
+        label: 'Additional tills',
+        detail: [`${additional} × ${formatCents2(invoice.terminal_price_cents)}`]
+          .filter(Boolean)
+          .join(' · '),
+        amountCents: additional * invoice.terminal_price_cents,
+      });
+    }
+  } else if (invoice.terminal_count !== null && invoice.terminal_price_cents !== null) {
     items.push({
       label: 'Licensed terminals',
       detail: [
@@ -342,6 +409,12 @@ export const invoiceLineItems = (invoice: InvoiceRecord): InvoiceLineItem[] => {
   // the absent terminal line is a sound signal for it (`createInvoiceForCompany`).
   const flatDeal = invoice.terminal_count === null && invoice.terminal_price_cents === null;
   for (const addon of parseAddons(invoice.addons_json)) {
+    // An add-on covers a quantity of stores (2026-10-14); where it does, the
+    // line states the arithmetic rather than leaving a bare figure.
+    const perStore =
+      addon.unitCents !== undefined && addon.quantity !== undefined && addon.quantity > 1
+        ? `Per month · ${addon.quantity} × ${formatCents2(addon.unitCents)}`
+        : 'Per month';
     items.push(
       flatDeal
         ? {
@@ -350,7 +423,7 @@ export const invoiceLineItems = (invoice: InvoiceRecord): InvoiceLineItem[] => {
             amountCents: 0,
             included: true,
           }
-        : { label: addon.label, detail: 'Per month', amountCents: addon.cents },
+        : { label: addon.label, detail: perStore, amountCents: addon.cents },
     );
   }
   const explained = items.reduce((sum, i) => sum + i.amountCents, 0);
@@ -363,6 +436,18 @@ export const invoiceLineItems = (invoice: InvoiceRecord): InvoiceLineItem[] => {
     });
   }
   return items;
+};
+
+/** "1 extra store and 2 extra terminals" — what a mid-period charge bought. */
+const describeIncrease = (charge: ProRataCharge): string => {
+  const parts: string[] = [];
+  if (charge.extraStores > 0) {
+    parts.push(`${charge.extraStores} extra store${charge.extraStores === 1 ? '' : 's'}`);
+  }
+  if (charge.extraTerminals > 0) {
+    parts.push(`${charge.extraTerminals} extra terminal${charge.extraTerminals === 1 ? '' : 's'}`);
+  }
+  return parts.join(' and ') || 'a subscription increase';
 };
 
 /**
@@ -454,11 +539,11 @@ export function createInvoiceForCompany(
     amountCents = charge.amountCents + onboardingCents;
     lines = {
       // Deliberately no terminal_count/rate: this line is NOT `count × rate`, it
-      // is the extra terminals for part of a period. The description carries the
+      // is the increase for part of a period. The description carries the
       // arithmetic, and the document renders it as its own line.
-      description: `Mid-period increase — ${charge.extraTerminals} extra terminal${
-        charge.extraTerminals === 1 ? '' : 's'
-      } for ${charge.daysRemaining} of ${charge.periodDays} days (${charge.from} to ${charge.to})`,
+      description: `Mid-period increase — ${describeIncrease(charge)} for ${
+        charge.daysRemaining
+      } of ${charge.periodDays} days (${charge.from} to ${charge.to})`,
       // Stamped so this period cannot be pro-rated twice.
       proRataPeriod: charge.to,
       setupFeeCents: chargeOnboarding ? onboardingCents : null,
@@ -482,10 +567,21 @@ export function createInvoiceForCompany(
     }
     amountCents = quote.recurringAmountCents + onboardingCents;
     lines = {
-      // A per-terminal plan itemises its arithmetic; a custom plan's agreed
-      // amount is a flat line, so no terminal count or rate is recorded.
-      terminalCount: quote.pricingMode === 'per_terminal' ? quote.licensedTerminalCount : null,
-      terminalPriceCents: quote.pricingMode === 'per_terminal' ? quote.rateCents : null,
+      // A per-terminal plan itemises tills only; a per-store plan itemises its
+      // trading stores and its ADDITIONAL tills (the licensed total stays in
+      // `terminal_count`, so pro-rata baselines read from one column), with both
+      // rates snapshotted; a custom plan's agreed amount is a flat line, so no
+      // quantities or rates are recorded.
+      terminalCount:
+        quote.pricingMode === 'per_terminal' || quote.pricingMode === 'per_store'
+          ? quote.licensedTerminalCount
+          : null,
+      terminalPriceCents:
+        quote.pricingMode === 'per_terminal' || quote.pricingMode === 'per_store'
+          ? quote.rateCents
+          : null,
+      storeCount: quote.pricingMode === 'per_store' ? quote.licensedStoreCount : null,
+      storePriceCents: quote.pricingMode === 'per_store' ? quote.storeRateCents : null,
       // The add-ons billed, with the price agreed for each — evidence for the
       // amount, snapshotted so a later price change cannot rewrite this invoice.
       addonsJson: quote.addons.length > 0 ? JSON.stringify(quote.addons) : null,
@@ -663,7 +759,12 @@ export async function processPaymentAndRenew(input: {
     }
 
     recordAuditLog('office', 'invoice_settled', 'invoice', invoice.id, {
-      after: { amountCents: paymentAmount, purpose: invoice.purpose, periodAdvanced, newPaidThrough },
+      after: {
+        amountCents: paymentAmount,
+        purpose: invoice.purpose,
+        periodAdvanced,
+        newPaidThrough,
+      },
       result: 'ok',
     });
 

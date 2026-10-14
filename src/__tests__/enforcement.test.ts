@@ -227,7 +227,7 @@ describe('multi-store feature gate', () => {
       .set(auth())
       .expect(200);
     expect(detail.body.subscription.addons).toEqual([
-      { key: 'multi_store', label: 'Head Office', cents: 9900 },
+      { key: 'multi_store', label: 'Head Office', cents: 19_900, unitCents: 19_900, quantity: 1 },
     ]);
     // …and the entitlement follows: the licence this client's stores receive
     // carries Head Office because it was BOUGHT, not because the plan bundled it.

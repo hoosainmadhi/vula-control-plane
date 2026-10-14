@@ -132,7 +132,12 @@ const buyAddons = (
 };
 
 const buyHeadOfficeAddon = (companyId: number, plan: PlanRecord | null): void =>
-  buyAddons(companyId, plan, ['multi_store'], 'Multi-store topology purchased the Head Office add-on');
+  buyAddons(
+    companyId,
+    plan,
+    ['multi_store'],
+    'Multi-store topology purchased the Head Office add-on',
+  );
 
 // --- Nested onboarding payloads -------------------------------------------------
 
@@ -168,7 +173,10 @@ const validateNestedStore = async (
   entry: unknown,
   fallback: { name: string; slug: string; baseUrl: string; adminEmail?: string },
 ): Promise<NestedStore> => {
-  if (entry !== undefined && (typeof entry !== 'object' || entry === null || Array.isArray(entry))) {
+  if (
+    entry !== undefined &&
+    (typeof entry !== 'object' || entry === null || Array.isArray(entry))
+  ) {
     throw new ValidationError('each entry in stores must be an object');
   }
   const e = (entry ?? {}) as Record<string, unknown>;
@@ -194,14 +202,19 @@ const validateNestedStore = async (
         ? terminalCount
         : requireInt(e, 'licensedTerminalCount', { min: 0, max: 5000 });
   const name = e.name === undefined ? fallback.name : requireString(e, 'name');
-  const slug = e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
+  const slug =
+    e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
   const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
   const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
 
   if (suppliedUrl) {
     const check = await assertManagedEndpoint(baseUrl, 'store', { allowUnreachable: true });
     if (!check.ok) {
-      throw new HttpError(check.status, check.error ?? `${baseUrl} is not a usable store URL`, check.code);
+      throw new HttpError(
+        check.status,
+        check.error ?? `${baseUrl} is not a usable store URL`,
+        check.code,
+      );
     }
   }
   return {
@@ -220,20 +233,28 @@ const validateNestedHeadOffice = async (
   entry: unknown,
   fallback: { name: string; slug: string; baseUrl: string; adminEmail?: string },
 ): Promise<{ name: string; slug: string; baseUrl: string; adminEmail?: string }> => {
-  if (entry !== undefined && (typeof entry !== 'object' || entry === null || Array.isArray(entry))) {
+  if (
+    entry !== undefined &&
+    (typeof entry !== 'object' || entry === null || Array.isArray(entry))
+  ) {
     throw new ValidationError('headOffice must be an object');
   }
   const e = (entry ?? {}) as Record<string, unknown>;
   const suppliedUrl = e.baseUrl !== undefined && e.baseUrl !== null && e.baseUrl !== '';
   const name = e.name === undefined ? fallback.name : requireString(e, 'name');
-  const slug = e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
+  const slug =
+    e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
   const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
   const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
 
   if (suppliedUrl) {
     const check = await assertManagedEndpoint(baseUrl, 'head-office', { allowUnreachable: true });
     if (!check.ok) {
-      throw new HttpError(check.status, check.error ?? `${baseUrl} is not a usable Head Office URL`, check.code);
+      throw new HttpError(
+        check.status,
+        check.error ?? `${baseUrl} is not a usable Head Office URL`,
+        check.code,
+      );
     }
   }
   return { name, slug, baseUrl, ...(adminEmail ? { adminEmail } : {}) };
@@ -408,13 +429,16 @@ clientsRouter.get(
         planId: company.plan_id,
         pricingMode: quote.pricingMode,
         rateCents: quote.rateCents,
+        storeRateCents: quote.storeRateCents,
+        licensedStoreCount: quote.licensedStoreCount,
+        additionalTerminalCount: quote.additionalTerminalCount,
         billingPeriod: quote.billingPeriod,
         licensedTerminalCount: quote.licensedTerminalCount,
         allocatedTerminals: sum.allocatedTerminalCount,
         unallocatedTerminals: sum.unallocatedTerminalCount,
         recurringAmountCents: quote.recurringAmountCents,
-    addons: quote.addons,
-    addonsCents: quote.addonsCents,
+        addons: quote.addons,
+        addonsCents: quote.addonsCents,
         initialInvoiceTotalCents: quote.initialInvoiceTotalCents,
         setupFeeCents: quote.setupFeeCents,
         setupFeeStatus: quote.setupFeeStatus,
@@ -519,7 +543,9 @@ clientsRouter.put(
       body.setupFeeCents !== undefined ? Number(body.setupFeeCents) : undefined;
     if (
       requestedSetupFee !== undefined &&
-      (!Number.isInteger(requestedSetupFee) || requestedSetupFee < 0 || requestedSetupFee > 5_000_000)
+      (!Number.isInteger(requestedSetupFee) ||
+        requestedSetupFee < 0 ||
+        requestedSetupFee > 5_000_000)
     ) {
       throw new HttpError(400, 'setupFeeCents must be whole cents between 0 and 5 000 000');
     }
@@ -611,7 +637,7 @@ clientsRouter.put(
             company.id,
             effectivePlan,
             'office',
-            'Recorded the plan terms before stating the client\'s onboarding charge',
+            "Recorded the plan terms before stating the client's onboarding charge",
           );
         }
         setSubscriptionSetupFee(company.id, requestedSetupFee);
@@ -759,6 +785,7 @@ clientsRouter.post(
       planCode: plan.code,
       pricingMode: plan.pricing_mode,
       rateCents: plan.terminal_price_cents,
+      storePriceCents: plan.store_price_cents,
       customAmountCents: plan.custom_amount_cents,
       recurringAmountCents: after.recurringAmountCents,
       previousRecurringAmountCents: before.recurringAmountCents,
@@ -925,12 +952,7 @@ clientsRouter.post(
     // prices (2026-10-10). Bought before any store exists, so the licences that
     // follow carry them.
     const onboardingPlan = planId ? getPlanById(planId) : null;
-    buyAddons(
-      company.id,
-      onboardingPlan,
-      requestedAddons ?? [],
-      'Add-ons purchased at onboarding',
-    );
+    buyAddons(company.id, onboardingPlan, requestedAddons ?? [], 'Add-ons purchased at onboarding');
     // A multi-store client has a Head Office, so it holds that add-on whether or
     // not the operator ticked it — the topology needs the capability.
     if (deploymentType === 'multi_store') {

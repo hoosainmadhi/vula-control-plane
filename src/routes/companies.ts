@@ -82,10 +82,15 @@ export interface PlanOut {
   features: string[];
   /** Monthly price per paid add-on on this plan, `{ multi_store: 9900, … }`. */
   featurePrices: Record<string, number>;
-  /** `per_terminal` bills rate × licensed terminals; `custom` is negotiated. */
+  /** `per_terminal` bills rate × licensed terminals; `per_store` bills
+   *  store rate × trading stores + additional-till rate × the rest; `custom`
+   *  is negotiated. */
   pricingMode: PlanPricingMode;
-  /** Rate per licensed terminal per billing period (0 on a custom plan). */
+  /** Rate per licensed terminal per billing period (0 on a custom plan). On a
+   *  `per_store` plan: the ADDITIONAL-till rate. */
   terminalPriceCents: number;
+  /** A `per_store` plan's rate per trading store, its first till included. */
+  storePriceCents: number;
   /**
    * A `custom` plan's agreed charge per billing period. 0 means "negotiated per
    * client" — the control plane then refuses to invoice without an explicit amount.
@@ -105,10 +110,17 @@ export interface SubscriptionOut {
   unallocatedTerminals: number;
   /** null when the plan is custom-priced or absent — never a guessed figure. */
   recurringAmountCents: number | null;
-  /** The paid add-ons held, with the price agreed for each. */
-  addons: Array<{ key: string; label: string; cents: number }>;
+  /** The paid add-ons held, priced for the stores they cover. */
+  addons: Array<{ key: string; label: string; cents: number; unitCents: number; quantity: number }>;
   addonsCents: number;
+  /** The per-till rate in force (on a per_store deal: the additional-till rate). */
   rateCents: number;
+  /** The per-store rate in force (0 unless the plan prices per store). */
+  storeRateCents: number;
+  /** The trading stores the client runs — what a per_store bill counts. */
+  licensedStoreCount: number;
+  /** Tills beyond the stores' included first ones (0 unless per_store). */
+  additionalTerminalCount: number;
   setupFeeCents: number;
   setupFeeStatus: SetupFeeStatus;
   /** The charge still to be raised (0 once invoiced, paid or waived). */
@@ -157,6 +169,7 @@ const planToOut = (plan: PlanRecord): PlanOut => ({
   featurePrices: planFeaturePrices(plan),
   pricingMode: plan.pricing_mode,
   terminalPriceCents: plan.terminal_price_cents,
+  storePriceCents: plan.store_price_cents,
   customAmountCents: plan.custom_amount_cents,
   setupFeeCents: plan.setup_fee_cents,
   billingPeriod: plan.billing_period,
@@ -182,6 +195,7 @@ export const recordAgreedPricing = (
   setSubscriptionPricing(companyId, {
     pricingMode: plan.pricing_mode,
     rateCents: plan.terminal_price_cents,
+    storeRateCents: plan.store_price_cents,
     customAmountCents: plan.custom_amount_cents,
     setupFeeCents: plan.setup_fee_cents,
     billingPeriod: plan.billing_period,
@@ -229,6 +243,9 @@ const companyToOut = (company: CompanyRecord): CompanyOut => {
       addons: quote.addons,
       addonsCents: quote.addonsCents,
       rateCents: quote.rateCents,
+      storeRateCents: quote.storeRateCents,
+      licensedStoreCount: quote.licensedStoreCount,
+      additionalTerminalCount: quote.additionalTerminalCount,
       setupFeeCents: quote.setupFeeCents,
       setupFeeStatus: quote.setupFeeStatus,
       setupFeeDueCents: quote.setupFeeDueCents,
@@ -288,7 +305,8 @@ const pricingModeOf = (value: unknown, fallback: PlanPricingMode): PlanPricingMo
 /**
  * The pricing fields as they will stand after the write, validated as a set:
  * a per-terminal plan must carry a rate above zero (a rate of 0 would bill
- * nothing while claiming to be a rate), and `custom` plans carry no rate.
+ * nothing while claiming to be a rate), a per-store plan the same for its store
+ * rate, and `custom` plans carry no rate.
  */
 const resolvePlanPricing = (
   body: Record<string, unknown>,
@@ -296,31 +314,45 @@ const resolvePlanPricing = (
 ): {
   pricingMode: PlanPricingMode;
   terminalPriceCents: number;
+  storePriceCents: number;
   customAmountCents: number;
-  setupFeeCents: number;
+  /** Undefined on a create that states none — the office figure then applies. */
+  setupFeeCents?: number;
 } => {
   const pricingMode = pricingModeOf(body['pricingMode'], existing?.pricing_mode ?? 'per_terminal');
   const terminalPriceCents =
     body['terminalPriceCents'] !== undefined
       ? moneyCents(body['terminalPriceCents'], 'terminalPriceCents')
       : (existing?.terminal_price_cents ?? 0);
+  const storePriceCents =
+    body['storePriceCents'] !== undefined
+      ? moneyCents(body['storePriceCents'], 'storePriceCents')
+      : (existing?.store_price_cents ?? 0);
   const customAmountCents =
     body['customAmountCents'] !== undefined
       ? moneyCents(body['customAmountCents'], 'customAmountCents')
       : (existing?.custom_amount_cents ?? 0);
+  // Absent on a CREATE (not zero): `createPlan` then starts from the office's
+  // self figure, so a plan nobody priced carries the configured onboarding rather
+  // than a silent R0 (2026-10-14). On an edit, absent means "keep what it has".
   const setupFeeCents =
     body['setupFeeCents'] !== undefined
       ? moneyCents(body['setupFeeCents'], 'setupFeeCents')
-      : (existing?.setup_fee_cents ?? 0);
+      : existing?.setup_fee_cents;
 
   if (pricingMode === 'per_terminal' && terminalPriceCents <= 0) {
     throw new ValidationError(
       'A per-terminal plan needs a price above zero — set the rate per licensed terminal, or switch the plan to custom pricing.',
     );
   }
-  // Both figures are stored whichever mode is active (so toggling the mode never
-  // loses a value); only the one the mode names is ever read or billed.
-  return { pricingMode, terminalPriceCents, customAmountCents, setupFeeCents };
+  if (pricingMode === 'per_store' && storePriceCents <= 0) {
+    throw new ValidationError(
+      'A per-store plan needs a price above zero — set the rate per trading store (the first till is included in it), or switch the plan to custom pricing.',
+    );
+  }
+  // All figures are stored whichever mode is active (so toggling the mode never
+  // loses a value); only the ones the mode names are ever read or billed.
+  return { pricingMode, terminalPriceCents, storePriceCents, customAmountCents, setupFeeCents };
 };
 
 const periodOf = (value: unknown, fallback: PlanPeriod): PlanPeriod => {
@@ -389,6 +421,7 @@ plansRouter.post(
           featurePrices,
           pricingMode: pricing.pricingMode,
           terminalPriceCents: pricing.terminalPriceCents,
+          storePriceCents: pricing.storePriceCents,
           customAmountCents: pricing.customAmountCents,
           setupFeeCents: pricing.setupFeeCents,
           billingPeriod,
@@ -460,7 +493,9 @@ plansRouter.put(
     });
 
     // When plan features or limits change, auto-push renewed licences to all active companies on this plan
-    const subscribedCompanies = listCompanies().filter((c) => c.plan_id === id && c.status === 'active');
+    const subscribedCompanies = listCompanies().filter(
+      (c) => c.plan_id === id && c.status === 'active',
+    );
     for (const company of subscribedCompanies) {
       try {
         await pushLicencesForCompany(company.id);
@@ -685,9 +720,7 @@ companiesRouter.put(
     const planPrices = planFeaturePrices(planAtRequest);
     const requestedFeatures =
       body.features !== undefined
-        ? validateFeatureKeys(body.features).filter((key) =>
-            PRICED_FEATURE_KEYS.includes(key),
-          )
+        ? validateFeatureKeys(body.features).filter((key) => PRICED_FEATURE_KEYS.includes(key))
         : undefined;
     if (requestedFeatures !== undefined) {
       const notPriced = requestedFeatures.filter((key) => !(key in planPrices));
@@ -762,7 +795,7 @@ companiesRouter.put(
         setSubscriptionAddons(company.id, requestedFeatures, nextPrices);
         recordAuditLog('office', 'subscription_addons_set', 'company', company.id, {
           after: { features: requestedFeatures, prices: nextPrices },
-          reason: 'Changed the client\'s paid add-ons',
+          reason: "Changed the client's paid add-ons",
         });
       }
 

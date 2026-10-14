@@ -8,8 +8,12 @@ export type StoreVertical =
 
 export type PlanPeriod = 'monthly' | 'annual' | 'once-off';
 
-/** How a plan charges: a rate per licensed terminal, or a negotiated deal. */
-export type PricingMode = 'per_terminal' | 'custom';
+/**
+ * How a plan charges: a rate per licensed terminal, a rate per trading store
+ * (its first till included, 2026-10-14) plus a rate per additional till, or a
+ * negotiated deal.
+ */
+export type PricingMode = 'per_terminal' | 'per_store' | 'custom';
 
 export interface Plan {
   id: number;
@@ -24,8 +28,11 @@ export interface Plan {
   /** Monthly price per paid add-on on this plan, `{ multi_store: 9900, … }`. */
   featurePrices: Record<string, number>;
   pricingMode: PricingMode;
-  /** Rate per licensed terminal per billing period (0 on a custom plan). */
+  /** Rate per licensed terminal per billing period (0 on a custom plan). On a
+   *  per-store plan this is the ADDITIONAL-till rate. */
   terminalPriceCents: number;
+  /** A per-store plan's rate per trading store, its first till included. */
+  storePriceCents: number;
   /**
    * A custom plan's agreed charge per billing period. 0 means "negotiated per
    * client": invoices then need an explicit amount.
@@ -48,10 +55,26 @@ export interface Subscription {
   unallocatedTerminals: number;
   /** null when the plan is custom-priced (or absent) — never a guessed figure. */
   recurringAmountCents: number | null;
-  /** The paid add-ons this client holds, with the price agreed for each. */
-  addons: Array<{ key: string; label: string; cents: number }>;
+  /** The paid add-ons this client holds, priced for the stores they cover. */
+  addons: Array<{
+    key: string;
+    label: string;
+    /** The line total: `unitCents × quantity`. */
+    cents: number;
+    /** The agreed-or-plan price for ONE store (one panel, for Head Office). */
+    unitCents?: number;
+    /** The stores the add-on is charged for (1 for Head Office). */
+    quantity?: number;
+  }>;
   addonsCents: number;
+  /** The per-till rate in force; on a per-store plan, the additional-till rate. */
   rateCents: number;
+  /** The per-store rate in force (0 unless the plan prices per store). */
+  storeRateCents?: number;
+  /** The trading stores the client runs — what a per-store bill counts. */
+  licensedStoreCount?: number;
+  /** Tills beyond the stores' included first ones (0 unless per_store). */
+  additionalTerminalCount?: number;
   setupFeeCents: number;
   setupFeeStatus: SetupFeeStatus;
   /** The once-off charge still to be raised (0 once invoiced, paid or waived). */
@@ -292,8 +315,13 @@ export interface Invoice {
   amountCents: number;
   /** Licensed terminals on the recurring line; null on a manually-priced invoice. */
   terminalCount: number | null;
-  /** The per-terminal rate when the invoice was raised (a snapshot). */
+  /** The per-terminal rate when the invoice was raised (a snapshot). On a
+   *  per-store invoice: the ADDITIONAL-till rate. */
   terminalPriceCents: number | null;
+  /** Trading stores on a per-store recurring line; null on other invoices. */
+  storeCount: number | null;
+  /** The per-store rate when the invoice was raised (a snapshot). */
+  storePriceCents: number | null;
   /** Once-off onboarding charge when this invoice carried it. */
   setupFeeCents: number | null;
   /** What the charge is for — required on a hand-priced invoice. */
@@ -334,6 +362,9 @@ export interface OfficeSettings {
   vatRegNo: string;
   /** The rate its VAT-inclusive prices are quoted at. */
   vatRate: number;
+  /** The once-off onboarding pair — the one home for both figures (2026-10-14). */
+  setupFeeSelfCents: number;
+  setupFeeAssistedCents: number;
   smtpHost: string;
   smtpPort: number;
   smtpUser: string;
@@ -453,9 +484,11 @@ export interface ClientSubscriptionDetail {
   /** Where the price comes from: the client's agreement, or the plan in force. */
   pricingSource: 'agreed' | 'plan' | 'none';
   pricedAt: string | null;
-  /** Extra terminals bought mid-period, and what the rest of the period is worth. */
+  /** The increase bought mid-period, and what the rest of the period is worth. */
   midPeriodCharge: {
     extraTerminals: number;
+    /** Extra stores bought mid-period (0 on a per-terminal deal). */
+    extraStores: number;
     amountCents: number;
     daysRemaining: number;
     periodDays: number;

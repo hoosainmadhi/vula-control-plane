@@ -101,6 +101,24 @@ export const PRICED_FEATURE_KEYS: readonly string[] = [
 ];
 
 /**
+ * The add-ons charged once per COMPANY, not once per trading store (owner,
+ * 2026-10-14). There are two, and each is one thing for the whole business:
+ *
+ *  - `multi_store` (Head Office) — there is one panel for the company.
+ *  - `ecommerce_bridges` — one storefront connection to WooCommerce/Shopify. The
+ *    online shop is the business's, not a shop's; a second branch does not open a
+ *    second storefront, so charging per store would bill the same integration
+ *    again for every branch.
+ *
+ * Every other paid add-on is a per-store capability — each register either takes
+ * lay-bys, holds credit accounts, asks the assistant or imports invoices, so the
+ * bill follows the stores that have it. `addonQuantity` (services/pricing.ts) is
+ * the one place this is applied; the marketing page's `data-per` attributes are
+ * its display copy.
+ */
+export const PER_COMPANY_FEATURE_KEYS: readonly string[] = ['multi_store', 'ecommerce_bridges'];
+
+/**
  * The add-ons a suspended account may not use.
  *
  * They are sold per month, so suspension has to switch them off: the deployment
@@ -123,13 +141,15 @@ export const FEATURE_LABELS: Record<string, string> = Object.fromEntries(
 );
 
 /**
- * What each add-on costs per month, from the approved pricing page
- * (2026-10-10): R99 for Head Office, AI Copilot and Upload invoice; R49 for
- * Credit accounts, Lay-by and E-commerce. Seeded onto every plan; the Plans page
- * edits them, and a client's agreed price is snapshotted when they buy.
+ * What each add-on costs per month (2026-10-10; Head Office repriced
+ * 2026-10-14): R199 for Head Office — hosting and software, the same as a store
+ * — R99 for AI Copilot and Upload invoice; R49 for Credit accounts, Lay-by and
+ * E-commerce. Seeded onto every plan; the Plans page edits them, and a client's
+ * agreed price is snapshotted when they buy, so this change re-prices nobody
+ * already holding it.
  */
 export const DEFAULT_FEATURE_PRICES: Record<string, number> = {
-  multi_store: 9900,
+  multi_store: 19_900,
   ai_assistant: 9900,
   invoice_import: 9900,
   customer_credit: 4900,

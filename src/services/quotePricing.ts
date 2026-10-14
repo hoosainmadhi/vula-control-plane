@@ -1,4 +1,6 @@
 import { DEFAULT_FEATURE_PRICES, FEATURE_LABELS, PRICED_FEATURE_KEYS } from './features.js';
+import { addonQuantity } from './pricing.js';
+import { getRawOfficeSettings } from './officeSettings.js';
 import { ValidationError } from '../utils/validate.js';
 import { vatPortionCents } from '../utils/money.js';
 
@@ -6,17 +8,39 @@ import { vatPortionCents } from '../utils/money.js';
  * The list price a quote is built from — the marketing page's own figures, held
  * here so the desk prices a configuration for itself instead of trusting the
  * numbers on the wire (the page's `data-cents` are this list's display copy).
- * P4 of the quote-desk plan serves them from the control plane; until then, a
+ * P5 of the quote-desk plan serves them from the control plane; until then, a
  * page that disagrees with this file is flagged on the record rather than
  * believed (2026-10-13).
+ *
+ * Since 2026-10-14 the list prices per STORE (its first till included) plus a
+ * rate per ADDITIONAL till — `199 + 49 × (tills − stores)`, i.e.
+ * `49 × tills + 150 × stores`. The owner settled the additional-till rate at R49
+ * the same day: the price of the seat sits level with the per-store add-ons
+ * (lay-by, credit, e-commerce), and a store's first till stays inside its rate.
  */
-export const LIST_TILL_RATE_CENTS = 9900; // R99,00 per till per month
+export const LIST_STORE_RATE_CENTS = 19_900; // R199,00 per store per month — first till included
+export const LIST_TILL_RATE_CENTS = 4_900; // R49,00 per ADDITIONAL till per month
 
-/** The once-off onboarding charge, by setup variant (the page's advertised pair). */
+/** The once-off onboarding charge, by setup variant — the PUBLISHED pair, used
+ *  as the fallback when Office Settings has not been read (and by tests). */
 export const SETUP_FEE_CENTS = { assisted: 500000, self: 150000 } as const;
 export type QuoteSetupVariant = keyof typeof SETUP_FEE_CENTS;
 
 export const QUOTE_SETUP_VARIANTS = Object.keys(SETUP_FEE_CENTS) as QuoteSetupVariant[];
+
+/**
+ * The onboarding pair as the office has it configured — the one home for both
+ * figures (owner, 2026-10-14). The desk, the onboarding form and the marketing
+ * page all read these, so changing a price is a Settings edit rather than a
+ * deploy; `SETUP_FEE_CENTS` above is only the fallback default.
+ */
+export const officeSetupFees = (): Record<QuoteSetupVariant, number> => {
+  const row = getRawOfficeSettings();
+  return {
+    assisted: row.setup_fee_assisted_cents ?? SETUP_FEE_CENTS.assisted,
+    self: row.setup_fee_self_cents ?? SETUP_FEE_CENTS.self,
+  };
+};
 
 export interface QuoteConfig {
   stores: number;
@@ -96,11 +120,16 @@ export const resolveQuoteConfig = (config: QuoteConfig): QuoteConfig =>
     : config;
 
 /**
- * Prices a configuration from the list: tills × rate, the chargeable add-ons in
- * the vocabulary's own order, and the setup variant — VAT-inclusive, with the
- * tax broken out at the office's rate (the same arithmetic as an invoice).
+ * Prices a configuration from the list: the stores (first till of each included
+ * in its rate) plus the tills beyond them, the chargeable add-ons in the
+ * vocabulary's own order, and the setup variant — VAT-inclusive, with the tax
+ * broken out at the office's rate (the same arithmetic as an invoice).
  */
-export const priceQuote = (configInput: QuoteConfig, vatRate: number): PricedQuote => {
+export const priceQuote = (
+  configInput: QuoteConfig,
+  vatRate: number,
+  setupFees: Record<QuoteSetupVariant, number> = officeSetupFees(),
+): PricedQuote => {
   const config = resolveQuoteConfig(configInput);
   validateQuoteConfig(config);
   const split = config.tillsSplit && config.tillsSplit.length > 0 ? config.tillsSplit : undefined;
@@ -110,35 +139,58 @@ export const priceQuote = (configInput: QuoteConfig, vatRate: number): PricedQuo
       : null;
   // The split, spelled out: "(3 × 1)" left the reader guessing which number was
   // which — and it is how a per-store count once got read as a total. A real
-  // per-store list is stated as itself; a single-store quote needs no split.
-  const detail =
+  // per-store list is stated as itself; a single-store quote needs no split. The
+  // store count is already in the label, so the detail never repeats it.
+  const storesDetail =
     config.stores === 1
       ? ''
       : split
         ? `(${split.join(' + ')} across ${config.stores} stores)`
         : perStore === null
-          ? `(across ${config.stores} stores)`
-          : `(${perStore} till${perStore === 1 ? '' : 's'} per store × ${config.stores} stores)`;
+          ? ''
+          : `(${perStore} till${perStore === 1 ? '' : 's'} per store)`;
+  const additional = config.tills - config.stores;
+  // The extra tills each store carries, from the real split: the same list, one
+  // till removed per store, is what the additional-till rate is charged on.
+  const additionalDetail = split
+    ? `(${split.map((tills) => Math.max(0, tills - 1)).join(' + ')} extra across ${config.stores} stores)`
+    : '';
   const lines: QuotePricedLine[] = [
     {
-      label: `${config.tills} till${config.tills === 1 ? '' : 's'}`,
-      detail,
-      cents: config.tills * LIST_TILL_RATE_CENTS,
-      rateCents: LIST_TILL_RATE_CENTS,
-      quantity: config.tills,
+      label: `${config.stores} store${config.stores === 1 ? '' : 's'}`,
+      detail: ['first till included', storesDetail].filter(Boolean).join(' · '),
+      cents: config.stores * LIST_STORE_RATE_CENTS,
+      rateCents: LIST_STORE_RATE_CENTS,
+      quantity: config.stores,
       ...(split ? { split } : {}),
     },
   ];
+  if (additional > 0) {
+    lines.push({
+      label: `${additional} additional till${additional === 1 ? '' : 's'}`,
+      detail: additionalDetail,
+      cents: additional * LIST_TILL_RATE_CENTS,
+      rateCents: LIST_TILL_RATE_CENTS,
+      quantity: additional,
+    });
+  }
   for (const key of PRICED_FEATURE_KEYS) {
     if (!config.addons.includes(key)) continue;
+    // An add-on is a per-store capability (owner, 2026-10-14) — Head Office the
+    // one exception: there is one panel for the whole company. The rate and
+    // quantity travel so the document reads "Lay-by · 3 × R 49,00".
+    const unitCents = DEFAULT_FEATURE_PRICES[key] ?? 0;
+    const quantity = addonQuantity(key, config.stores);
     lines.push({
       label: FEATURE_LABELS[key] ?? key,
       detail: '',
-      cents: DEFAULT_FEATURE_PRICES[key] ?? 0,
+      cents: unitCents * quantity,
+      rateCents: unitCents,
+      quantity,
     });
   }
   const monthlyTotalCents = lines.reduce((sum, line) => sum + line.cents, 0);
-  const setupCents = SETUP_FEE_CENTS[config.setup];
+  const setupCents = setupFees[config.setup] ?? SETUP_FEE_CENTS[config.setup];
   return {
     lines,
     monthlyTotalCents,

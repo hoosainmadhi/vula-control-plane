@@ -1,10 +1,6 @@
 import request from 'supertest';
 import { createApp } from '../app.js';
-import {
-  getPanelById,
-  getStoreBySlug,
-  resetRegistryDb,
-} from '../config/registryDb.js';
+import { getPanelById, getStoreBySlug, resetRegistryDb } from '../config/registryDb.js';
 import { jsonResponse, loginAsOffice, authHeader } from './helpers.js';
 
 /**
@@ -162,12 +158,20 @@ const createMultiStoreClient = async (
   return { jobId: res.body.job.id, clientId: res.body.client.id };
 };
 
-type StepOut = { step_key: string; status: string; error: string | null; warnings_json: string | null };
+type StepOut = {
+  step_key: string;
+  status: string;
+  error: string | null;
+  warnings_json: string | null;
+};
 
 const clientDetail = async (clientId: number) => {
   const res = await request(app).get(`/api/clients/${clientId}`).set(auth()).expect(200);
   return res.body as {
-    latestDeployment: { job: { id: number; status: string; error: string | null }; steps: StepOut[] } | null;
+    latestDeployment: {
+      job: { id: number; status: string; error: string | null };
+      steps: StepOut[];
+    } | null;
     headOffice: { id: number } | null;
   };
 };
@@ -233,10 +237,7 @@ describe('deployment job truthfulness', () => {
 
     // Retry the job: existing resources are never re-created.
     const jobId = detail.latestDeployment!.job.id;
-    await request(app)
-      .post(`/api/clients/jobs/${jobId}/retry`)
-      .set(auth())
-      .expect(200);
+    await request(app).post(`/api/clients/jobs/${jobId}/retry`).set(auth()).expect(200);
 
     expect(coolifyCreateCalls).toBe(2);
     expect(getStoreBySlug('urban-threads-sandton')?.coolify_uuid).toBe(store?.coolify_uuid);
@@ -311,9 +312,9 @@ describe('deployment job truthfulness', () => {
         String((init as { body?: string })?.body ?? '').includes('headOffice'),
     );
     expect(configureCall).toBeDefined();
-    const configureBody = JSON.parse(
-      (configureCall![1] as { body: string }).body,
-    ) as { headOffice: { enabled: boolean; url: string; token: string } };
+    const configureBody = JSON.parse((configureCall![1] as { body: string }).body) as {
+      headOffice: { enabled: boolean; url: string; token: string };
+    };
     expect(configureBody.headOffice.enabled).toBe(true);
     expect(configureBody.headOffice.url).toBe('http://localhost:3260');
     expect(configureBody.headOffice.token).toBe(store?.head_office_token);
@@ -373,7 +374,12 @@ describe('the intended store list reaches the Head Office', () => {
     expect(String(push!.url)).toContain('/api/internal/branches/roster');
 
     const sent = JSON.parse(push!.body) as {
-      branches: Array<{ slug: string; name: string; baseUrl: string; headOfficeToken: string | null }>;
+      branches: Array<{
+        slug: string;
+        name: string;
+        baseUrl: string;
+        headOfficeToken: string | null;
+      }>;
     };
     // The whole intended set, not just the branch that was just wired — that is
     // what lets the panel offer the ones the merchant has not registered.
@@ -447,14 +453,22 @@ describe('add-ons bought at onboarding', () => {
       addons: Array<{ key: string; cents: number }>;
       recurringAmountCents: number;
       rateCents: number;
+      storeRateCents: number;
     };
     expect(subscription.addons).toEqual([
-      { key: 'ecommerce_bridges', label: 'E-commerce', cents: 4900 },
-      { key: 'invoice_import', label: 'Upload invoice (AI assisted)', cents: 9900 },
+      { key: 'ecommerce_bridges', label: 'E-commerce', cents: 4900, unitCents: 4900, quantity: 1 },
+      {
+        key: 'invoice_import',
+        label: 'Upload invoice (AI assisted)',
+        cents: 9900,
+        unitCents: 9900,
+        quantity: 1,
+      },
     ]);
-    // Two tills at the plan's rate, plus the two add-ons.
+    // One trading store (its first till included) + one additional till at the
+    // plan's rates, plus the two add-ons.
     expect(subscription.recurringAmountCents).toBe(
-      2 * subscription.rateCents + 4900 + 9900,
+      subscription.storeRateCents + subscription.rateCents + 4900 + 9900,
     );
   });
 
@@ -483,7 +497,12 @@ describe('add-ons bought at onboarding', () => {
         deploymentType: 'single_store',
         features: ['layby'],
         stores: [
-          { name: 'Shop', slug: 'no-addon-co-1', baseUrl: 'http://localhost:3245', terminalCount: 1 },
+          {
+            name: 'Shop',
+            slug: 'no-addon-co-1',
+            baseUrl: 'http://localhost:3245',
+            terminalCount: 1,
+          },
         ],
       })
       .expect(400);

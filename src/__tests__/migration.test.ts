@@ -104,10 +104,7 @@ describe('plans billing_period migration', () => {
   const originalDbPath = env.dbPath;
 
   beforeEach(() => {
-    dbFile = path.join(
-      fs.mkdtempSync(path.join(os.tmpdir(), 'vula-cp-migration-')),
-      'registry.db',
-    );
+    dbFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'vula-cp-migration-')), 'registry.db');
 
     // Build a database as it existed before 'once-off', with real data in it.
     const seed = new Database(dbFile);
@@ -140,7 +137,9 @@ describe('plans billing_period migration', () => {
       )
       .run();
     seed
-      .prepare("INSERT INTO stores (id, slug, name, base_url, control_plane_token) VALUES (1,'branch','Branch','http://localhost:3246','t')")
+      .prepare(
+        "INSERT INTO stores (id, slug, name, base_url, control_plane_token) VALUES (1,'branch','Branch','http://localhost:3246','t')",
+      )
       .run();
     seed.close();
 
@@ -156,9 +155,11 @@ describe('plans billing_period migration', () => {
   });
 
   const ddlFor = (name: string): string =>
-    ((getRegistryDb()
-      .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?")
-      .get(name) as { sql: string } | undefined)?.sql ?? '');
+    (
+      getRegistryDb()
+        .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?")
+        .get(name) as { sql: string } | undefined
+    )?.sql ?? '';
 
   it('widens the CHECK to accept once-off', () => {
     getRegistryDb();
@@ -209,12 +210,12 @@ describe('plans billing_period migration', () => {
 
     // The pre-existing tiers keep their ids and periods. (Seeding legitimately adds
     // the tiers my fixture omitted, so only these two rows are asserted.)
-    const starter = db.prepare("SELECT name, billing_period FROM plans WHERE code = 'vula-start'").get() as
-      | { name: string; billing_period: string }
-      | undefined;
-    const multi = db.prepare("SELECT name, billing_period FROM plans WHERE code = 'vula-network'").get() as
-      | { name: string; billing_period: string }
-      | undefined;
+    const starter = db
+      .prepare("SELECT name, billing_period FROM plans WHERE code = 'vula-start'")
+      .get() as { name: string; billing_period: string } | undefined;
+    const multi = db
+      .prepare("SELECT name, billing_period FROM plans WHERE code = 'vula-network'")
+      .get() as { name: string; billing_period: string } | undefined;
     expect(starter).toEqual({ name: 'Starter', billing_period: 'monthly' });
     expect(multi).toEqual({ name: 'Multi-Store', billing_period: 'annual' });
 
@@ -462,7 +463,9 @@ describe('licensed-terminal pricing migration', () => {
   it('reshapes plans without ever reinterpreting a flat price as a rate', () => {
     const db = getRegistryDb();
     const rows = db
-      .prepare('SELECT code, pricing_mode, terminal_price_cents, setup_fee_cents FROM plans ORDER BY id')
+      .prepare(
+        'SELECT code, pricing_mode, terminal_price_cents, setup_fee_cents FROM plans ORDER BY id',
+      )
       .all() as Array<{
       code: string;
       pricing_mode: string;
@@ -482,16 +485,28 @@ describe('licensed-terminal pricing migration', () => {
     // Enterprise was already custom.
     expect(rows.find((r) => r.code === 'vula-market-enterprise')!.pricing_mode).toBe('custom');
 
-    // The never-priced seeded tier picks up the recommended model.
+    // The never-priced seeded tier picks up the recommended model (per store
+    // since 2026-10-14: R199 per trading store, first till included, + R49 per
+    // additional till).
     const starter = rows.find((r) => r.code === 'vula-start')!;
-    expect(starter.pricing_mode).toBe('per_terminal');
-    expect(starter.terminal_price_cents).toBe(15_000);
-    expect(starter.setup_fee_cents).toBe(300_000);
+    expect(starter.pricing_mode).toBe('per_store');
+    expect(starter.terminal_price_cents).toBe(4_900);
+    expect(starter.setup_fee_cents).toBe(150_000);
+
+    // The mode's CHECK was widened by the same boot, so the rebuilt table can
+    // actually hold what the migration wrote.
+    const starterRow = db
+      .prepare('SELECT store_price_cents FROM plans WHERE code = ?')
+      .get('vula-start') as { store_price_cents: number };
+    expect(starterRow.store_price_cents).toBe(19_900);
+    expect(() =>
+      db.prepare("UPDATE plans SET pricing_mode = 'bogus' WHERE code = 'vula-start'").run(),
+    ).toThrow(/CHECK/);
 
     // The dead bundled columns are gone.
-    const planColumns = (db.prepare('PRAGMA table_info(plans)').all() as Array<{ name: string }>).map(
-      (c) => c.name,
-    );
+    const planColumns = (
+      db.prepare('PRAGMA table_info(plans)').all() as Array<{ name: string }>
+    ).map((c) => c.name);
     expect(planColumns).not.toContain('price_cents');
     expect(planColumns).not.toContain('included_terminals');
     expect(planColumns).not.toContain('extra_terminal_price_cents');
@@ -500,15 +515,18 @@ describe('licensed-terminal pricing migration', () => {
 
   it('backfills a subscription and per-store allocations from what the stores already run', () => {
     const db = getRegistryDb();
-    const sub = db
-      .prepare('SELECT * FROM company_subscriptions WHERE company_id = 1')
-      .get() as { licensed_terminal_count: number; setup_fee_status: string };
+    const sub = db.prepare('SELECT * FROM company_subscriptions WHERE company_id = 1').get() as {
+      licensed_terminal_count: number;
+      setup_fee_status: string;
+    };
     expect(sub.licensed_terminal_count).toBe(9);
     // The superseded `onboarding_fee_charged = 1` meant the charge was settled.
     expect(sub.setup_fee_status).toBe('paid');
 
     const allocations = db
-      .prepare('SELECT store_id, licensed_terminal_count FROM store_terminal_licences ORDER BY store_id')
+      .prepare(
+        'SELECT store_id, licensed_terminal_count FROM store_terminal_licences ORDER BY store_id',
+      )
       .all() as Array<{ store_id: number; licensed_terminal_count: number }>;
     expect(allocations).toEqual([
       { store_id: 1, licensed_terminal_count: 3 },
@@ -528,9 +546,9 @@ describe('licensed-terminal pricing migration', () => {
 
   it('carries invoice lines over: onboarding keeps its meaning, dead columns go', () => {
     const db = getRegistryDb();
-    const columns = (db.prepare('PRAGMA table_info(invoices)').all() as Array<{ name: string }>).map(
-      (c) => c.name,
-    );
+    const columns = (
+      db.prepare('PRAGMA table_info(invoices)').all() as Array<{ name: string }>
+    ).map((c) => c.name);
     expect(columns).toContain('terminal_price_cents');
     expect(columns).toContain('setup_fee_cents');
     expect(columns).not.toContain('base_amount_cents');
@@ -539,7 +557,9 @@ describe('licensed-terminal pricing migration', () => {
     expect(columns).not.toContain('additional_store_onboarding_cents');
 
     const invoice = db
-      .prepare('SELECT amount_cents, terminal_count, terminal_price_cents, setup_fee_cents FROM invoices WHERE id = 1')
+      .prepare(
+        'SELECT amount_cents, terminal_count, terminal_price_cents, setup_fee_cents FROM invoices WHERE id = 1',
+      )
       .get() as {
       amount_cents: number;
       terminal_count: number;
@@ -567,13 +587,13 @@ describe('licensed-terminal pricing migration', () => {
 
     expect(
       getRegistryDb()
-        .prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE name LIKE '%_rebuild%' OR name LIKE '%plans_old%'")
+        .prepare(
+          "SELECT COUNT(*) AS c FROM sqlite_master WHERE name LIKE '%_rebuild%' OR name LIKE '%plans_old%'",
+        )
         .get(),
     ).toEqual({ c: 0 });
     expect(
-      getRegistryDb()
-        .prepare('SELECT COUNT(*) AS c FROM store_terminal_licences')
-        .get(),
+      getRegistryDb().prepare('SELECT COUNT(*) AS c FROM store_terminal_licences').get(),
     ).toEqual({ c: 3 });
     expect((getRegistryDb().prepare('PRAGMA foreign_key_check').all() as unknown[]).length).toBe(0);
   });
@@ -653,7 +673,9 @@ describe('invoices.addons_json migration', () => {
     const seed = new Database(dbFile);
     seed.exec(OLD_INVOICES);
     seed
-      .prepare("INSERT INTO companies (id, name, slug) VALUES (1, 'Urban Threads Retail Group', 'urban-threads')")
+      .prepare(
+        "INSERT INTO companies (id, name, slug) VALUES (1, 'Urban Threads Retail Group', 'urban-threads')",
+      )
       .run();
     // A document raised before the add-on model existed.
     seed
@@ -685,11 +707,17 @@ describe('invoices.addons_json migration', () => {
     const addonsJson = JSON.stringify([
       { key: 'invoice_import', label: 'Upload invoice (AI assisted)', cents: 9900 },
     ]);
-    const invoice = createInvoice(1, 134400, new Date('2026-10-31T00:00:00.000Z'), 'VULA-2026-000002', {
-      addonsJson,
-      purpose: 'renewal',
-      description: 'Subscription renewal',
-    });
+    const invoice = createInvoice(
+      1,
+      134400,
+      new Date('2026-10-31T00:00:00.000Z'),
+      'VULA-2026-000002',
+      {
+        addonsJson,
+        purpose: 'renewal',
+        description: 'Subscription renewal',
+      },
+    );
 
     const stored = getInvoiceById(invoice.id);
     expect(stored?.addons_json).toBe(addonsJson);
@@ -700,6 +728,143 @@ describe('invoices.addons_json migration', () => {
     expect(old?.addons_json).toBeNull();
     expect(old?.amount_cents).toBe(134400);
     expect(old?.purpose).toBe('renewal');
+  });
+});
+
+/**
+ * The per-store mode on a registry that predates it (2026-10-14).
+ *
+ * The widening of `plans.pricing_mode`'s CHECK is guarded by reading the stored
+ * DDL — and the guard was `ddl.includes('per_store')`, which the column name
+ * `max_terminals_per_store` satisfies on its own. So on every registry that
+ * already had the modern plans table, the guard was always true, the rebuild was
+ * skipped and the CHECK stayed at `('per_terminal', 'custom')`: `per_store` was
+ * silently unwritable (found on the live dev registry when the office tried to
+ * move a plan to the new model; a fresh database never sees it, because its DDL
+ * starts widened, and the older fixtures above had their plans table rebuilt by
+ * `restructurePlans` before this migration ever ran).
+ *
+ * The fixture below is the shape that was uncovered: the CURRENT table, with the
+ * OLD two-mode CHECK.
+ */
+describe('plans pricing_mode migration (per_store)', () => {
+  let dbFile: string;
+  const originalDbPath = env.dbPath;
+
+  /** plans as it was BEFORE the per-store mode: current shape, two-mode CHECK. */
+  const OLD_PLANS = `
+    CREATE TABLE plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      max_stores INTEGER NOT NULL DEFAULT 1,
+      max_terminals_per_store INTEGER NOT NULL DEFAULT 2,
+      features_json TEXT NOT NULL DEFAULT '[]',
+      feature_prices_json TEXT NOT NULL DEFAULT '{}',
+      pricing_mode TEXT NOT NULL DEFAULT 'per_terminal'
+        CHECK (pricing_mode IN ('per_terminal', 'custom')),
+      terminal_price_cents INTEGER NOT NULL DEFAULT 0 CHECK (terminal_price_cents >= 0),
+      store_price_cents INTEGER NOT NULL DEFAULT 0 CHECK (store_price_cents >= 0),
+      custom_amount_cents INTEGER NOT NULL DEFAULT 0 CHECK (custom_amount_cents >= 0),
+      setup_fee_cents INTEGER NOT NULL DEFAULT 0 CHECK (setup_fee_cents >= 0),
+      billing_period TEXT NOT NULL DEFAULT 'monthly'
+        CHECK (billing_period IN ('monthly', 'annual', 'once-off')),
+      is_active INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE companies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL UNIQUE,
+      billing_email TEXT NOT NULL DEFAULT '',
+      plan_id INTEGER REFERENCES plans(id) ON DELETE SET NULL,
+      paid_through TEXT,
+      trial_ends_at TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `;
+
+  beforeAll(() => {
+    dbFile = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'vula-plans-persore-')),
+      'registry.db',
+    );
+    const seed = new Database(dbFile);
+    seed.exec(OLD_PLANS);
+    // A priced plan (the office's own rate) and an unpriced seeded tier.
+    seed
+      .prepare(
+        `INSERT INTO plans (id, code, name, max_stores, max_terminals_per_store,
+                            features_json, feature_prices_json, pricing_mode,
+                            terminal_price_cents, setup_fee_cents, sort_order)
+         VALUES (1, 'vula-standard', 'Vula Standard', 1, 2, '[]', '{}', 'per_terminal', 4900, 150000, 1),
+                (2, 'vula-grow', 'Vula Grow', 1, 3, '[]', '{}', 'per_terminal', 12000, 300000, 2)`,
+      )
+      .run();
+    seed.close();
+
+    (env as { dbPath: string }).dbPath = dbFile;
+    resetRegistryDb();
+  });
+
+  afterEach(() => {
+    resetRegistryDb();
+    (env as { dbPath: string }).dbPath = originalDbPath;
+  });
+
+  afterAll(() => {
+    fs.rmSync(path.dirname(dbFile), { recursive: true, force: true });
+  });
+
+  /**
+   * Point the singleton at the fixture and boot it. Called by each test rather
+   * than only in `beforeAll`: `afterEach` restores the real path, so a later
+   * test would otherwise read the developer's own registry — and booting again
+   * also proves the migration is idempotent on an already-widened table.
+   */
+  const bootFixture = (): Database.Database => {
+    (env as { dbPath: string }).dbPath = dbFile;
+    resetRegistryDb();
+    return getRegistryDb();
+  };
+
+  it('widens the CHECK so a per-store plan can actually be written', () => {
+    const db = bootFixture();
+    const ddl = (
+      db.prepare("SELECT sql FROM sqlite_master WHERE name = 'plans'").get() as { sql: string }
+    ).sql;
+    const modes = /pricing_mode\s+IN\s*\(([^)]*)\)/i.exec(ddl)?.[1] ?? '';
+    expect(modes).toContain("'per_store'");
+
+    // The proof the guard was the problem: the mode must be writable.
+    db.prepare(
+      "UPDATE plans SET pricing_mode = 'per_store', store_price_cents = 19900 WHERE code = 'vula-standard'",
+    ).run();
+    const row = db
+      .prepare('SELECT pricing_mode, terminal_price_cents FROM plans WHERE code = ?')
+      .get('vula-standard') as { pricing_mode: string; terminal_price_cents: number };
+    expect(row.pricing_mode).toBe('per_store');
+    // The rebuild carried the prices across — it must not re-price anybody.
+    expect(row.terminal_price_cents).toBe(4900);
+  });
+
+  it('keeps every plan row, its id and its rates through the rebuild', () => {
+    const db = bootFixture();
+    // The boot also seeds the tiers this registry lacked; the fixture's own two
+    // rows must keep their identity and their prices through the rebuild.
+    const rows = db
+      .prepare(
+        `SELECT id, code, terminal_price_cents FROM plans
+          WHERE code IN ('vula-standard', 'vula-grow') ORDER BY id`,
+      )
+      .all() as Array<{ id: number; code: string; terminal_price_cents: number }>;
+    expect(rows.map((r) => r.id)).toEqual([1, 2]);
+    expect(rows[0]).toMatchObject({ code: 'vula-standard', terminal_price_cents: 4900 });
+    expect(rows[1]).toMatchObject({ code: 'vula-grow', terminal_price_cents: 12000 });
   });
 });
 
@@ -761,12 +926,18 @@ describe('licence re-delivery after an entitlement migration', () => {
     resetRegistryDb();
     const db = getRegistryDb();
     expect(
-      (db.prepare('SELECT licence_push_status AS s FROM stores WHERE slug = ?').get('branch') as
-        { s: string }).s,
+      (
+        db.prepare('SELECT licence_push_status AS s FROM stores WHERE slug = ?').get('branch') as {
+          s: string;
+        }
+      ).s,
     ).toBe('pending');
     expect(
-      (db.prepare('SELECT licence_push_status AS s FROM panels WHERE slug = ?').get('client-ho') as
-        { s: string }).s,
+      (
+        db
+          .prepare('SELECT licence_push_status AS s FROM panels WHERE slug = ?')
+          .get('client-ho') as { s: string }
+      ).s,
     ).toBe('pending');
 
     // The sweep delivers both and marks them ok. A second restart must not put
@@ -776,12 +947,18 @@ describe('licence re-delivery after an entitlement migration', () => {
     resetRegistryDb();
     const again = getRegistryDb();
     expect(
-      (again.prepare('SELECT licence_push_status AS s FROM stores WHERE slug = ?').get('branch') as
-        { s: string }).s,
+      (
+        again
+          .prepare('SELECT licence_push_status AS s FROM stores WHERE slug = ?')
+          .get('branch') as { s: string }
+      ).s,
     ).toBe('ok');
     expect(
-      (again.prepare('SELECT licence_push_status AS s FROM panels WHERE slug = ?').get('client-ho') as
-        { s: string }).s,
+      (
+        again
+          .prepare('SELECT licence_push_status AS s FROM panels WHERE slug = ?')
+          .get('client-ho') as { s: string }
+      ).s,
     ).toBe('ok');
   });
 });

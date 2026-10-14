@@ -27,11 +27,20 @@ import { sendQuoteRequest, type QuoteLine } from '../services/quoteMail.js';
 import { createQuote, markQuoteEmailed } from '../config/registryDb.js';
 import { getRawOfficeSettings } from '../services/officeSettings.js';
 import {
+  LIST_STORE_RATE_CENTS,
+  LIST_TILL_RATE_CENTS,
   parseAddonKeys,
   parseMoneyCents,
   parseSetupVariant,
+  officeSetupFees,
   priceQuote,
 } from '../services/quotePricing.js';
+import {
+  DEFAULT_FEATURE_PRICES,
+  FEATURE_LABELS,
+  PER_COMPANY_FEATURE_KEYS,
+  PRICED_FEATURE_KEYS,
+} from '../services/features.js';
 import { logger } from '../utils/logger.js';
 
 export const publicRouter = Router();
@@ -72,6 +81,52 @@ publicRouter.use((req: Request, res: Response, next: NextFunction) => {
   }
   next();
 });
+
+/**
+ * The published price list, so the marketing page stops carrying its own copy
+ * (S5 of the 2026-10-14 pricing plan). One source — `services/quotePricing.ts` —
+ * feeds the desk, this endpoint and (through the page's hydration) the site.
+ *
+ * Read-only and cheap: no rate limiter of its own beyond the router's CORS
+ * handling, since it is a handful of constants and the page fetches it on load.
+ *
+ * Registered AFTER the CORS middleware on purpose: Express answers routes in
+ * registration order, so a route declared above it would reply without the
+ * `Access-Control-Allow-Origin` header — the browser then refuses to read the
+ * response and the page silently keeps its static figures (found 2026-10-14).
+ */
+publicRouter.get(
+  '/pricing',
+  asyncHandler(async (_req, res) => {
+    res.json({
+      pricing: {
+        currency: 'ZAR',
+        vatInclusive: true,
+        /** Per trading store per month; its first till is included in this rate. */
+        storeCents: LIST_STORE_RATE_CENTS,
+        /** Per ADDITIONAL till per month (everything past each store's first). */
+        additionalTillCents: LIST_TILL_RATE_CENTS,
+        /**
+         * The paid add-ons, priced as the list holds them. `perStore: false` marks
+         * the per-company add-ons — Head Office (one panel) and the e-commerce
+         * bridges (one storefront for the business); the rest are charged once per
+         * store.
+         */
+        addons: Object.fromEntries(
+          PRICED_FEATURE_KEYS.map((key) => [
+            key,
+            {
+              label: FEATURE_LABELS[key] ?? key,
+              cents: DEFAULT_FEATURE_PRICES[key] ?? 0,
+              perStore: !PER_COMPANY_FEATURE_KEYS.includes(key),
+            },
+          ]),
+        ),
+        setup: officeSetupFees(),
+      },
+    });
+  }),
+);
 
 const money = (raw: unknown): string => {
   const value = typeof raw === 'string' ? raw.trim() : '';

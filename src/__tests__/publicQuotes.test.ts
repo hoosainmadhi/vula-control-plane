@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { createApp } from '../app.js';
+import { beforeEach, describe, expect, it } from '@jest/globals';
 import { resetRegistryDb } from '../config/registryDb.js';
 import { jsonResponse } from './helpers.js';
 import { resetRateLimits } from '../utils/rateLimiter.js';
@@ -13,6 +14,48 @@ const app = createApp();
  * who the mail can be sent to, what happens to a bot, and what a refusal looks
  * like to the page.
  */
+
+/**
+ * The published list the marketing page hydrates from. Two things are under test
+ * beyond the figures: the response must carry the CORS header (the page is a
+ * different origin — a route registered ABOVE the router's CORS middleware
+ * replies without it, the browser refuses to read the response, and the page
+ * silently keeps its static defaults; found 2026-10-14 on the live dev server),
+ * and the figures must be the office's own settings.
+ */
+describe('GET /api/public/pricing', () => {
+  beforeEach(() => {
+    resetRegistryDb();
+  });
+
+  it('serves the list with the CORS header the site needs', async () => {
+    const res = await request(app)
+      .get('/api/public/pricing')
+      .set('Origin', 'http://localhost:3232')
+      .expect(200);
+    expect(res.headers['access-control-allow-origin']).toBe('http://localhost:3232');
+    expect(res.body.pricing).toMatchObject({
+      currency: 'ZAR',
+      vatInclusive: true,
+      storeCents: 19_900,
+      additionalTillCents: 4_900,
+      setup: { assisted: 500_000, self: 150_000 },
+    });
+    const addons = res.body.pricing.addons as Record<string, { cents: number; perStore: boolean }>;
+    expect(addons['multi_store']).toEqual({ label: 'Head Office', cents: 19_900, perStore: false });
+    expect(addons['layby']).toMatchObject({ cents: 4_900, perStore: true });
+    // E-commerce is one storefront for the business, like Head Office (2026-10-14).
+    expect(addons['ecommerce_bridges']).toMatchObject({ cents: 4_900, perStore: false });
+  });
+
+  it('serves the office’s own figures, not constants', async () => {
+    // The pair has one home; the page follows it without a deploy.
+    const { updateOfficeSettings } = await import('../config/registryDb.js');
+    updateOfficeSettings({ setup_fee_self_cents: 200_000, setup_fee_assisted_cents: 750_000 });
+    const res = await request(app).get('/api/public/pricing').expect(200);
+    expect(res.body.pricing.setup).toEqual({ assisted: 750_000, self: 200_000 });
+  });
+});
 
 interface FetchInit {
   method?: string;

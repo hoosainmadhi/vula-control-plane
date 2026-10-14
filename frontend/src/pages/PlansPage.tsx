@@ -4,8 +4,17 @@ import { api, ApiError } from '../api';
 import ErrorBox from '../components/ErrorBox';
 import Modal from '../components/Modal';
 import Spinner from '../components/Spinner';
+import { officeSetupFees } from '../lib/officeFees';
 import type { Plan, PlanPeriod, PricingMode } from '../types';
-import { rand, toCents, toRands, perTerminalLabel, PERIOD_LABEL } from '../lib/money';
+import {
+  ASSISTED_SETUP_CENTS,
+  rand,
+  toCents,
+  toRands,
+  perTerminalLabel,
+  perStoreLabel,
+  PERIOD_LABEL,
+} from '../lib/money';
 
 /**
  * The plan catalogue.
@@ -42,7 +51,12 @@ const ADDON_ORDER = [
 
 /** A plan's monthly price at its own ceiling, and with every add-on it sells. */
 const planTotals = (plan: Plan): { atCeilingCents: number; addonsCents: number } => ({
-  atCeilingCents: plan.terminalPriceCents * plan.maxTerminalsPerStore,
+  // Both models count the same caps: per-till multiplies the tills; per-store
+  // charges the store (first till in) plus the tills beyond it.
+  atCeilingCents:
+    plan.pricingMode === 'per_store'
+      ? plan.storePriceCents + Math.max(0, plan.maxTerminalsPerStore - 1) * plan.terminalPriceCents
+      : plan.terminalPriceCents * plan.maxTerminalsPerStore,
   addonsCents: Object.values(plan.featurePrices ?? {}).reduce((sum, c) => sum + c, 0),
 });
 
@@ -53,12 +67,13 @@ const planTotals = (plan: Plan): { atCeilingCents: number; addonsCents: number }
  */
 function PlanTotalLine({ plan }: { plan: Plan }) {
   const { atCeilingCents, addonsCents } = planTotals(plan);
-  if (plan.pricingMode !== 'per_terminal') return null;
+  if (plan.pricingMode !== 'per_terminal' && plan.pricingMode !== 'per_store') return null;
   return (
     <div className="text-[11px] text-slate-500">
-      <span className="font-semibold">{rand(atCeilingCents)}</span> / month at{' '}
-      {plan.maxTerminalsPerStore}
-      {plan.maxTerminalsPerStore === 1 ? ' terminal' : ' terminals'} per store
+      <span className="font-semibold">{rand(atCeilingCents)}</span> / month{' '}
+      {plan.pricingMode === 'per_store' ? 'per store ' : ''}at {plan.maxTerminalsPerStore}
+      {plan.maxTerminalsPerStore === 1 ? ' terminal' : ' terminals'}
+      {plan.pricingMode === 'per_store' ? ' (first included)' : ' per store'}
       {addonsCents > 0 ? (
         <>
           <br />+ <span className="font-semibold">{rand(addonsCents)}</span> if every add-on is
@@ -105,8 +120,11 @@ export default function PlansPage() {
   const [formTerminals, setFormTerminals] = useState('10');
   const [formPricingMode, setFormPricingMode] = useState<PricingMode>('per_terminal');
   const [formTerminalPrice, setFormTerminalPrice] = useState('500.00');
+  const [formStorePrice, setFormStorePrice] = useState('199.00');
   const [formCustomAmount, setFormCustomAmount] = useState('0.00');
   const [formSetupFee, setFormSetupFee] = useState('5000.00');
+  /** The office's assisted-setup figure, for the field's hint (Settings owns it). */
+  const [assistedSetupCents, setAssistedSetupCents] = useState(ASSISTED_SETUP_CENTS);
   /** What each add-on costs on this plan, in rands as typed. */
   const [formFeaturePrices, setFormFeaturePrices] = useState<Record<string, string>>({});
   /**
@@ -124,9 +142,9 @@ export default function PlansPage() {
     try {
       const [planList, vocabulary] = await Promise.all([
         api<Plan[]>('/plans'),
-        api<
-          Array<{ key: string; label: string; soldMonthly: boolean; monthlyPriceCents: number }>
-        >('/plans/features').catch(() => []),
+        api<Array<{ key: string; label: string; soldMonthly: boolean; monthlyPriceCents: number }>>(
+          '/plans/features',
+        ).catch(() => []),
       ]);
       setPlans(planList);
       setFeatureCatalogue(vocabulary);
@@ -136,6 +154,10 @@ export default function PlansPage() {
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    void officeSetupFees().then((fees) => setAssistedSetupCents(fees.assisted));
   }, []);
 
   useEffect(() => {
@@ -181,13 +203,12 @@ export default function PlansPage() {
     setFormTerminals(String(plan.maxTerminalsPerStore));
     setFormPricingMode(plan.pricingMode);
     setFormTerminalPrice(toRands(plan.terminalPriceCents));
+    setFormStorePrice(toRands(plan.storePriceCents));
     setFormCustomAmount(toRands(plan.customAmountCents));
     setFormSetupFee(toRands(plan.setupFeeCents));
     setFormFeatures(plan.features);
     setFormFeaturePrices(
-      Object.fromEntries(
-        soldKeys.map((key) => [key, toRands(plan.featurePrices?.[key] ?? 0)]),
-      ),
+      Object.fromEntries(soldKeys.map((key) => [key, toRands(plan.featurePrices?.[key] ?? 0)])),
     );
     setFormError(null);
   };
@@ -198,7 +219,9 @@ export default function PlansPage() {
     if (!codeEdited) setFormCode(slugify(value));
   };
 
-  const priceMissing = formPricingMode === 'per_terminal' && toCents(formTerminalPrice) <= 0;
+  const priceMissing =
+    (formPricingMode === 'per_terminal' && toCents(formTerminalPrice) <= 0) ||
+    (formPricingMode === 'per_store' && toCents(formStorePrice) <= 0);
   /** A custom plan may bill from its agreed amount, or wait for a per-invoice figure. */
   const customAmount = toCents(formCustomAmount);
 
@@ -212,6 +235,7 @@ export default function PlansPage() {
       maxTerminalsPerStore: Number(formTerminals),
       pricingMode: formPricingMode,
       terminalPriceCents: toCents(formTerminalPrice),
+      storePriceCents: toCents(formStorePrice),
       customAmountCents: toCents(formCustomAmount),
       setupFeeCents: toCents(formSetupFee),
       billingPeriod: formPeriod,
@@ -219,7 +243,8 @@ export default function PlansPage() {
       // Priced only for the features this plan does NOT include: a price on an
       // included feature would be a price nobody ever pays.
       featurePrices: Object.fromEntries(
-        soldKeys.filter((key) => !formFeatures.includes(key))
+        soldKeys
+          .filter((key) => !formFeatures.includes(key))
           .map((key) => [key, toCents(formFeaturePrices[key] ?? '0')] as const)
           .filter(([, cents]) => cents > 0),
       ),
@@ -267,7 +292,10 @@ export default function PlansPage() {
     return (
       <div className="space-y-4">
         <ErrorBox message={loadError} />
-        <button onClick={() => void load()} className="text-sm font-semibold text-brand-600 hover:underline">
+        <button
+          onClick={() => void load()}
+          className="text-sm font-semibold text-brand-600 hover:underline"
+        >
           Retry
         </button>
       </div>
@@ -278,10 +306,11 @@ export default function PlansPage() {
     <div className="space-y-5">
       <div className="flex items-start justify-between gap-3">
         <p className="max-w-3xl text-sm text-slate-500">
-          A plan sets what a client may buy: how many stores, how many licensed terminals per store, and
-          which features its applications unlock. Each licensed terminal recurs at the plan's rate, plus a
-          once-off onboarding charge on the client's first invoice. Invoices are raised from the licensed
-          quantity — never from configured tills, claimed devices or open sessions.
+          A plan sets what a client may buy: how many stores, how many licensed terminals per store,
+          and which features its applications unlock. Each licensed terminal recurs at the plan's
+          rate, plus a once-off onboarding charge on the client's first invoice. Invoices are raised
+          from the licensed quantity — never from configured tills, claimed devices or open
+          sessions.
         </p>
         <button
           onClick={openCreate}
@@ -369,7 +398,13 @@ export default function PlansPage() {
                   ) : (
                     <>
                       <div className="font-mono text-xs font-semibold text-slate-800">
-                        {perTerminalLabel(plan.terminalPriceCents, plan.billingPeriod)}
+                        {plan.pricingMode === 'per_store'
+                          ? perStoreLabel(
+                              plan.storePriceCents,
+                              plan.terminalPriceCents,
+                              plan.billingPeriod,
+                            )
+                          : perTerminalLabel(plan.terminalPriceCents, plan.billingPeriod)}
                       </div>
                       <div className="text-[11px] text-slate-400">
                         {plan.setupFeeCents > 0
@@ -462,7 +497,10 @@ export default function PlansPage() {
             <section className="space-y-3">
               <h3 className="text-xs font-bold uppercase tracking-wide text-slate-400">Plan</h3>
               <div>
-                <label htmlFor="plan-name" className="mb-1 block text-sm font-semibold text-slate-700">
+                <label
+                  htmlFor="plan-name"
+                  className="mb-1 block text-sm font-semibold text-slate-700"
+                >
                   Plan name
                 </label>
                 <input
@@ -474,7 +512,10 @@ export default function PlansPage() {
                 />
               </div>
               <div>
-                <label htmlFor="plan-code" className="mb-1 block text-sm font-semibold text-slate-700">
+                <label
+                  htmlFor="plan-code"
+                  className="mb-1 block text-sm font-semibold text-slate-700"
+                >
                   Plan code
                 </label>
                 <input
@@ -556,6 +597,7 @@ export default function PlansPage() {
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 focus:border-brand-500 focus:outline-none"
                   >
                     <option value="per_terminal">Per licensed terminal</option>
+                    <option value="per_store">Per trading store (+ per extra till)</option>
                     <option value="custom">Custom (negotiated)</option>
                   </select>
                 </div>
@@ -577,7 +619,40 @@ export default function PlansPage() {
                     <option value="once-off">Once-off (perpetual licence)</option>
                   </select>
                 </div>
-                {formPricingMode === 'per_terminal' ? (
+                {formPricingMode === 'per_store' ? (
+                  <>
+                    <div>
+                      <label
+                        htmlFor="plan-store-price"
+                        className="mb-1 block whitespace-nowrap text-sm font-semibold text-slate-700"
+                      >
+                        Price / store (R) — first till in
+                      </label>
+                      <input
+                        id="plan-store-price"
+                        value={formStorePrice}
+                        onChange={(e) => setFormStorePrice(e.target.value)}
+                        placeholder="199.00"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono focus:border-brand-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="plan-terminal-price"
+                        className="mb-1 block whitespace-nowrap text-sm font-semibold text-slate-700"
+                      >
+                        Price / extra till (R)
+                      </label>
+                      <input
+                        id="plan-terminal-price"
+                        value={formTerminalPrice}
+                        onChange={(e) => setFormTerminalPrice(e.target.value)}
+                        placeholder="99.00"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono focus:border-brand-500 focus:outline-none"
+                      />
+                    </div>
+                  </>
+                ) : formPricingMode === 'per_terminal' ? (
                   <div>
                     <label
                       htmlFor="plan-terminal-price"
@@ -615,23 +690,63 @@ export default function PlansPage() {
                     htmlFor="plan-onboarding"
                     className="mb-1 block whitespace-nowrap text-sm font-semibold text-slate-700"
                   >
-                    Onboarding (R)
+                    Onboarding — self setup (R)
                   </label>
                   <input
                     id="plan-onboarding"
                     value={formSetupFee}
                     onChange={(e) => setFormSetupFee(e.target.value)}
-                    placeholder="10000.00"
+                    placeholder="1500.00"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono focus:border-brand-500 focus:outline-none"
                   />
+                  <p className="mt-1 text-[11px] text-slate-400">
+                    The once-off this tier charges for <strong>self</strong> setup. Assisted setup
+                    is {rand(assistedSetupCents)} and is chosen per client when they are onboarded —
+                    set it in Settings.
+                  </p>
                 </div>
               </div>
 
               <div className="space-y-1 rounded-lg bg-slate-50 px-3 py-2 text-xs">
-                {formPricingMode === 'per_terminal' ? (
+                {formPricingMode === 'per_store' ? (
                   priceMissing ? (
                     <p className="font-semibold text-rose-600">
-                      Set a price per licensed terminal to see what this plan is worth at full capacity.
+                      Set a price per store to see what this plan is worth at full capacity.
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-slate-500">
+                        Per store at full capacity:{' '}
+                        <span className="font-semibold text-slate-700">
+                          {rand(toCents(formStorePrice))} +{' '}
+                          {Math.max(0, (Number(formTerminals) || 0) - 1)} ×{' '}
+                          {rand(toCents(formTerminalPrice))} ={' '}
+                          {rand(
+                            toCents(formStorePrice) +
+                              Math.max(0, (Number(formTerminals) || 0) - 1) *
+                                toCents(formTerminalPrice),
+                          )}{' '}
+                          {PERIOD_LABEL[formPeriod]}
+                        </span>
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        Every store's first till is included in its rate; only the tills beyond it
+                        are charged. The invoice bills the client's trading stores and licensed
+                        tills, not these caps.
+                      </p>
+                      <p className="text-slate-500">
+                        Once-off onboarding ={' '}
+                        <span className="font-semibold text-slate-700">
+                          {toCents(formSetupFee) > 0 ? rand(toCents(formSetupFee)) : 'none'}
+                        </span>
+                      </p>
+                    </>
+                  )
+                ) : formPricingMode === 'per_terminal' ? (
+                  priceMissing ? (
+                    <p className="font-semibold text-rose-600">
+                      Set a price per licensed terminal to see what this plan is worth at full
+                      capacity.
                     </p>
                   ) : (
                     <>
@@ -649,8 +764,8 @@ export default function PlansPage() {
                         </span>
                       </p>
                       <p className="text-[11px] text-slate-400">
-                        Stores × terminals per store × rate. A quote for the plan's ceiling — the invoice
-                        bills the client's licensed terminals × this rate, not these caps.
+                        Stores × terminals per store × rate. A quote for the plan's ceiling — the
+                        invoice bills the client's licensed terminals × this rate, not these caps.
                       </p>
                       <p className="text-slate-500">
                         Once-off onboarding ={' '}
@@ -685,9 +800,7 @@ export default function PlansPage() {
             </section>
 
             <section className="space-y-2 border-t border-slate-100 pt-4">
-              <h3 className="text-xs font-bold uppercase tracking-wide text-slate-400">
-                Included
-              </h3>
+              <h3 className="text-xs font-bold uppercase tracking-wide text-slate-400">Included</h3>
               <p className="text-xs text-slate-400">
                 {formFeatures.length > 0 ? (
                   <>
@@ -719,29 +832,31 @@ export default function PlansPage() {
                   not priced here. A blank or zero price means this plan does not sell it.
                 </p>
                 <div className="mt-2 space-y-2">
-                  {soldKeys.filter((key) => !formFeatures.includes(key)).map((key) => (
-                    <div key={key} className="flex items-center justify-between gap-3">
-                      <label
-                        htmlFor={`plan-addon-${key}`}
-                        className="text-sm text-slate-700"
-                        title={featureLabels[key] ?? key}
-                      >
-                        {featureLabels[key] ?? key}
-                      </label>
-                      <span className="flex items-center gap-2">
-                        <span className="text-xs text-slate-400">R</span>
-                        <input
-                          id={`plan-addon-${key}`}
-                          value={formFeaturePrices[key] ?? ''}
-                          onChange={(e) =>
-                            setFormFeaturePrices((prev) => ({ ...prev, [key]: e.target.value }))
-                          }
-                          placeholder="0.00"
-                          className="w-24 rounded-lg border border-slate-300 px-2 py-1.5 text-right font-mono text-sm focus:border-brand-500 focus:outline-none"
-                        />
-                      </span>
-                    </div>
-                  ))}
+                  {soldKeys
+                    .filter((key) => !formFeatures.includes(key))
+                    .map((key) => (
+                      <div key={key} className="flex items-center justify-between gap-3">
+                        <label
+                          htmlFor={`plan-addon-${key}`}
+                          className="text-sm text-slate-700"
+                          title={featureLabels[key] ?? key}
+                        >
+                          {featureLabels[key] ?? key}
+                        </label>
+                        <span className="flex items-center gap-2">
+                          <span className="text-xs text-slate-400">R</span>
+                          <input
+                            id={`plan-addon-${key}`}
+                            value={formFeaturePrices[key] ?? ''}
+                            onChange={(e) =>
+                              setFormFeaturePrices((prev) => ({ ...prev, [key]: e.target.value }))
+                            }
+                            placeholder="0.00"
+                            className="w-24 rounded-lg border border-slate-300 px-2 py-1.5 text-right font-mono text-sm focus:border-brand-500 focus:outline-none"
+                          />
+                        </span>
+                      </div>
+                    ))}
                   {soldKeys.every((key) => formFeatures.includes(key)) ? (
                     <p className="text-xs text-slate-400">
                       This plan includes every paid feature, so there is nothing to sell on top.
@@ -750,7 +865,6 @@ export default function PlansPage() {
                 </div>
               </div>
             </section>
-
           </div>
         </Modal>
       )}
