@@ -306,6 +306,18 @@ const QUOTES_DDL = `
     tills                   INTEGER NOT NULL,
     addons_json             TEXT    NOT NULL DEFAULT '[]',
     setup_variant           TEXT    NOT NULL,
+    -- The quote's own price basis and any rate the office overrode (2026-10-14).
+    -- The quote is the promise, so it may depart from the published list: priced
+    -- per till (an older agreement, honoured for a prospect who enquired before
+    -- the list moved per store) or with an overridden unit rate. NULL or an empty
+    -- map means "the published list"; a departing line records the list figure
+    -- beside its own (listCents) so the desk can show what was given up.
+    pricing_basis           TEXT    NOT NULL DEFAULT 'store'
+      CHECK (pricing_basis IN ('store', 'till')),
+    store_rate_cents        INTEGER,
+    till_rate_cents         INTEGER,
+    setup_fee_override_cents INTEGER,
+    addon_rates_json        TEXT    NOT NULL DEFAULT '{}',
     -- Where the quote came from: the website's builder, or the office's own draft.
     source                  TEXT    NOT NULL DEFAULT 'website'
       CHECK (source IN ('website','office')),
@@ -935,6 +947,14 @@ export const getRegistryDb = (): Database.Database => {
     }
   };
   addQuoteColumn('source', "source TEXT NOT NULL DEFAULT 'website'");
+  // The quote's own price basis and rate overrides (2026-10-14). A registry that
+  // predates them quotes from the published list, which is exactly what the
+  // defaults say.
+  addQuoteColumn('pricing_basis', "pricing_basis TEXT NOT NULL DEFAULT 'store'");
+  addQuoteColumn('store_rate_cents', 'store_rate_cents INTEGER');
+  addQuoteColumn('till_rate_cents', 'till_rate_cents INTEGER');
+  addQuoteColumn('setup_fee_override_cents', 'setup_fee_override_cents INTEGER');
+  addQuoteColumn('addon_rates_json', "addon_rates_json TEXT NOT NULL DEFAULT '{}'");
 
   migratePlanCustomAmount(db);
   restructurePlans(db);
@@ -2964,6 +2984,15 @@ export interface QuoteRecord {
   /** The add-on keys quoted, as JSON `string[]`. */
   addons_json: string;
   setup_variant: string;
+  /** 'store' (the published list) or 'till' (the older per-till agreement). */
+  pricing_basis: 'store' | 'till';
+  /** The rates this quote charges; NULL/0 means "the published list". */
+  store_rate_cents: number | null;
+  till_rate_cents: number | null;
+  /** The once-off this quote states over the office's settings pair, when overridden. */
+  setup_fee_override_cents: number | null;
+  /** Per-add-on unit prices overridden on this quote, as JSON `{key: cents}`. */
+  addon_rates_json: string;
   /** What the visitor's page showed, as JSON `[{label,amount}]`. */
   requested_lines_json: string;
   requested_monthly_cents: number | null;
@@ -3003,6 +3032,12 @@ export interface QuoteInput {
   tills: number;
   addons: string[];
   setupVariant: string;
+  /** The quote's own pricing (see the DDL note). Omitted = the published list. */
+  pricingBasis?: 'store' | 'till';
+  storeRateCents?: number | null;
+  tillRateCents?: number | null;
+  setupFeeOverrideCents?: number | null;
+  addonRates?: Record<string, number>;
   requestedLines: Array<{ label: string; amount: string }>;
   requestedMonthlyCents: number | null;
   requestedSetupCents: number | null;
@@ -3014,6 +3049,8 @@ export interface QuoteInput {
     cents: number;
     rateCents?: number;
     quantity?: number;
+    /** The published list's figure for this line, when this one departs from it. */
+    listCents?: number;
   }>;
   monthlyTotalCents: number;
   setupCents: number;
@@ -3037,10 +3074,12 @@ export const createQuote = (input: QuoteInput): QuoteRecord => {
         `INSERT INTO quotes (
            quote_number, source, business, contact_name, email, phone, vertical, note,
            stores, tills, addons_json, setup_variant,
+           pricing_basis, store_rate_cents, till_rate_cents, setup_fee_override_cents,
+           addon_rates_json,
            requested_lines_json, requested_monthly_cents, requested_setup_cents,
            priced_lines_json, monthly_total_cents, setup_cents,
            vat_rate, monthly_vat_cents, setup_vat_cents, drift
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         number,
@@ -3055,6 +3094,11 @@ export const createQuote = (input: QuoteInput): QuoteRecord => {
         input.tills,
         JSON.stringify(input.addons),
         input.setupVariant,
+        input.pricingBasis ?? 'store',
+        input.storeRateCents ?? null,
+        input.tillRateCents ?? null,
+        input.setupFeeOverrideCents ?? null,
+        JSON.stringify(input.addonRates ?? {}),
         JSON.stringify(input.requestedLines),
         input.requestedMonthlyCents,
         input.requestedSetupCents,
@@ -3114,6 +3158,12 @@ export interface QuotePricingEdit {
   tills: number;
   addons: string[];
   setupVariant: string;
+  /** The quote's own pricing (see the DDL note). Omitted = the published list. */
+  pricingBasis?: 'store' | 'till';
+  storeRateCents?: number | null;
+  tillRateCents?: number | null;
+  setupFeeOverrideCents?: number | null;
+  addonRates?: Record<string, number>;
   /** The catalogue's figures — carries `rateCents`/`quantity` on lines that
    *  have a unit rate (the tills line), snapshotted like an invoice's price. */
   pricedLines: Array<{
@@ -3122,6 +3172,8 @@ export interface QuotePricingEdit {
     cents: number;
     rateCents?: number;
     quantity?: number;
+    /** The published list's figure for this line, when this one departs from it. */
+    listCents?: number;
   }>;
   monthlyTotalCents: number;
   setupCents: number;
@@ -3135,6 +3187,8 @@ export const updateQuotePricing = (id: number, edit: QuotePricingEdit): QuoteRec
     .prepare(
       `UPDATE quotes
           SET stores = ?, tills = ?, addons_json = ?, setup_variant = ?,
+              pricing_basis = ?, store_rate_cents = ?, till_rate_cents = ?,
+              setup_fee_override_cents = ?, addon_rates_json = ?,
               priced_lines_json = ?, monthly_total_cents = ?, setup_cents = ?,
               vat_rate = ?, monthly_vat_cents = ?, setup_vat_cents = ?,
               updated_at = datetime('now')
@@ -3145,6 +3199,11 @@ export const updateQuotePricing = (id: number, edit: QuotePricingEdit): QuoteRec
       edit.tills,
       JSON.stringify(edit.addons),
       edit.setupVariant,
+      edit.pricingBasis ?? 'store',
+      edit.storeRateCents ?? null,
+      edit.tillRateCents ?? null,
+      edit.setupFeeOverrideCents ?? null,
+      JSON.stringify(edit.addonRates ?? {}),
       JSON.stringify(edit.pricedLines),
       edit.monthlyTotalCents,
       edit.setupCents,

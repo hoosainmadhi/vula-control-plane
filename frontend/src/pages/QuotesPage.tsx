@@ -6,7 +6,7 @@ import Modal from '../components/Modal';
 import Spinner from '../components/Spinner';
 import StatusBadge from '../components/StatusBadge';
 import { SummaryTile } from '../components/storeUi';
-import { rand } from '../lib/money';
+import { PER_COMPANY_ADDONS, rand, toCents, toRands } from '../lib/money';
 import { fmtAgo, fmtTime } from '../lib/storeVocab';
 import type { Quote } from '../types';
 
@@ -84,6 +84,237 @@ interface PlanOption {
   isActive?: boolean;
 }
 
+/**
+ * The quote's own pricing, as the office types it. Every field is optional: blank
+ * means the published list, and only what is filled in travels — so an off-list
+ * quote carries exactly the departure it was given (2026-10-14).
+ */
+/** The published list's figures, as the desk reads them for its placeholders. */
+interface PublishedList {
+  storeCents: number;
+  tillCents: number;
+  addonCents: Record<string, number>;
+}
+
+interface QuotePricingForm {
+  basis: 'store' | 'till';
+  store: string;
+  till: string;
+  setup: string;
+  addons: Record<string, string>;
+}
+
+const emptyPricingForm = (): QuotePricingForm => ({
+  basis: 'store',
+  store: '',
+  till: '',
+  setup: '',
+  addons: {},
+});
+
+/** What the office typed, as the wire wants it: blank stays blank, "0" is a zero. */
+const centsOrBlank = (value: string): number | null => {
+  const raw = value.trim();
+  if (!raw) return null;
+  const cents = toCents(raw);
+  return Number.isFinite(cents) ? cents : null;
+};
+
+/** True once the form departs from the published list in any way. */
+const formIsOffList = (form: QuotePricingForm): boolean =>
+  form.basis === 'till' ||
+  [form.store, form.till, form.setup, ...Object.values(form.addons)].some(
+    (value) => value.trim() !== '',
+  );
+
+const pricingBody = (form: QuotePricingForm): Record<string, unknown> => {
+  const store = centsOrBlank(form.store);
+  const till = centsOrBlank(form.till);
+  const setup = centsOrBlank(form.setup);
+  const addonRates = Object.fromEntries(
+    Object.entries(form.addons)
+      .map(([key, value]) => [key, centsOrBlank(value)] as const)
+      .filter((entry): entry is readonly [string, number] => entry[1] !== null),
+  );
+  return {
+    pricingBasis: form.basis,
+    ...(store !== null ? { storeRateCents: store } : {}),
+    ...(till !== null ? { tillRateCents: till } : {}),
+    ...(setup !== null ? { setupFeeOverrideCents: setup } : {}),
+    ...(Object.keys(addonRates).length > 0 ? { addonRates } : {}),
+  };
+};
+
+/** The form as an existing quote holds it — what the edit panel opens with. */
+const pricingFormFrom = (quote: Quote): QuotePricingForm => ({
+  basis: quote.pricing.basis,
+  store: quote.pricing.storeRateCents === null ? '' : toRands(quote.pricing.storeRateCents),
+  till: quote.pricing.tillRateCents === null ? '' : toRands(quote.pricing.tillRateCents),
+  setup:
+    quote.pricing.setupFeeOverrideCents === null
+      ? ''
+      : toRands(quote.pricing.setupFeeOverrideCents),
+  addons: Object.fromEntries(
+    Object.entries(quote.pricing.addonRates).map(([key, cents]) => [key, toRands(cents)]),
+  ),
+});
+
+/**
+ * The off-list pricing, behind a deliberate step. The published list is the
+ * desk's default — a quote that departs from it is a concession for ONE
+ * agreement (owner, 2026-10-14: "older terms will be for one customer only"), so
+ * the fields are not sitting on every quote inviting a casual undercut. Opening
+ * the block is the act; the quote then records what it departed from.
+ */
+function OffListPricingToggle({
+  open,
+  offList,
+  onOpen,
+}: {
+  open: boolean;
+  offList: boolean;
+  onOpen: () => void;
+}) {
+  if (open) return null;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2">
+      <span className="text-xs text-slate-500">
+        Prices:{' '}
+        <span className={offList ? 'font-semibold text-sky-700' : 'font-semibold text-slate-700'}>
+          {offList ? 'off the published list (a concession)' : 'the published list'}
+        </span>
+      </span>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-50"
+      >
+        Price off-list — a concession…
+      </button>
+    </div>
+  );
+}
+
+/**
+ * One price the office may override. The placeholder is the published figure, so
+ * a blank field reads as "this is what the list charges" rather than as unknown.
+ */
+function PriceField({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="block text-[11px] font-semibold text-slate-600">{label}</span>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="mt-0.5 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 font-mono text-sm focus:border-brand-500 focus:outline-none"
+      />
+    </label>
+  );
+}
+
+/**
+ * The pricing block the create and edit panels share: the basis the quote charges
+ * on, and whichever rates depart from the published list.
+ */
+function QuotePricingFields({
+  form,
+  list,
+  featureLabels,
+  selected,
+  onChange,
+}: {
+  form: QuotePricingForm;
+  list: PublishedList | null;
+  featureLabels: Record<string, string>;
+  selected: string[];
+  onChange: (next: QuotePricingForm) => void;
+}) {
+  const set = (patch: Partial<QuotePricingForm>): void => onChange({ ...form, ...patch });
+  const basisButton = (basis: 'store' | 'till', label: string) => (
+    <button
+      type="button"
+      onClick={() => set({ basis })}
+      aria-pressed={form.basis === basis}
+      className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+        form.basis === basis
+          ? 'border-brand-500 bg-brand-50 text-brand-700'
+          : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+      }`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs font-bold text-slate-700">Prices</span>
+        <div className="flex gap-2">
+          {basisButton('store', 'Per store (published list)')}
+          {basisButton('till', 'Per till (older terms)')}
+        </div>
+      </div>
+      <div className="mt-2 grid gap-2 sm:grid-cols-3">
+        <PriceField
+          label="Rate / store (R)"
+          value={form.store}
+          placeholder={list ? rand(list.storeCents) : 'blank = list'}
+          onChange={(store) => set({ store })}
+        />
+        <PriceField
+          label={form.basis === 'till' ? 'Rate / till (R)' : 'Rate / extra till (R)'}
+          value={form.till}
+          placeholder={list ? rand(list.tillCents) : 'blank = list'}
+          onChange={(till) => set({ till })}
+        />
+        <PriceField
+          label="Set-up, once off (R)"
+          value={form.setup}
+          placeholder="blank = the office's figure"
+          onChange={(setup) => set({ setup })}
+        />
+      </div>
+      {selected.length > 0 ? (
+        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+          {selected.map((key) => (
+            <PriceField
+              key={key}
+              label={`${featureLabels[key] ?? key} (R${PER_COMPANY_ADDONS.includes(key) ? '' : ' / store'})`}
+              value={form.addons[key] ?? ''}
+              placeholder={list?.addonCents[key] ? rand(list.addonCents[key]) : 'blank = list'}
+              onChange={(value) => set({ addons: { ...form.addons, [key]: value } })}
+            />
+          ))}
+        </div>
+      ) : null}
+      <p className="mt-1.5 text-[11px] text-slate-400">
+        Blank means the published list. Anything typed here is this quote's own price — a concession
+        for one agreement, not a second list: the quote records what it departed from, and the
+        client is billed exactly what the quote says.
+      </p>
+      {formIsOffList(form) ? (
+        <button
+          type="button"
+          onClick={() => onChange(emptyPricingForm())}
+          className="mt-1.5 text-[11px] font-semibold text-slate-500 underline hover:text-slate-700"
+        >
+          Use the published list
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export default function QuotesPage() {
   const [quotes, setQuotes] = useState<Quote[]>([]);
   /** The vocabulary: names, and which features are sold monthly (owner 2026-10-10). */
@@ -122,6 +353,8 @@ export default function QuotesPage() {
   const [createSetup, setCreateSetup] = useState('assisted');
   const [createSplit, setCreateSplit] = useState('');
   const [createAddons, setCreateAddons] = useState<Set<string>>(new Set());
+  const [createPricing, setCreatePricing] = useState<QuotePricingForm>(emptyPricingForm());
+  const [createPricingOpen, setCreatePricingOpen] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
   const [createError, setCreateError] = useState('');
   const [pageNotice, setPageNotice] = useState('');
@@ -142,6 +375,8 @@ export default function QuotesPage() {
   const [editSetup, setEditSetup] = useState('assisted');
   const [editSplit, setEditSplit] = useState('');
   const [editAddons, setEditAddons] = useState<Set<string>>(new Set());
+  const [editPricing, setEditPricing] = useState<QuotePricingForm>(emptyPricingForm());
+  const [editPricingOpen, setEditPricingOpen] = useState(false);
   const [editBusy, setEditBusy] = useState(false);
   const [editError, setEditError] = useState('');
 
@@ -152,20 +387,39 @@ export default function QuotesPage() {
   const [clientPlanId, setClientPlanId] = useState('');
   const [clientTills, setClientTills] = useState('1');
   const [clientBusy, setClientBusy] = useState(false);
+  /** The published list, for the override fields' placeholders. */
+  const [publishedList, setPublishedList] = useState<PublishedList | null>(null);
 
   const load = useCallback(async () => {
     setLoadError('');
     try {
-      const [list, features, clients, planList] = await Promise.all([
+      const [list, features, clients, planList, pricing] = await Promise.all([
         api<{ quotes: Quote[] }>('/quotes'),
         api<VocabularyFeature[]>('/plans/features').catch(() => []),
         api<Array<{ id: number; name: string }>>('/clients').catch(() => []),
         api<PlanOption[]>('/plans').catch(() => []),
+        // The published list, so an override field shows what it departs FROM.
+        api<{
+          pricing: {
+            storeCents: number;
+            additionalTillCents: number;
+            addons: Record<string, { cents: number }>;
+          };
+        }>('/public/pricing').catch(() => null),
       ]);
       setQuotes(list.quotes);
       setVocabulary(features);
       setClientNames(Object.fromEntries(clients.map((c) => [c.id, c.name])));
       setPlans(planList.filter((p) => p.isActive !== false));
+      if (pricing) {
+        setPublishedList({
+          storeCents: pricing.pricing.storeCents,
+          tillCents: pricing.pricing.additionalTillCents,
+          addonCents: Object.fromEntries(
+            Object.entries(pricing.pricing.addons).map(([key, value]) => [key, value.cents]),
+          ),
+        });
+      }
     } catch (err) {
       setLoadError(err instanceof ApiError ? err.message : 'Could not load the quotes');
     } finally {
@@ -400,6 +654,7 @@ export default function QuotesPage() {
           tills: Number(createStores) * Number(createTills),
           addons: Array.from(createAddons),
           setup: createSetup,
+          ...pricingBody(createPricing),
           ...(split ? { tillsSplit: split } : {}),
         },
       });
@@ -428,6 +683,9 @@ export default function QuotesPage() {
     setEditSetup(quote.setupVariant);
     setEditSplit(splitText(quote));
     setEditAddons(new Set(quote.addons));
+    const pricingForm = pricingFormFrom(quote);
+    setEditPricing(pricingForm);
+    setEditPricingOpen(formIsOffList(pricingForm));
     setEditError('');
     setNotice('');
     setPdfError('');
@@ -469,6 +727,7 @@ export default function QuotesPage() {
           tills: Number(editStores) * Number(editTills),
           addons: Array.from(editAddons),
           setup: editSetup,
+          ...pricingBody(editPricing),
           ...(split ? { tillsSplit: split } : {}),
         },
       });
@@ -822,6 +1081,20 @@ export default function QuotesPage() {
                 ) : null}
               </div>
             </div>
+            <OffListPricingToggle
+              open={createPricingOpen}
+              offList={formIsOffList(createPricing)}
+              onOpen={() => setCreatePricingOpen(true)}
+            />
+            {createPricingOpen ? (
+              <QuotePricingFields
+                form={createPricing}
+                list={publishedList}
+                featureLabels={featureLabels}
+                selected={Array.from(createAddons)}
+                onChange={setCreatePricing}
+              />
+            ) : null}
             <div className="flex flex-wrap items-center gap-3">
               <button
                 onClick={() => void createQuote()}
@@ -1177,6 +1450,20 @@ export default function QuotesPage() {
                     </label>
                   </div>
                 </div>
+                <OffListPricingToggle
+                  open={editPricingOpen}
+                  offList={formIsOffList(editPricing)}
+                  onOpen={() => setEditPricingOpen(true)}
+                />
+                {editPricingOpen ? (
+                  <QuotePricingFields
+                    form={editPricing}
+                    list={publishedList}
+                    featureLabels={featureLabels}
+                    selected={Array.from(editAddons)}
+                    onChange={setEditPricing}
+                  />
+                ) : null}
                 <div>
                   <span className={labelCls}>Add-ons</span>
                   <div className="flex flex-wrap gap-2">
@@ -1322,6 +1609,23 @@ export default function QuotesPage() {
               </div>
             ) : null}
 
+            {/* An off-list quote is a decision, not a mistake: say which one it is, so
+                nobody reads the figures below as the published list (2026-10-14). */}
+            {detail.pricing.basis === 'till' ||
+            detail.pricing.storeRateCents !== null ||
+            detail.pricing.tillRateCents !== null ||
+            detail.pricing.setupFeeOverrideCents !== null ||
+            Object.keys(detail.pricing.addonRates).length > 0 ? (
+              <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                <span className="font-semibold">
+                  Priced off the published list
+                  {detail.pricing.basis === 'till' ? ' — on the older per-till terms' : ''}.
+                </span>{' '}
+                The lines below state what this quote charges; the list’s own figure is shown beside
+                any line that departs from it.
+              </div>
+            ) : null}
+
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="overflow-hidden rounded-xl border border-slate-200">
                 <div className="bg-slate-50 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
@@ -1375,6 +1679,11 @@ export default function QuotesPage() {
                               ? `${line.detail ? ' · ' : ' '}${line.quantity} × ${rand(line.rateCents)}`
                               : ''}
                           </span>
+                          {line.listCents !== undefined ? (
+                            <span className="ml-1.5 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">
+                              list {rand(line.listCents)}
+                            </span>
+                          ) : null}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums text-slate-700">
                           {rand(line.cents)}

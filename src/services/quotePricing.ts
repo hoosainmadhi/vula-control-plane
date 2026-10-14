@@ -42,6 +42,23 @@ export const officeSetupFees = (): Record<QuoteSetupVariant, number> => {
   };
 };
 
+/**
+ * A rate the office has overridden on ONE quote. The quotation is the promise, so
+ * it may depart from the published list: a prospect who enquired before the list
+ * moved per store is honoured on the terms he was quoted. Nothing here is
+ * required — an absent field means the published list's own figure.
+ */
+export interface QuoteRateOverrides {
+  /** The per-store rate (basis 'store'). */
+  storeCents?: number;
+  /** The per-till rate: the additional-till rate on 'store', the whole rate on 'till'. */
+  tillCents?: number;
+  /** An overridden once-off, in place of the office's settings pair. */
+  setupCents?: number;
+  /** Per-add-on unit prices, by feature key. */
+  addonCents?: Record<string, number>;
+}
+
 export interface QuoteConfig {
   stores: number;
   /** Total tills across the stores (the wire's own count). */
@@ -49,6 +66,15 @@ export interface QuoteConfig {
   /** Add-on keys, from the curated vocabulary. */
   addons: string[];
   setup: QuoteSetupVariant;
+  /**
+   * What the price multiplies by: 'store' is the published list (a rate per
+   * trading store, first till included, plus a rate per additional till);
+   * 'till' is the older per-till agreement, kept for quotes that must honour
+   * what a prospect was offered before the list changed (2026-10-14).
+   */
+  basis?: 'store' | 'till';
+  /** The office's own rates, when this quote departs from the list. */
+  rates?: QuoteRateOverrides;
   /**
    * The real per-store tills, when the office gave one (e.g. 2, 3, 1). The list
    * is the truth then: `stores` and `tills` are derived from it, so the quote
@@ -72,6 +98,9 @@ export interface QuotePricedLine {
   quantity?: number;
   /** The per-store tills behind the quantity, when the office gave a real split. */
   split?: number[];
+  /** What the published list would have charged for this line, when this quote
+   *  departs from it — the desk shows the difference; the client never sees it. */
+  listCents?: number;
 }
 
 export interface PricedQuote {
@@ -132,6 +161,16 @@ export const priceQuote = (
 ): PricedQuote => {
   const config = resolveQuoteConfig(configInput);
   validateQuoteConfig(config);
+  const basis = config.basis === 'till' ? 'till' : 'store';
+  const rates = config.rates ?? {};
+  const storeRate = rates.storeCents ?? LIST_STORE_RATE_CENTS;
+  const tillRate = rates.tillCents ?? LIST_TILL_RATE_CENTS;
+  /** The unit price of one add-on on this quote. */
+  const addonRate = (key: string): number =>
+    rates.addonCents?.[key] ?? DEFAULT_FEATURE_PRICES[key] ?? 0;
+  /** A line's list figure, recorded only when this quote charges something else. */
+  const listBeside = (listCents: number, cents: number): { listCents?: number } =>
+    listCents === cents ? {} : { listCents };
   const split = config.tillsSplit && config.tillsSplit.length > 0 ? config.tillsSplit : undefined;
   const perStore =
     !split && config.stores > 0 && config.tills % config.stores === 0
@@ -155,42 +194,77 @@ export const priceQuote = (
   const additionalDetail = split
     ? `(${split.map((tills) => Math.max(0, tills - 1)).join(' + ')} extra across ${config.stores} stores)`
     : '';
-  const lines: QuotePricedLine[] = [
-    {
-      label: `${config.stores} store${config.stores === 1 ? '' : 's'}`,
-      detail: ['first till included', storesDetail].filter(Boolean).join(' · '),
-      cents: config.stores * LIST_STORE_RATE_CENTS,
-      rateCents: LIST_STORE_RATE_CENTS,
-      quantity: config.stores,
-      ...(split ? { split } : {}),
-    },
-  ];
-  if (additional > 0) {
-    lines.push({
-      label: `${additional} additional till${additional === 1 ? '' : 's'}`,
-      detail: additionalDetail,
-      cents: additional * LIST_TILL_RATE_CENTS,
-      rateCents: LIST_TILL_RATE_CENTS,
-      quantity: additional,
-    });
+  let lines: QuotePricedLine[];
+  if (basis === 'till') {
+    // The older model, kept whole for quotes that must honour it: every till at
+    // one rate, the stores stated beside it so the estate is still legible. The
+    // add-ons below are unaffected — they follow the per-store rule either way.
+    lines = [
+      {
+        label: `${config.tills} till${config.tills === 1 ? '' : 's'}`,
+        detail:
+          config.stores === 1
+            ? ''
+            : split
+              ? `(${split.join(' + ')} across ${config.stores} stores)`
+              : perStore === null
+                ? `(across ${config.stores} stores)`
+                : `(${perStore} till${perStore === 1 ? '' : 's'} per store)`,
+        cents: config.tills * tillRate,
+        rateCents: tillRate,
+        quantity: config.tills,
+        ...(split ? { split } : {}),
+        // The list's figure for THIS estate (per store, first till in) — the
+        // honest baseline to show what this quote gives up, where multiplying
+        // every till by the additional-till rate would compare nothing.
+        ...listBeside(
+          config.stores * LIST_STORE_RATE_CENTS + additional * LIST_TILL_RATE_CENTS,
+          config.tills * tillRate,
+        ),
+      },
+    ];
+  } else {
+    lines = [
+      {
+        label: `${config.stores} store${config.stores === 1 ? '' : 's'}`,
+        detail: ['first till included', storesDetail].filter(Boolean).join(' · '),
+        cents: config.stores * storeRate,
+        rateCents: storeRate,
+        quantity: config.stores,
+        ...(split ? { split } : {}),
+        ...listBeside(config.stores * LIST_STORE_RATE_CENTS, config.stores * storeRate),
+      },
+    ];
+    if (additional > 0) {
+      lines.push({
+        label: `${additional} additional till${additional === 1 ? '' : 's'}`,
+        detail: additionalDetail,
+        cents: additional * tillRate,
+        rateCents: tillRate,
+        quantity: additional,
+        ...listBeside(additional * LIST_TILL_RATE_CENTS, additional * tillRate),
+      });
+    }
   }
   for (const key of PRICED_FEATURE_KEYS) {
     if (!config.addons.includes(key)) continue;
     // An add-on is a per-store capability (owner, 2026-10-14) — Head Office the
     // one exception: there is one panel for the whole company. The rate and
     // quantity travel so the document reads "Lay-by · 3 × R 49,00".
-    const unitCents = DEFAULT_FEATURE_PRICES[key] ?? 0;
+    const unitCents = addonRate(key);
     const quantity = addonQuantity(key, config.stores);
+    const listUnit = DEFAULT_FEATURE_PRICES[key] ?? 0;
     lines.push({
       label: FEATURE_LABELS[key] ?? key,
       detail: '',
       cents: unitCents * quantity,
       rateCents: unitCents,
       quantity,
+      ...listBeside(listUnit * quantity, unitCents * quantity),
     });
   }
   const monthlyTotalCents = lines.reduce((sum, line) => sum + line.cents, 0);
-  const setupCents = setupFees[config.setup] ?? SETUP_FEE_CENTS[config.setup];
+  const setupCents = rates.setupCents ?? setupFees[config.setup] ?? SETUP_FEE_CENTS[config.setup];
   return {
     lines,
     monthlyTotalCents,
@@ -228,6 +302,56 @@ export const parseMoneyCents = (raw: unknown): number | null => {
   }
   if (!/^\d+(\.\d{1,2})?$/.test(normalised)) return null;
   return Math.round(Number(normalised) * 100);
+};
+
+/**
+ * The price basis a caller chose: the published list ('store'), or the older
+ * per-till terms ('till') this quote must honour.
+ */
+export const parsePricingBasis = (raw: unknown): 'store' | 'till' => {
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  if (value !== 'store' && value !== 'till') {
+    throw new ValidationError('pricingBasis must be one of: store, till');
+  }
+  return value;
+};
+
+/**
+ * An overridden unit rate, in whole cents. R0 is allowed on purpose — a line the
+ * office is giving away — and R50 000 is the ceiling, beyond which a figure is a
+ * negotiated deal rather than a rate on a list.
+ */
+export const optionalRateCents = (
+  body: Record<string, unknown>,
+  field: string,
+): number | undefined => {
+  const raw = body[field];
+  if (raw === undefined || raw === null) return undefined;
+  const cents = Number(raw);
+  if (!Number.isInteger(cents) || cents < 0 || cents > 5_000_000) {
+    throw new ValidationError(`${field} must be whole cents between 0 and 5000000`);
+  }
+  return cents;
+};
+
+/** Per-add-on price overrides: keys from the vocabulary, whole non-negative cents. */
+export const parseAddonRates = (raw: unknown): Record<string, number> => {
+  if (raw === undefined || raw === null) return {};
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new ValidationError('addonRates must be an object of { key: cents }');
+  }
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!PRICED_FEATURE_KEYS.includes(key)) {
+      throw new ValidationError(`Unknown add-on in addonRates: ${key}`);
+    }
+    const cents = Number(value);
+    if (!Number.isInteger(cents) || cents < 0 || cents > 5_000_000) {
+      throw new ValidationError(`addonRates.${key} must be whole cents between 0 and 5000000`);
+    }
+    out[key] = cents;
+  }
+  return out;
 };
 
 /** The add-on keys a caller sent, from the curated vocabulary and nothing else. */

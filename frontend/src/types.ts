@@ -701,6 +701,17 @@ export interface Quote {
   tills: number;
   addons: string[];
   setupVariant: string;
+  /**
+   * The quote's own pricing: the basis it charges on, and the rates it overrode.
+   * Null/empty is the published list — an off-list quote is visible as one.
+   */
+  pricing: {
+    basis: 'store' | 'till';
+    storeRateCents: number | null;
+    tillRateCents: number | null;
+    setupFeeOverrideCents: number | null;
+    addonRates: Record<string, number>;
+  };
   /** What the visitor's page showed, kept beside the catalogue's own figures. */
   requested: {
     lines: Array<{ label: string; amount: string }>;
@@ -715,6 +726,8 @@ export interface Quote {
       cents: number;
       /** The unit rate in cents, when the line has one (the tills line does). */
       rateCents?: number;
+      /** The published list's figure for this line, when this one departs from it. */
+      listCents?: number;
       /** The billed quantity the rate multiplies. */
       quantity?: number;
       /** The real per-store tills, when the office gave a split. */

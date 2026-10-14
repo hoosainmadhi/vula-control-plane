@@ -465,9 +465,34 @@ describe('the pipeline', () => {
       .prepare('SELECT * FROM company_subscriptions WHERE company_id = ?')
       .get(created.body.company.id) as Record<string, unknown>;
     expect(subscription.licensed_terminal_count).toBe(6);
+    // The quote's own terms, both halves of them: the store rate was written as
+    // ZERO here until 2026-10-14 — the conversion still read the published till
+    // rate and never the per-store pair, so a per-store client created from a
+    // quote was billed stores at nothing. The assertion below is the regression.
+    expect(subscription.pricing_mode).toBe('per_store');
     expect(subscription.rate_cents).toBe(4900);
+    expect(subscription.store_rate_cents).toBe(19_900);
     expect(subscription.setup_fee_cents).toBe(500000);
     expect(JSON.parse(String(subscription.addon_prices_json))).toEqual({ multi_store: 19_900 });
+
+    // And the promise holds: once the estate the quote describes is on the books
+    // (3 stores, 6 tills), the client's monthly IS the quote's monthly total.
+    const threeStores = (companyId: number): void => {
+      const insert = getRegistryDb().prepare(
+        `INSERT INTO stores (slug, name, base_url, control_plane_token, company_id, kind, terminal_count)
+         VALUES (?, ?, ?, 't', ?, 'store', 2)`,
+      );
+      for (const slug of ['corner-jhb', 'corner-cpt', 'corner-dbn']) {
+        insert.run(slug, slug, `http://${slug}.localhost:3999`, companyId);
+      }
+    };
+    threeStores(created.body.company.id);
+    const detail = await request(app)
+      .get(`/api/clients/${created.body.company.id}`)
+      .set(authHeader(token))
+      .expect(200);
+    expect(detail.body.subscription.recurringAmountCents).toBe(quoteRows()[0].monthly_total_cents);
+    expect(detail.body.subscription.recurringAmountCents).toBe(94_300);
 
     // One client per quote.
     await request(app)
@@ -592,6 +617,141 @@ describe('the office drafts its own quote', () => {
     expect(row.status).toBe('quoted');
     expect(row.sent_at).toBeTruthy();
     expect(row.source).toBe('office');
+  });
+});
+
+describe('a quote may price off-list (2026-10-14)', () => {
+  it('quotes the older per-till terms, and the client inherits exactly them', async () => {
+    const token = await loginAsOffice(app);
+    // The prospect who enquired before the list moved per store: every till at
+    // R99 with Head Office once, and the line records what the list would have
+    // charged the same estate (3 × 199 + 3 × 49 = R744) so the desk can see the
+    // concession while the client sees only the price.
+    const draft = await request(app)
+      .post('/api/quotes')
+      .set(authHeader(token))
+      .send({
+        business: 'Yesterday Motors',
+        email: 'y@example.com',
+        stores: 3,
+        tills: 6,
+        addons: ['multi_store'],
+        setup: 'assisted',
+        pricingBasis: 'till',
+        tillRateCents: 99_00,
+      })
+      .expect(201);
+    const quote = draft.body.quote;
+    expect(quote.pricing).toEqual({
+      basis: 'till',
+      storeRateCents: null,
+      tillRateCents: 99_00,
+      setupFeeOverrideCents: null,
+      addonRates: {},
+    });
+    expect(quote.priced.lines[0]).toMatchObject({
+      label: '6 tills',
+      detail: '(2 tills per store)',
+      cents: 6 * 99_00,
+      rateCents: 99_00,
+      quantity: 6,
+      listCents: 3 * 19_900 + 3 * 49_00,
+    });
+    // The add-ons still follow the per-store rule, whichever basis the tills use.
+    expect(quote.priced.lines[1]).toMatchObject({ label: 'Head Office', quantity: 1 });
+    expect(quote.priced.monthlyTotalCents).toBe(6 * 99_00 + 19_900);
+
+    // Acceptance, then the client — on the quote's terms, per till.
+    await request(app)
+      .post(`/api/quotes/${quote.id}/accept`)
+      .set(authHeader(token))
+      .send({})
+      .expect(200);
+    const created = await request(app)
+      .post(`/api/quotes/${quote.id}/create-client`)
+      .set(authHeader(token))
+      .send({})
+      .expect(201);
+    const subscription = getRegistryDb()
+      .prepare('SELECT * FROM company_subscriptions WHERE company_id = ?')
+      .get(created.body.company.id) as Record<string, unknown>;
+    expect(subscription.pricing_mode).toBe('per_terminal');
+    expect(subscription.rate_cents).toBe(99_00);
+    expect(subscription.store_rate_cents).toBe(0);
+    expect(JSON.parse(String(subscription.addon_prices_json))).toEqual({ multi_store: 19_900 });
+
+    // And the bill matches the quote, once the estate exists.
+    const insert = getRegistryDb().prepare(
+      `INSERT INTO stores (slug, name, base_url, control_plane_token, company_id, kind, terminal_count)
+       VALUES (?, ?, ?, 't', ?, 'store', 2)`,
+    );
+    for (const slug of ['yest-jhb', 'yest-cpt', 'yest-dbn']) {
+      insert.run(slug, slug, `http://${slug}.localhost:3999`, created.body.company.id);
+    }
+    const detail = await request(app)
+      .get(`/api/clients/${created.body.company.id}`)
+      .set(authHeader(token))
+      .expect(200);
+    expect(detail.body.subscription.recurringAmountCents).toBe(quote.priced.monthlyTotalCents);
+  });
+
+  it('accepts a per-line rate override, and records what the list would have charged', async () => {
+    const token = await loginAsOffice(app);
+    const res = await request(app)
+      .post('/api/quotes')
+      .set(authHeader(token))
+      .send({
+        business: 'Concession Co',
+        email: 'c@example.com',
+        stores: 2,
+        tills: 4,
+        addons: ['layby'],
+        setup: 'self',
+        storeRateCents: 15_000,
+        setupFeeOverrideCents: 100_000,
+        addonRates: { layby: 2500 },
+      })
+      .expect(201);
+    const quote = res.body.quote;
+    expect(quote.pricing.storeRateCents).toBe(15_000);
+    expect(quote.pricing.setupFeeOverrideCents).toBe(100_000);
+    expect(quote.pricing.addonRates).toEqual({ layby: 2500 });
+    expect(quote.priced.setupCents).toBe(100_000);
+    const stores = quote.priced.lines.find((l: { label: string }) => l.label === '2 stores');
+    expect(stores).toMatchObject({ cents: 30_000, rateCents: 15_000, listCents: 39_800 });
+    const layby = quote.priced.lines.find((l: { label: string }) => l.label === 'Lay-by');
+    // A per-store capability on a per-store override: 2 × R25, list R49 each.
+    expect(layby).toMatchObject({ cents: 5000, rateCents: 2500, quantity: 2, listCents: 9800 });
+    // The extra tills stay on the published rate — only what was overridden moves.
+    const additional = quote.priced.lines.find((l: { label: string }) =>
+      l.label.includes('additional till'),
+    );
+    expect(additional).toMatchObject({ cents: 9800, rateCents: 4900 });
+    expect(additional.listCents).toBeUndefined();
+  });
+
+  it('refuses a basis, a rate or an add-on price outside the vocabulary', async () => {
+    const token = await loginAsOffice(app);
+    const base = {
+      business: 'Bad Co',
+      email: 'b@example.com',
+      stores: 1,
+      tills: 1,
+      addons: [],
+      setup: 'self',
+    };
+    const bad = async (patch: Record<string, unknown>, pattern: RegExp): Promise<void> => {
+      const res = await request(app)
+        .post('/api/quotes')
+        .set(authHeader(token))
+        .send({ ...base, ...patch })
+        .expect(400);
+      expect(String(res.body.error)).toMatch(pattern);
+    };
+    await bad({ pricingBasis: 'weekly' }, /pricingBasis/);
+    await bad({ tillRateCents: -1 }, /tillRateCents/);
+    await bad({ storeRateCents: 12.5 }, /storeRateCents/);
+    await bad({ addonRates: { free_lunch: 0 } }, /Unknown add-on/);
   });
 });
 

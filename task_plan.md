@@ -1072,6 +1072,16 @@ starts from the office figure. The self price settled at **R1 500** (the catalog
 were aligned to it) and assisted at **R5 000**; the page's cards, the builder and the desk all
 follow Settings, so neither figure needs a deploy to change.
 
+**Quotes may price off the list (owner, 2026-10-14).** A prospect who enquired before the
+list moved per store is honoured on the terms he was quoted: a quote now carries its own
+`pricing_basis` (`store` — the published list — or `till`, the older terms) and optional unit-rate
+overrides for the store rate, the till rate, each add-on and the once-off, with every departing
+line recording the list figure it departed from (`listCents`). The desk's create/edit panels have
+a Prices block for them. Landing with it: **the quote → client conversion now reads the quote's
+own terms** — it had never been updated for the per-store model and wrote a till rate with a
+STORE RATE OF ZERO, so a client created from a per-store quote would have been billed stores at
+nothing; that is fixed and pinned by a test asserting the client's monthly equals the quote's.
+
 **Warehouse correction (owner, 2026-10-14).** _"will the warehouse also be fixed - ie no POS"_ —
 the earlier "no warehouse enforcement work" ruling is superseded in one respect and stands in
 another: a warehouse is still not charged (S1's `kind = 'store'` billing rule is unchanged),

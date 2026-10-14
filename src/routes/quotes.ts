@@ -27,9 +27,13 @@ import { defaultMailRecipient, getRawOfficeSettings } from '../services/officeSe
 import { buildQuotePdf, quotePdfFilename } from '../services/quotePdf.js';
 import { DEFAULT_FEATURE_PRICES } from '../services/features.js';
 import {
+  LIST_STORE_RATE_CENTS,
   LIST_TILL_RATE_CENTS,
   optionalTillsSplit,
+  optionalRateCents,
   parseAddonKeys,
+  parseAddonRates,
+  parsePricingBasis,
   parseSetupVariant,
   priceQuote,
   resolveQuoteConfig,
@@ -39,6 +43,91 @@ import {
 import { sendQuoteDocument } from '../services/quoteMail.js';
 
 export const quotesRouter = Router();
+
+/**
+ * The quote's own pricing, as the office stated it: the basis, plus whichever
+ * rates it overrode. Absent fields fall back to the row's own figures on an edit
+ * and to the published list on a create — a quote carries only what the office
+ * deliberately changed, so the difference is legible on the record and on the
+ * desk. Sending `addonRates` (even empty) replaces the row's map; omitting it
+ * keeps it.
+ */
+const quotePricingFrom = (
+  body: Record<string, unknown>,
+  existing?: QuoteRecord,
+): {
+  basis: 'store' | 'till';
+  rates: {
+    storeCents?: number;
+    tillCents?: number;
+    setupCents?: number;
+    addonCents?: Record<string, number>;
+  };
+  /** The same figures, as the row stores them (null = the list's own). */
+  record: {
+    pricingBasis: 'store' | 'till';
+    storeRateCents: number | null;
+    tillRateCents: number | null;
+    setupFeeOverrideCents: number | null;
+    addonRates: Record<string, number>;
+  };
+} => {
+  const basis =
+    body['pricingBasis'] === undefined
+      ? existing?.pricing_basis === 'till'
+        ? ('till' as const)
+        : ('store' as const)
+      : parsePricingBasis(body['pricingBasis']);
+  const storeCents =
+    optionalRateCents(body, 'storeRateCents') ?? existing?.store_rate_cents ?? undefined;
+  const tillCents =
+    optionalRateCents(body, 'tillRateCents') ?? existing?.till_rate_cents ?? undefined;
+  const setupCents =
+    optionalRateCents(body, 'setupFeeOverrideCents') ??
+    existing?.setup_fee_override_cents ??
+    undefined;
+  const storedAddons = (): Record<string, number> => {
+    try {
+      const parsed = JSON.parse(existing?.addon_rates_json ?? '{}') as Record<string, number>;
+      return typeof parsed === 'object' && parsed !== null ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+  const addonCents =
+    body['addonRates'] === undefined ? storedAddons() : parseAddonRates(body['addonRates']);
+  return {
+    basis,
+    rates: {
+      ...(storeCents !== undefined ? { storeCents } : {}),
+      ...(tillCents !== undefined ? { tillCents } : {}),
+      ...(setupCents !== undefined ? { setupCents } : {}),
+      ...(Object.keys(addonCents).length > 0 ? { addonCents } : {}),
+    },
+    record: {
+      pricingBasis: basis,
+      storeRateCents: storeCents ?? null,
+      tillRateCents: tillCents ?? null,
+      setupFeeOverrideCents: setupCents ?? null,
+      addonRates: addonCents,
+    },
+  };
+};
+
+/**
+ * The add-on unit prices a quote overrode, from its own snapshot. An unreadable
+ * map is treated as empty — the published prices then apply, which is what the
+ * record said before the field existed.
+ */
+const storedAddonRates = (quote: QuoteRecord): Record<string, number> => {
+  try {
+    const parsed = JSON.parse(quote.addon_rates_json) as Record<string, number>;
+    return typeof parsed === 'object' && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
 // The desk holds prospect contact data and commercial figures — office only.
 quotesRouter.use(requireOffice);
 
@@ -90,6 +179,18 @@ const quoteOut = (q: QuoteRecord) => ({
   tills: q.tills,
   addons: JSON.parse(q.addons_json) as string[],
   setupVariant: q.setup_variant,
+  /**
+   * The quote's own pricing: which basis it charges on, and the rates it
+   * overrode. Null/empty is the published list — the desk shows the difference
+   * so an off-list quote is visible as one (2026-10-14).
+   */
+  pricing: {
+    basis: q.pricing_basis === 'till' ? 'till' : 'store',
+    storeRateCents: q.store_rate_cents,
+    tillRateCents: q.till_rate_cents,
+    setupFeeOverrideCents: q.setup_fee_override_cents,
+    addonRates: storedAddonRates(q),
+  },
   requested: {
     lines: JSON.parse(q.requested_lines_json),
     monthlyCents: q.requested_monthly_cents,
@@ -149,6 +250,7 @@ quotesRouter.post(
     // A real per-store split sets both counts; without one the even pair is the
     // configuration, and is required.
     const split = optionalTillsSplit(body);
+    const pricing = quotePricingFrom(body);
     const config: QuoteConfig = {
       stores: split ? split.length : requireInt(body, 'stores', { min: 1, max: 50 }),
       tills: split
@@ -156,6 +258,8 @@ quotesRouter.post(
         : requireInt(body, 'tills', { min: 1, max: 500 }),
       addons: parseAddonKeys(body['addons']),
       setup: parseSetupVariant(body['setup']),
+      basis: pricing.basis,
+      rates: pricing.rates,
       ...(split ? { tillsSplit: split } : {}),
     };
     const priced = priceQuote(config, getRawOfficeSettings().vat_rate);
@@ -171,6 +275,7 @@ quotesRouter.post(
       tills: config.tills,
       addons: config.addons,
       setupVariant: config.setup,
+      ...pricing.record,
       requestedLines: [],
       requestedMonthlyCents: null,
       requestedSetupCents: null,
@@ -234,11 +339,22 @@ quotesRouter.put(
 
     let current = quote;
     const splitSent = body['tillsSplit'] !== undefined;
+    const pricing = quotePricingFrom(body, quote);
     if (
       splitSent ||
-      ['stores', 'tills', 'addons', 'setup'].some((key) => body[key] !== undefined)
+      ['stores', 'tills', 'addons', 'setup'].some((key) => body[key] !== undefined) ||
+      // The quote's own pricing counts as a correction too (2026-10-14).
+      [
+        'pricingBasis',
+        'storeRateCents',
+        'tillRateCents',
+        'setupFeeOverrideCents',
+        'addonRates',
+      ].some((key) => body[key] !== undefined)
     ) {
       const config: QuoteConfig = {
+        basis: pricing.basis,
+        rates: pricing.rates,
         stores:
           body['stores'] !== undefined
             ? requireInt(body, 'stores', { min: 1, max: 50 })
@@ -369,9 +485,18 @@ quotesRouter.post(
     // record's snapshot.
     let current = quote;
     const splitSent = body['tillsSplit'] !== undefined;
+    const pricing = quotePricingFrom(body, quote);
     if (
       splitSent ||
-      ['stores', 'tills', 'addons', 'setup'].some((key) => body[key] !== undefined)
+      ['stores', 'tills', 'addons', 'setup'].some((key) => body[key] !== undefined) ||
+      // The quote's own pricing counts as a correction too (2026-10-14).
+      [
+        'pricingBasis',
+        'storeRateCents',
+        'tillRateCents',
+        'setupFeeOverrideCents',
+        'addonRates',
+      ].some((key) => body[key] !== undefined)
     ) {
       const office = getRawOfficeSettings();
       const config: QuoteConfig = {
@@ -402,6 +527,7 @@ quotesRouter.post(
         tills: resolved.tills,
         addons: resolved.addons,
         setupVariant: resolved.setup,
+        ...pricing.record,
         pricedLines: priced.lines,
         monthlyTotalCents: priced.monthlyTotalCents,
         setupCents: priced.setupCents,
@@ -561,14 +687,26 @@ quotesRouter.post(
     });
     setLicensedTerminalCount(company.id, licensedTerminalCount);
 
+    // THE QUOTE'S OWN FIGURES, never the published list's (2026-10-14). The
+    // quotation is the promise: a quote priced per till, or carrying an overridden
+    // rate, becomes a client on exactly those terms. Reading the list here billed
+    // a per-store client a store rate of ZERO (found the day the list moved per
+    // store) and would have dropped any override in the same way. The plan still
+    // supplies the caps, the features and the billing period — never the price.
+    const basis: 'store' | 'till' = quote.pricing_basis === 'till' ? 'till' : 'store';
+    const storeRateCents = quote.store_rate_cents ?? LIST_STORE_RATE_CENTS;
+    const tillRateCents = quote.till_rate_cents ?? LIST_TILL_RATE_CENTS;
+    const addonRates: Record<string, number> = {
+      ...DEFAULT_FEATURE_PRICES,
+      ...storedAddonRates(quote),
+    };
     const addons = JSON.parse(quote.addons_json) as string[];
-    const addonPrices = Object.fromEntries(
-      addons.map((key) => [key, DEFAULT_FEATURE_PRICES[key] ?? 0]),
-    );
+    const addonPrices = Object.fromEntries(addons.map((key) => [key, addonRates[key] ?? 0]));
     setSubscriptionPricing(company.id, {
-      pricingMode: plan?.pricing_mode ?? 'per_terminal',
-      rateCents: LIST_TILL_RATE_CENTS,
-      customAmountCents: plan?.custom_amount_cents ?? 0,
+      pricingMode: basis === 'till' ? 'per_terminal' : 'per_store',
+      rateCents: tillRateCents,
+      storeRateCents: basis === 'till' ? 0 : storeRateCents,
+      customAmountCents: 0,
       setupFeeCents: quote.setup_cents,
       billingPeriod: plan?.billing_period ?? 'monthly',
     });
@@ -583,7 +721,9 @@ quotesRouter.post(
         slug,
         planCode: plan?.code ?? null,
         licensedTerminalCount,
-        rateCents: LIST_TILL_RATE_CENTS,
+        pricingBasis: basis,
+        rateCents: tillRateCents,
+        storeRateCents: basis === 'till' ? 0 : storeRateCents,
         addonPrices,
         setupFeeCents: quote.setup_cents,
       },

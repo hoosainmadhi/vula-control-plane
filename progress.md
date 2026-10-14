@@ -3264,3 +3264,53 @@ app-specific password when 2FA is on) beside the existing From-ownership warning
 it is a copy of two values rather than a search. What remains is the owner's action: set the host,
 username, app password and From on the production control plane, then use "Send a test email to"
 — which is the only check that proves delivery rather than acceptance.
+
+## A quote can price off the list — and the conversion bug that surfaced (2026-10-14)
+
+The owner has a real prospect who asked for a quotation **yesterday**, i.e. under the old per-till
+list, and wants to honour it while charging the add-ons per store where they apply. The desk
+couldn't: a quote was priced from the published list and nothing else — the create/edit payload
+took stores, tills, add-ons, setup and the split, with no rate anywhere. So this landed:
+
+- **A quote chooses its basis.** `quotes.pricing_basis` is `'store'` (the published list) or
+  `'till'` (the older terms, every till at one rate — the shape the page sold until this week).
+  The per-till line states the estate beside it ("(2 tills per store)") and the add-ons still
+  follow the per-store rule, which is exactly what the owner asked for: old rates for the tills,
+  current quantities for the capabilities.
+- **Unit rates are overridable, per line.** `store_rate_cents`, `till_rate_cents`,
+  `setup_fee_override_cents` and `addon_rates_json` (a key → cents map) hold whatever the office
+  overrode; a blank field is the list's figure. Every priced line records `listCents` **when it
+  departs** — so the record, and the desk, can state what was given up (the client's PDF shows
+  only the price). `priceQuote` takes the overrides as a `rates` object, so the arithmetic has one
+  home as before.
+- **The desk's create and edit panels** gained a Prices block: the basis toggle, a rate per store,
+  a rate per till, the once-off, and a price per selected add-on — each with the published figure
+  as its placeholder, read from `GET /api/public/pricing` so the office sees what they are
+  departing from. The detail view says "Priced off the published list — on the older per-till
+  terms" and chips each off-list line with its list figure.
+- **A R0 override is expressible** (type `0`): a line given away is a price, not a blank.
+
+**And then the bug this uncovered, which is the more serious half.** The quote → client
+conversion had never been updated when the list moved per-store: `create-client` wrote the desk's
+TILL rate and **no store rate at all**, taking the pricing mode from the chosen plan. So a client
+created from a per-store quote would have been billed stores at _nothing_ — R147/month instead of
+R744 for the owner's own example — and any override would have been dropped in the same way. It is
+now read from the quote's own terms (basis → `per_store`/`per_terminal`, the store and till rates,
+the add-on unit prices, the setup), which is also what makes an off-list quote survive conversion:
+the quotation is the promise. Pinned by a test that provisions the estate the quote describes and
+asserts the client's monthly IS the quote's monthly total (it fails on the old code: R346 instead
+of R943).
+
+**And the concession is behind a deliberate step (owner, same day): _"older terms will be for one
+customer only"_.** Correct — the old terms are a concession for one agreement, not a second price
+list, so the Prices block no longer sits open on every quote inviting a casual undercut: the
+create panel shows "Prices: the published list" with a "Price off-list — a concession…" button,
+and the fields appear only when that is clicked. Reopening a quote that already carries one (the
+edit panel) opens the block with its figures, so the concession is visible where it exists and
+absent where it doesn't. A "Use the published list" link resets the block in one click. Verified
+in the built UI: fresh quote collapsed, the concession one step behind the button, the existing
+off-list quote's edit panel open and pre-filled at R99.
+
+Verified through the built UI on the local control plane: a draft for 3 stores × 2 tills priced
+per till at R99 reads **6 tills · 6 × R 99,00 — list R 744,00 — R 594,00/month**, carries the
+off-list banner, and R 5 000 set-up. CP 465/465. Nothing committed yet.
