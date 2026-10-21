@@ -25,6 +25,7 @@ export const VERTICAL_COLORS: Record<string, string> = {
   hardware: 'bg-amber-100 text-amber-700',
   pharmacy: 'bg-emerald-100 text-emerald-700',
   restaurant: 'bg-rose-100 text-rose-700',
+  stationery: 'bg-indigo-100 text-indigo-700',
 };
 
 /** Register subscription states (L4) — what the till shows and whether it sells. */

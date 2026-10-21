@@ -255,7 +255,7 @@ describe('POST /api/stores — validation', () => {
         .send(createPayload({ slug: `store-${String(vertical).length}`, vertical }));
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(
-        /vertical must be one of: general, clothing, spares, hardware, pharmacy, restaurant/,
+        /vertical must be one of: general, clothing, spares, hardware, pharmacy, restaurant, stationery/,
       );
     }
     expect(fetchMock).not.toHaveBeenCalled();

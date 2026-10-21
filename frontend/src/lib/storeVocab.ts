@@ -124,6 +124,7 @@ export const VERTICAL_LABELS: Record<StoreVertical, string> = {
   hardware: 'Hardware',
   pharmacy: 'Pharmacy',
   restaurant: 'Restaurant',
+  stationery: 'Stationery',
   custom: 'Custom',
 };
 
@@ -134,5 +135,6 @@ export const VERTICAL_OPTIONS: Array<{ value: StoreVertical; label: string }> = 
   { value: 'hardware', label: 'Hardware & building supplies' },
   { value: 'pharmacy', label: 'Pharmacy & wellness' },
   { value: 'restaurant', label: 'Restaurant & quick service' },
+  { value: 'stationery', label: 'Stationery & office supplies' },
   { value: 'custom', label: 'Custom (no starter pack)' },
 ];

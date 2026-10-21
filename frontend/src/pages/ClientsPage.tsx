@@ -732,6 +732,7 @@ export default function ClientsPage() {
                       <option value="hardware">Hardware & Building</option>
                       <option value="pharmacy">Pharmacy & Wellness</option>
                       <option value="restaurant">Restaurant & Quick Service</option>
+                      <option value="stationery">Stationery & Office Supplies</option>
                     </select>
                   </div>
                 </div>

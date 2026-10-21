@@ -9,7 +9,14 @@ export type StoreStatus = 'active' | 'paused';
 export type ConfigStatus = 'pending' | 'ok' | 'failed';
 export type HealthStatus = 'up' | 'down' | 'unknown';
 export type StoreVertical =
-  'general' | 'clothing' | 'spares' | 'hardware' | 'pharmacy' | 'restaurant' | 'custom';
+  | 'general'
+  | 'clothing'
+  | 'spares'
+  | 'hardware'
+  | 'pharmacy'
+  | 'restaurant'
+  | 'stationery'
+  | 'custom';
 
 /** Deployment environment of the store (SPOG §5/§44). */
 export type StoreEnvironment = 'production' | 'staging' | 'demo' | 'development';
@@ -26,6 +33,7 @@ export const STORE_VERTICALS: readonly StoreVertical[] = [
   'hardware',
   'pharmacy',
   'restaurant',
+  'stationery',
   'custom',
 ];
 
