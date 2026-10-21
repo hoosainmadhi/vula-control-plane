@@ -38,6 +38,7 @@ R=/data/apps/vula-app
   reset demo-restaurant        3ryq7svgewjdm9trxtk3d9jq clients/demo-restaurant/stores/demo-restaurant/za-pos.db     demo-restaurant.db
   reset demo-hardware          lqu4n6fxk0he5b6royou8j5x clients/demo-hardware/stores/demo-hardware/za-pos.db         demo-hardware.db
   reset demo-pharmacy          aux8ftmmtzooxmavwk2a0mjj clients/demo-pharmacy/stores/demo-pharmacy/za-pos.db         demo-pharmacy.db
+  reset demo-stationery        fnz1en1dirrup5we6yfruar1 clients/demo-stationery/stores/demo-stationery/za-pos.db     demo-stationery.db
 
   echo "demo reset complete"
 } >> "$LOG" 2>&1
