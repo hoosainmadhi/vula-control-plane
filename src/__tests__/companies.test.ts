@@ -1336,4 +1336,86 @@ describe('paid add-ons', () => {
       .expect(400);
     expect(res.body.error).toMatch(/does not price layby/i);
   });
+
+  it('derives the WhatsApp allowance from the chosen bundle', async () => {
+    const planId = await planIdByCode('vula-grow');
+    const company = await makeCompany({ name: 'WA Bundle', slug: 'wa-bundle', planId });
+
+    const five = await request(app)
+      .put(`/api/companies/${company.id}`)
+      .set(auth())
+      .send({ features: ['whatsapp_cloud'], whatsappBundle: 500 })
+      .expect(200);
+    expect(five.body.subscription.addons).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: 'whatsapp_cloud', cents: 10_000 })]),
+    );
+    expect(five.body.whatsappMessages).toBe(500);
+
+    const three = await request(app)
+      .put(`/api/companies/${company.id}`)
+      .set(auth())
+      .send({ features: ['whatsapp_cloud'], whatsappBundle: 250 })
+      .expect(200);
+    expect(three.body.whatsappMessages).toBe(250);
+    expect(three.body.subscription.addons).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: 'whatsapp_cloud', cents: 5000 })]),
+    );
+
+    // The largest bundle: R200 buys 1000 messages.
+    const thousand = await request(app)
+      .put(`/api/companies/${company.id}`)
+      .set(auth())
+      .send({ features: ['whatsapp_cloud'], whatsappBundle: 1000 })
+      .expect(200);
+    expect(thousand.body.whatsappMessages).toBe(1000);
+    expect(thousand.body.subscription.addons).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: 'whatsapp_cloud', cents: 20_000 })]),
+    );
+
+    // A count that is not one of the published bundles is refused.
+    await request(app)
+      .put(`/api/companies/${company.id}`)
+      .set(auth())
+      .send({ features: ['whatsapp_cloud'], whatsappBundle: 1250 })
+      .expect(400);
+  });
+
+  it('keeps a held add-on when the plan stops pricing it', async () => {
+    const planId = await planIdByCode('vula-grow');
+    await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ featurePrices: { layby: 4900 } })
+      .expect(200);
+    const company = await makeCompany({ name: 'Held Addon', slug: 'held-addon', planId });
+    await request(app)
+      .put(`/api/companies/${company.id}`)
+      .set(auth())
+      .send({ features: ['layby'] })
+      .expect(200);
+
+    // The plan's list drops the price. The client bought on agreed terms, so
+    // the add-on must remain visible and savable — but a NEW unpriced feature
+    // is still refused.
+    await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ featurePrices: {} })
+      .expect(200);
+    const keep = await request(app)
+      .put(`/api/companies/${company.id}`)
+      .set(auth())
+      .send({ features: ['layby'] })
+      .expect(200);
+    expect(keep.body.subscription.addons).toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: 'layby' })]),
+    );
+
+    const add = await request(app)
+      .put(`/api/companies/${company.id}`)
+      .set(auth())
+      .send({ features: ['layby', 'customer_credit'] })
+      .expect(400);
+    expect(add.body.error).toMatch(/does not price customer_credit/i);
+  });
 });

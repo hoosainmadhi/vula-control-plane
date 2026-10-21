@@ -59,6 +59,7 @@ import {
   PRICED_FEATURE_KEYS,
   validateFeatureKeys,
   validateFeaturePrices,
+  whatsAppBundleCents,
 } from '../services/features.js';
 import { quoteForSubscription } from '../services/pricing.js';
 import { setupFeeInvoiceFor } from '../services/billing.js';
@@ -146,6 +147,8 @@ export interface CompanyOut {
   maxStores: number;
   maxTerminalsPerStore: number;
   features: string[];
+  /** The monthly WhatsApp message allowance the signed licence carries. */
+  whatsappMessages: number;
   panels: number;
   /** Operator-facing sentence when something needs attention; '' when healthy. */
   note: string;
@@ -232,6 +235,8 @@ const companyToOut = (company: CompanyRecord): CompanyOut => {
     maxStores: ent.maxStores,
     maxTerminalsPerStore: ent.maxTerminalsPerStore,
     features: ent.features,
+    /** The monthly WhatsApp message allowance the signed licence carries. */
+    whatsappMessages: ent.whatsappMessages,
     panels: listPanelsForCompany(company.id).length,
     note: ent.note,
     ...registerEnforcementFor(ent),
@@ -589,6 +594,35 @@ companiesRouter.post(
             'office',
             'Recorded the price agreed when the client was onboarded',
           );
+          // Add-ons chosen at creation. The plan must price them; the WhatsApp
+          // bundle, when chosen, is this client's agreed price and allowance.
+          const onboardingFeatures = validateFeatureKeys(req.body?.features ?? []).filter((key) =>
+            PRICED_FEATURE_KEYS.includes(key),
+          );
+          if (onboardingFeatures.length > 0) {
+            const chosenPlan = planId ? getPlanById(planId) : null;
+            const planPrices = planFeaturePrices(chosenPlan);
+            const notPriced = onboardingFeatures.filter((key) => !(key in planPrices));
+            if (notPriced.length > 0) {
+              throw new ValidationError(
+                `${chosenPlan?.name ?? 'That plan'} does not price ${notPriced.join(', ')} — set the add-on's price on the plan first.`,
+              );
+            }
+            const whatsappCents = whatsAppBundleCents(req.body?.whatsappBundle);
+            const agreedPrices = Object.fromEntries(
+              onboardingFeatures.map((key) => [
+                key,
+                key === 'whatsapp_cloud' && whatsappCents !== undefined
+                  ? whatsappCents
+                  : (planPrices[key] ?? 0),
+              ]),
+            );
+            setSubscriptionAddons(company.id, onboardingFeatures, agreedPrices);
+            recordAuditLog('office', 'subscription_addons_set', 'company', company.id, {
+              after: { features: onboardingFeatures, prices: agreedPrices },
+              reason: 'Add-ons chosen when the client was created',
+            });
+          }
           // The once-off charge, when the caller stated one: assisted setup is a
           // per-client figure, the plan carries only the self-setup default.
           if (req.body?.setupFeeCents !== undefined) {
@@ -722,8 +756,18 @@ companiesRouter.put(
       body.features !== undefined
         ? validateFeatureKeys(body.features).filter((key) => PRICED_FEATURE_KEYS.includes(key))
         : undefined;
+    // A per-client WhatsApp bundle (250/500/750/1000 messages) overrides the plan's
+    // entry price; the signed licence carries the derived monthly allowance.
+    const whatsappCents = whatsAppBundleCents(body.whatsappBundle);
     if (requestedFeatures !== undefined) {
-      const notPriced = requestedFeatures.filter((key) => !(key in planPrices));
+      // A feature the client already holds stays editable even if the plan no
+      // longer lists a price: it was bought on agreed terms (often from a quote)
+      // and the plan's current price list cannot take it away. New purchases
+      // still need a plan price.
+      const heldFeatures = subscriptionFeatures(getSubscription(company.id));
+      const notPriced = requestedFeatures.filter(
+        (key) => !(key in planPrices) && !heldFeatures.includes(key),
+      );
       if (notPriced.length > 0) {
         throw new ValidationError(
           `${planAtRequest?.name ?? 'This plan'} does not price ${notPriced.join(', ')} — set the add-on's price on the plan first.`,
@@ -731,6 +775,8 @@ companiesRouter.put(
       }
     }
     let featuresChanged = false;
+    /** A changed add-on price (e.g. the WhatsApp bundle) changes the licence. */
+    let pricesChanged = false;
 
     // Moving a client to another plan IS agreeing a new price (one of the three
     // moments a price is agreed), so the plan's terms are recorded on the
@@ -785,9 +831,16 @@ companiesRouter.put(
         const agreedPrices = subscriptionAddonPrices(getSubscription(company.id));
         const nextPrices: Record<string, number> = {};
         for (const key of requestedFeatures) {
-          nextPrices[key] = existing.includes(key)
+          nextPrices[key] =
+            key === 'whatsapp_cloud' && whatsappCents !== undefined
+              ? whatsappCents
+              : existing.includes(key)
+                ? (agreedPrices[key] ?? planPrices[key] ?? 0)
+                : (planPrices[key] ?? 0);
+          const before = existing.includes(key)
             ? (agreedPrices[key] ?? planPrices[key] ?? 0)
             : (planPrices[key] ?? 0);
+          if (nextPrices[key] !== before) pricesChanged = true;
         }
         featuresChanged =
           requestedFeatures.length !== existing.length ||
@@ -815,7 +868,8 @@ companiesRouter.put(
       (trialEndsAt !== undefined && trialEndsAt !== company.trial_ends_at) ||
       (status !== undefined && status !== company.status) ||
       licensedChanged ||
-      featuresChanged;
+      featuresChanged ||
+      pricesChanged;
     let licencePush: Awaited<ReturnType<typeof pushLicencesForCompany>> | null = null;
     if (entitlementChanged) {
       try {

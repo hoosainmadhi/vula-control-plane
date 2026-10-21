@@ -449,7 +449,7 @@ describe('the pipeline', () => {
     const created = await request(app)
       .post(`/api/quotes/${id}/create-client`)
       .set(authHeader(token))
-      .send({ planId: plan!.id })
+      .send({ planId: plan!.id, autoDeploy: false })
       .expect(201);
     expect(created.body.company.id).toBeGreaterThan(0);
     expect(created.body.quote.companyId).toBe(created.body.company.id);
@@ -475,22 +475,28 @@ describe('the pipeline', () => {
     expect(subscription.setup_fee_cents).toBe(500000);
     expect(JSON.parse(String(subscription.addon_prices_json))).toEqual({ multi_store: 19_900 });
 
-    // And the promise holds: once the estate the quote describes is on the books
-    // (3 stores, 6 tills), the client's monthly IS the quote's monthly total.
-    const threeStores = (companyId: number): void => {
-      const insert = getRegistryDb().prepare(
-        `INSERT INTO stores (slug, name, base_url, control_plane_token, company_id, kind, terminal_count)
-         VALUES (?, ?, ?, 't', ?, 'store', 2)`,
-      );
-      for (const slug of ['corner-jhb', 'corner-cpt', 'corner-dbn']) {
-        insert.run(slug, slug, `http://${slug}.localhost:3999`, companyId);
-      }
-    };
-    threeStores(created.body.company.id);
+    // The conversion builds the estate the quote describes: three branches of
+    // two tills and the Head Office the quote bought. Before 2026-10-20 it
+    // created only the company, so the recurring line counted zero stores and
+    // priced every till as an additional one (6 × R49 = R294).
     const detail = await request(app)
       .get(`/api/clients/${created.body.company.id}`)
       .set(authHeader(token))
       .expect(200);
+    expect(detail.body.stores).toHaveLength(3);
+    expect(detail.body.stores.map((s: { slug: string }) => s.slug).sort()).toEqual([
+      'corner-motors-1',
+      'corner-motors-2',
+      'corner-motors-3',
+    ]);
+    expect(detail.body.stores.every((s: { terminalCount: number }) => s.terminalCount === 2)).toBe(
+      true,
+    );
+    expect(detail.body.headOffice).not.toBeNull();
+    expect(created.body.deployment.job.type).toBe('new_multi_store_client');
+
+    // And the promise holds immediately: the client's monthly IS the quote's
+    // monthly total — 3 × R199 + 3 × R49 + Head Office R199 = R943.
     expect(detail.body.subscription.recurringAmountCents).toBe(quoteRows()[0].monthly_total_cents);
     expect(detail.body.subscription.recurringAmountCents).toBe(94_300);
 

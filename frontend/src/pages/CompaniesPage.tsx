@@ -7,6 +7,7 @@ import Spinner from '../components/Spinner';
 import StatusBadge from '../components/StatusBadge';
 import type { Company, Plan } from '../types';
 import { rand } from '../lib/money';
+import { WHATSAPP_BUNDLES, whatsAppBundle, whatsAppMessagesForCents } from '../lib/whatsapp';
 
 /**
  * Companies — the merchant accounts.
@@ -46,6 +47,10 @@ interface FormState {
   status: 'active' | 'suspended';
   /** The purchased terminal quantity — a client with none cannot take a store. */
   licensedTerminalCount: string;
+  /** Paid add-ons bought at creation, priced by the selected plan. */
+  features: string[];
+  /** The chosen WhatsApp bundle in messages (250/500/750/1000). */
+  whatsappBundle: number;
 }
 
 const EMPTY_FORM: FormState = {
@@ -57,11 +62,14 @@ const EMPTY_FORM: FormState = {
   trialEndsAt: '',
   status: 'active',
   licensedTerminalCount: '0',
+  features: [],
+  whatsappBundle: 250,
 };
 
 export default function CompaniesPage() {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [featureLabels, setFeatureLabels] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -75,12 +83,14 @@ export default function CompaniesPage() {
 
   const load = useCallback(async (): Promise<void> => {
     try {
-      const [companyList, planList] = await Promise.all([
+      const [companyList, planList, vocabulary] = await Promise.all([
         api<Company[]>('/companies'),
         api<Plan[]>('/plans'),
+        api<Array<{ key: string; label: string }>>('/plans/features').catch(() => []),
       ]);
       setCompanies(companyList);
       setPlans(planList);
+      setFeatureLabels(Object.fromEntries(vocabulary.map((f) => [f.key, f.label])));
       setLoadError(null);
     } catch (err) {
       setLoadError(err instanceof ApiError ? err.message : 'Failed to load companies');
@@ -111,6 +121,13 @@ export default function CompaniesPage() {
     setModalOpen(true);
   };
 
+  const planForForm = plans.find((p) => String(p.id) === form.planId);
+  const planAddonOptions = planForForm
+    ? Object.entries(planForForm.featurePrices ?? {})
+        .filter(([key, cents]) => cents > 0 && !planForForm.features.includes(key))
+        .map(([key, cents]) => ({ key, cents, label: featureLabels[key] ?? key }))
+    : [];
+
   const openEdit = (company: Company): void => {
     setEditingId(company.id);
     setForm({
@@ -122,6 +139,10 @@ export default function CompaniesPage() {
       trialEndsAt: company.trialEndsAt ?? '',
       status: company.status,
       licensedTerminalCount: String(company.subscription?.licensedTerminalCount ?? 0),
+      features: (company.subscription?.addons ?? []).map((a) => a.key),
+      whatsappBundle: whatsAppMessagesForCents(
+        company.subscription?.addons.find((a) => a.key === 'whatsapp_cloud')?.cents,
+      ),
     });
     setFormError(null);
     setModalOpen(true);
@@ -139,6 +160,10 @@ export default function CompaniesPage() {
         trialEndsAt: form.trialEndsAt.trim() || null,
         status: form.status,
         licensedTerminalCount: Number(form.licensedTerminalCount) || 0,
+        features: form.features,
+        ...(form.features.includes('whatsapp_cloud')
+          ? { whatsappBundle: form.whatsappBundle }
+          : {}),
       };
       if (editingId !== null) {
         await api(`/companies/${editingId}`, { method: 'PUT', body });
@@ -425,7 +450,20 @@ export default function CompaniesPage() {
               <label className={labelCls}>Plan</label>
               <select
                 value={form.planId}
-                onChange={(e) => setForm({ ...form, planId: e.target.value })}
+                onChange={(e) => {
+                  const planId = e.target.value;
+                  const plan = plans.find((p) => String(p.id) === planId);
+                  const available = new Set(
+                    Object.entries(plan?.featurePrices ?? {})
+                      .filter(([, cents]) => cents > 0)
+                      .map(([key]) => key),
+                  );
+                  setForm((f) => ({
+                    ...f,
+                    planId,
+                    features: f.features.filter((key) => available.has(key)),
+                  }));
+                }}
                 className={inputCls}
               >
                 <option value="">No plan</option>
@@ -441,6 +479,69 @@ export default function CompaniesPage() {
               </p>
             </div>
 
+            {planAddonOptions.length > 0 ? (
+              <div>
+                <label className={labelCls}>Add-ons</label>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Priced per month on the plan. Add them here or later in the client’s subscription.
+                </p>
+                <div className="mt-2 space-y-1.5">
+                  {planAddonOptions.map((option) => (
+                    <label
+                      key={option.key}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                    >
+                      <span className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={form.features.includes(option.key)}
+                          onChange={(e) =>
+                            setForm((f) => ({
+                              ...f,
+                              features: e.target.checked
+                                ? [...f.features, option.key]
+                                : f.features.filter((key) => key !== option.key),
+                            }))
+                          }
+                        />
+                        <span className="font-medium text-slate-800">{option.label}</span>
+                      </span>
+                      <span className="font-mono text-xs text-slate-500">
+                        {option.key === 'whatsapp_cloud'
+                          ? `${whatsAppBundle(form.whatsappBundle).label} · ${rand(
+                              whatsAppBundle(form.whatsappBundle).cents,
+                            )} / month`
+                          : `${rand(option.cents)} / month`}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                {form.features.includes('whatsapp_cloud') ? (
+                  <div className="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
+                    <label className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                      <span className="font-medium text-slate-700">WhatsApp message bundle</span>
+                      <select
+                        className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs"
+                        value={form.whatsappBundle}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, whatsappBundle: Number(e.target.value) }))
+                        }
+                      >
+                        {WHATSAPP_BUNDLES.map((bundle) => (
+                          <option key={bundle.messages} value={bundle.messages}>
+                            {bundle.label} — {rand(bundle.cents)} / month
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <p className="mt-1 text-[11px] text-sky-800">
+                      Per company per month. The register enforces the monthly allowance.
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div>
               <label className={labelCls}>Licensed terminals</label>
               <input
@@ -452,9 +553,9 @@ export default function CompaniesPage() {
                 className={inputCls}
               />
               <p className="mt-1 text-xs text-slate-400">
-                What this client has purchased — the recurring fee is this quantity × the plan's rate.
-                It is distributed across the client's stores as allocations, and a client with none
-                cannot take a store. Not the same as configured tills or claimed devices.
+                What this client has purchased — the recurring fee is this quantity × the plan's
+                rate. It is distributed across the client's stores as allocations, and a client with
+                none cannot take a store. Not the same as configured tills or claimed devices.
               </p>
             </div>
 

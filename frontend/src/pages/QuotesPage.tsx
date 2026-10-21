@@ -7,6 +7,7 @@ import Spinner from '../components/Spinner';
 import StatusBadge from '../components/StatusBadge';
 import { SummaryTile } from '../components/storeUi';
 import { PER_COMPANY_ADDONS, rand, toCents, toRands } from '../lib/money';
+import { WHATSAPP_BUNDLES } from '../lib/whatsapp';
 import { fmtAgo, fmtTime } from '../lib/storeVocab';
 import type { Quote } from '../types';
 
@@ -82,7 +83,25 @@ interface PlanOption {
   id: number;
   name: string;
   isActive?: boolean;
+  maxStores: number;
+  maxTerminalsPerStore: number;
 }
+
+/** The server's own re-distribution when the operator changes the total. */
+const evenSplit = (total: number, stores: number): number[] => {
+  const safeStores = Math.max(1, stores);
+  const safeTotal = Math.max(0, Math.floor(total));
+  const base = Math.floor(safeTotal / safeStores);
+  const remainder = safeTotal % safeStores;
+  return Array.from({ length: safeStores }, (_, i) => base + (i < remainder ? 1 : 0));
+};
+
+/** The per-store estate a quote describes, from its priced stores line. */
+const quoteSplit = (quote: Quote): number[] => {
+  const split = quote.priced.lines.find((line) => Array.isArray(line.split))?.split;
+  if (split && split.length === quote.stores) return split;
+  return evenSplit(quote.tills, quote.stores);
+};
 
 /**
  * The quote's own pricing, as the office types it. Every field is optional: blank
@@ -286,16 +305,54 @@ function QuotePricingFields({
       </div>
       {selected.length > 0 ? (
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
-          {selected.map((key) => (
-            <PriceField
-              key={key}
-              label={`${featureLabels[key] ?? key} (R${PER_COMPANY_ADDONS.includes(key) ? '' : ' / store'})`}
-              value={form.addons[key] ?? ''}
-              placeholder={list?.addonCents[key] ? rand(list.addonCents[key]) : 'blank = list'}
-              onChange={(value) => set({ addons: { ...form.addons, [key]: value } })}
-            />
-          ))}
+          {selected.map((key) =>
+            key === 'whatsapp_cloud' ? (
+              <label key={key} className="block">
+                <span className="mb-1 block text-xs font-semibold text-slate-600">
+                  WhatsApp messaging (per company)
+                </span>
+                <select
+                  className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm"
+                  // WhatsApp is always sold as a bundle — there is no bare "list"
+                  // row for it. An untouched quote shows the entry bundle, which
+                  // is the same R50 the plan's list price names.
+                  value={form.addons[key] || toRands(WHATSAPP_BUNDLES[0].cents)}
+                  onChange={(e) => set({ addons: { ...form.addons, [key]: e.target.value } })}
+                >
+                  {form.addons[key] &&
+                  !WHATSAPP_BUNDLES.some((bundle) => toRands(bundle.cents) === form.addons[key]) ? (
+                    // A quote from before the bundle select may carry a custom
+                    // WhatsApp price; keep it selectable rather than silently
+                    // snapping it to a bundle.
+                    <option value={form.addons[key]}>
+                      Current — {rand(toCents(form.addons[key]))} / month
+                    </option>
+                  ) : null}
+                  {WHATSAPP_BUNDLES.map((bundle) => (
+                    <option key={bundle.messages} value={toRands(bundle.cents)}>
+                      {bundle.label} — {rand(bundle.cents)} / month
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <PriceField
+                key={key}
+                label={`${featureLabels[key] ?? key} (R${PER_COMPANY_ADDONS.includes(key) ? '' : ' / store'})`}
+                value={form.addons[key] ?? ''}
+                placeholder={list?.addonCents[key] ? rand(list.addonCents[key]) : 'blank = list'}
+                onChange={(value) => set({ addons: { ...form.addons, [key]: value } })}
+              />
+            ),
+          )}
         </div>
+      ) : null}
+      {selected.includes('whatsapp_cloud') ? (
+        <p className="mt-1.5 rounded-lg bg-brand-50 px-3 py-2 text-[11px] text-brand-800">
+          WhatsApp messaging bundles: <strong>R50 → 250 messages</strong>,{' '}
+          <strong>R100 → 500</strong>, <strong>R150 → 750</strong>, <strong>R200 → 1000</strong> per
+          month. Choose the bundle above; its price is the add-on's monthly charge.
+        </p>
       ) : null}
       <p className="mt-1.5 text-[11px] text-slate-400">
         Blank means the published list. Anything typed here is this quote's own price — a concession
@@ -457,6 +514,30 @@ export default function QuotesPage() {
   const addonNames = (quote: Quote): string =>
     quote.addons.map((key) => featureLabels[key] ?? key).join(' · ');
 
+  // The conversion creates the estate the quote describes, so the plan must be
+  // able to hold it. The server enforces the same caps; showing them here stops
+  // the operator from filling in the form and receiving a 400 at the end.
+  const clientSplit = detail ? quoteSplit(detail) : [];
+  const requestedTills = Number.isFinite(Number(clientTills)) ? Number(clientTills) : 0;
+  // Changing the total makes the server redistribute evenly; mirror that here so
+  // the cap warning checks the estate that will actually be created.
+  const clientEstateSplit = detail
+    ? requestedTills === detail.tills
+      ? clientSplit
+      : evenSplit(requestedTills, detail.stores)
+    : [];
+  const clientPlan = plans.find((p) => String(p.id) === clientPlanId);
+  const clientFitError =
+    detail && requestedTills < detail.stores
+      ? `Every store runs at least one till — this quote has ${detail.stores} stores.`
+      : detail && clientPlan
+        ? detail.stores > clientPlan.maxStores
+          ? `${clientPlan.name} allows ${clientPlan.maxStores} store${clientPlan.maxStores === 1 ? '' : 's'}; this quote has ${detail.stores}.`
+          : Math.max(0, ...clientEstateSplit) > clientPlan.maxTerminalsPerStore
+            ? `${clientPlan.name} allows ${clientPlan.maxTerminalsPerStore} terminal${clientPlan.maxTerminalsPerStore === 1 ? '' : 's'} per store; the estate has a branch with ${Math.max(...clientEstateSplit)}.`
+            : null
+        : null;
+
   const updateQuote = (updated: Quote): void => {
     setQuotes((list) => list.map((q) => (q.id === updated.id ? updated : q)));
     setDetail(updated);
@@ -569,7 +650,17 @@ export default function QuotesPage() {
   const openClient = (quote: Quote): void => {
     setClientName(quote.business);
     setClientSlug(slugify(quote.business));
-    setClientPlanId(plans[0] ? String(plans[0].id) : '');
+    // Start on a plan that can hold the quoted estate, not the first row in the
+    // catalogue — the catalogue's first plan is its smallest.
+    const split = quoteSplit(quote);
+    const largestBranch = Math.max(0, ...split);
+    const fitting = plans.find(
+      (plan) =>
+        plan.isActive !== false &&
+        plan.maxStores >= quote.stores &&
+        plan.maxTerminalsPerStore >= largestBranch,
+    );
+    setClientPlanId(fitting ? String(fitting.id) : plans[0] ? String(plans[0].id) : '');
     setClientTills(String(quote.tills));
     setSendError('');
     setNotice('');
@@ -582,22 +673,27 @@ export default function QuotesPage() {
     setClientBusy(true);
     setSendError('');
     try {
-      const res = await api<{ quote: Quote; company: { id: number; name: string; slug: string } }>(
-        `/quotes/${detail.id}/create-client`,
-        {
-          method: 'POST',
-          body: {
-            name: clientName,
-            slug: clientSlug,
-            planId: clientPlanId === '' ? null : Number(clientPlanId),
-            licensedTerminalCount: Number(clientTills),
-          },
+      const res = await api<{
+        quote: Quote;
+        company: { id: number; name: string; slug: string };
+        deployment?: { job: { status: string; error: string | null } };
+      }>(`/quotes/${detail.id}/create-client`, {
+        method: 'POST',
+        body: {
+          name: clientName,
+          slug: clientSlug,
+          planId: clientPlanId === '' ? null : Number(clientPlanId),
+          licensedTerminalCount: Number(clientTills),
         },
-      );
+      });
       updateQuote(res.quote);
       setClientNames((names) => ({ ...names, [res.company.id]: res.company.name }));
       setClientOpen(false);
-      setNotice(`Client "${res.company.name}" created from ${res.quote.number}.`);
+      setNotice(
+        res.deployment?.job.status === 'failed'
+          ? `Client "${res.company.name}" created from ${res.quote.number}, but the deployment job failed: ${res.deployment.job.error ?? 'see Deployments'}.`
+          : `Client "${res.company.name}" created from ${res.quote.number} — deployment started.`,
+      );
     } catch (err) {
       setSendError(err instanceof ApiError ? err.message : 'Could not create the client');
     } finally {
@@ -623,12 +719,26 @@ export default function QuotesPage() {
   };
 
   const toggleCreateAddon = (key: string): void => {
+    const turningOn = !createAddons.has(key);
     setCreateAddons((current) => {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
+    // WhatsApp is the one add-on whose price is a bundle rather than a single
+    // list figure. Open the Prices block and default the picker to the entry
+    // bundle, so the quote records a bundle price rather than a bare list row.
+    if (key === 'whatsapp_cloud' && turningOn) {
+      setCreatePricingOpen(true);
+      setCreatePricing((form) => ({
+        ...form,
+        addons: {
+          ...form.addons,
+          whatsapp_cloud: form.addons.whatsapp_cloud || toRands(WHATSAPP_BUNDLES[0].cents),
+        },
+      }));
+    }
   };
 
   const createQuote = async (): Promise<void> => {
@@ -695,12 +805,24 @@ export default function QuotesPage() {
   };
 
   const toggleEditAddon = (key: string): void => {
+    const turningOn = !editAddons.has(key);
     setEditAddons((current) => {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
+    // Same as create: reveal the bundle picker and default to the entry bundle.
+    if (key === 'whatsapp_cloud' && turningOn) {
+      setEditPricingOpen(true);
+      setEditPricing((form) => ({
+        ...form,
+        addons: {
+          ...form.addons,
+          whatsapp_cloud: form.addons.whatsapp_cloud || toRands(WHATSAPP_BUNDLES[0].cents),
+        },
+      }));
+    }
   };
 
   const saveEdit = async (): Promise<void> => {
@@ -1315,6 +1437,12 @@ export default function QuotesPage() {
                       <span className="text-xs text-slate-400">The vocabulary did not load.</span>
                     ) : null}
                   </div>
+                  {sendAddons.has('whatsapp_cloud') ? (
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      The WhatsApp message bundle (250/500/750/1000) is set on the quote — edit the
+                      quote to change it.
+                    </p>
+                  ) : null}
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
                   <button
@@ -1542,6 +1670,7 @@ export default function QuotesPage() {
                       {plans.map((plan) => (
                         <option key={plan.id} value={String(plan.id)}>
                           {plan.name}
+                          {` · up to ${plan.maxStores} store${plan.maxStores === 1 ? '' : 's'} · ${plan.maxTerminalsPerStore} till${plan.maxTerminalsPerStore === 1 ? '' : 's'}/store`}
                         </option>
                       ))}
                     </select>
@@ -1558,13 +1687,39 @@ export default function QuotesPage() {
                     />
                   </label>
                 </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                  <p>
+                    <span className="font-semibold text-slate-700">Creates the estate:</span>{' '}
+                    {detail.stores} branch{detail.stores === 1 ? '' : 'es'} (
+                    {clientEstateSplit.join(' + ')} tills)
+                    {detail.addons.includes('multi_store')
+                      ? ' and a Head Office panel.'
+                      : '. No Head Office — the quote did not buy it.'}{' '}
+                    The quote’s own terms price the subscription.
+                  </p>
+                  {detail.addons.length > 0 ? (
+                    <p className="mt-1">
+                      <span className="font-semibold text-slate-700">Add-ons:</span>{' '}
+                      {detail.addons.map((key) => featureLabels[key] ?? key).join(' · ')}. They are
+                      billed at this quote’s own prices.
+                    </p>
+                  ) : (
+                    <p className="mt-1">No add-ons on this quote.</p>
+                  )}
+                </div>
+                {clientFitError && (
+                  <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-800">
+                    {clientFitError} Choose a plan with enough headroom, or reduce the licensed
+                    quantity.
+                  </p>
+                )}
                 <div className="flex flex-wrap items-center gap-3">
                   <button
                     onClick={() => void createClient()}
-                    disabled={clientBusy}
+                    disabled={clientBusy || Boolean(clientFitError)}
                     className={primaryBtn}
                   >
-                    {clientBusy ? 'Creating…' : 'Create client'}
+                    {clientBusy ? 'Creating & deploying…' : 'Create client & deploy'}
                   </button>
                   <button onClick={() => setClientOpen(false)} className={secondaryBtn}>
                     Cancel

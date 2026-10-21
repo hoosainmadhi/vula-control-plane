@@ -5,9 +5,11 @@ import {
   deleteQuote,
   getCompanyBySlug,
   getPlanById,
+  getRegistryDb,
   getQuoteById,
   linkQuoteToCompany,
   listQuotes,
+  listStores,
   markQuoteAccepted,
   markQuoteDeclined,
   markQuoteSent,
@@ -41,6 +43,7 @@ import {
   type QuoteSetupVariant,
 } from '../services/quotePricing.js';
 import { sendQuoteDocument } from '../services/quoteMail.js';
+import { orchestrateClientDeployment } from '../services/clientOrchestrator.js';
 
 export const quotesRouter = Router();
 
@@ -159,6 +162,65 @@ const slugify = (value: string): string =>
     .trim()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '');
+
+/**
+ * The per-store estate a quote describes.
+ *
+ * The desk stores a real split on the priced stores line (`split`, e.g.
+ * [4, 3, 2]); without one the estate is the quote's own even multiplication.
+ * When the operator changes the licensed total on conversion, the even split is
+ * the only honest re-distribution — the quote's uneven shape belonged to the
+ * quantity it was priced for.
+ */
+const quoteStoreSplit = (quote: QuoteRecord, licensedTotal: number): number[] => {
+  const stores = Math.max(1, quote.stores);
+  if (licensedTotal === quote.tills) {
+    try {
+      const lines = JSON.parse(quote.priced_lines_json) as Array<{ split?: unknown }>;
+      const split = lines.find((line) => Array.isArray(line.split))?.split;
+      if (
+        Array.isArray(split) &&
+        split.length === stores &&
+        split.every((n) => Number.isInteger(n) && (n as number) >= 1)
+      ) {
+        return split as number[];
+      }
+    } catch {
+      // An unreadable snapshot falls back to the even distribution below.
+    }
+  }
+  const base = Math.floor(licensedTotal / stores);
+  const remainder = licensedTotal % stores;
+  return Array.from({ length: stores }, (_, i) => base + (i < remainder ? 1 : 0));
+};
+
+/** The store rows the quote becomes, with the wizard's own naming/URL defaults. */
+const storesFromQuote = (
+  quote: QuoteRecord,
+  name: string,
+  slug: string,
+  split: number[],
+): Array<{
+  name: string;
+  slug: string;
+  baseUrl: string;
+  kind: 'store';
+  terminalCount: number;
+  licensedTerminalCount: number;
+  adminEmail?: string;
+}> =>
+  split.map((tills, i) => {
+    const storeSlug = split.length === 1 ? slug : `${slug}-${i + 1}`;
+    return {
+      name: split.length === 1 ? name : `${name} Branch ${i + 1}`,
+      slug: storeSlug,
+      baseUrl: `https://${storeSlug}.vula-app.co.za`,
+      kind: 'store' as const,
+      terminalCount: tills,
+      licensedTerminalCount: tills,
+      ...(quote.email ? { adminEmail: quote.email } : {}),
+    };
+  });
 
 /** The desk's view of a record: camelCase, JSON columns parsed, no DB names. */
 const quoteOut = (q: QuoteRecord) => ({
@@ -676,16 +738,68 @@ quotesRouter.post(
       body['licensedTerminalCount'] !== undefined
         ? requireInt(body, 'licensedTerminalCount', { min: 0, max: 5000 })
         : quote.tills;
+    if (licensedTerminalCount < quote.stores) {
+      throw new ValidationError(
+        `Every store runs at least one till — ${quote.stores} stores need ${quote.stores} licensed terminals or more`,
+      );
+    }
 
-    const company = createCompany({
-      name,
-      slug,
-      billingEmail: quote.email,
-      planId,
-      paidThrough: null,
-      trialEndsAt: null,
-    });
-    setLicensedTerminalCount(company.id, licensedTerminalCount);
+    // The estate the quote describes. A real per-store split travels on the
+    // priced stores line; without one the quote's own even multiplication does.
+    const split = quoteStoreSplit(quote, licensedTerminalCount);
+    if (split.length !== quote.stores || split.some((tills) => tills < 1)) {
+      throw new ValidationError('The quote does not describe a usable per-store estate');
+    }
+
+    // A plan's caps are part of what it sells, so they are checked before
+    // anything is created. `max_stores` mirrors `POST /stores`; the per-store
+    // ceiling is the signed licence's `maxTerminals`.
+    if (plan) {
+      if (quote.stores > plan.max_stores) {
+        throw new HttpError(
+          400,
+          `${plan.name} allows ${plan.max_stores} store${plan.max_stores === 1 ? '' : 's'}, but this quote describes ${quote.stores}. Choose a plan with a higher store cap.`,
+        );
+      }
+      const ceiling = Math.max(...split);
+      if (ceiling > plan.max_terminals_per_store) {
+        throw new HttpError(
+          400,
+          `${plan.name} allows ${plan.max_terminals_per_store} terminal${plan.max_terminals_per_store === 1 ? '' : 's'} per store, but the quote has a branch with ${ceiling}. Choose a plan with a higher per-store ceiling.`,
+        );
+      }
+    }
+
+    const addons = JSON.parse(quote.addons_json) as string[];
+    const hasHeadOffice = addons.includes('multi_store');
+    const stores = storesFromQuote(quote, name, slug, split);
+    const headOffice = hasHeadOffice
+      ? {
+          name: `${name} Head Office`,
+          slug: `${slug}-ho`,
+          baseUrl: `https://${slug}-ho.vula-app.co.za`,
+          ...(quote.email ? { adminEmail: quote.email } : {}),
+        }
+      : undefined;
+
+    // The rows are ours to create, so a clashing slug is named now rather than
+    // discovered halfway through a deployment job.
+    const existingStoreSlugs = new Set(listStores().map((store) => store.slug));
+    const clash = stores.find((store) => existingStoreSlugs.has(store.slug));
+    if (clash) {
+      throw new HttpError(409, `A store with slug "${clash.slug}" already exists — choose another`);
+    }
+    if (headOffice) {
+      const panelClash = getRegistryDb()
+        .prepare('SELECT id FROM panels WHERE slug = ?')
+        .get(headOffice.slug);
+      if (panelClash) {
+        throw new HttpError(
+          409,
+          `A Head Office with slug "${headOffice.slug}" already exists — choose another client slug`,
+        );
+      }
+    }
 
     // THE QUOTE'S OWN FIGURES, never the published list's (2026-10-14). The
     // quotation is the promise: a quote priced per till, or carrying an overridden
@@ -700,39 +814,70 @@ quotesRouter.post(
       ...DEFAULT_FEATURE_PRICES,
       ...storedAddonRates(quote),
     };
-    const addons = JSON.parse(quote.addons_json) as string[];
     const addonPrices = Object.fromEntries(addons.map((key) => [key, addonRates[key] ?? 0]));
-    setSubscriptionPricing(company.id, {
-      pricingMode: basis === 'till' ? 'per_terminal' : 'per_store',
-      rateCents: tillRateCents,
-      storeRateCents: basis === 'till' ? 0 : storeRateCents,
-      customAmountCents: 0,
-      setupFeeCents: quote.setup_cents,
-      billingPeriod: plan?.billing_period ?? 'monthly',
-    });
-    setSubscriptionAddons(company.id, addons, addonPrices);
 
-    const linked = linkQuoteToCompany(quote.id, company.id);
-    recordAuditLog('office', 'quote_client_created', 'quote', quote.id, {
-      after: {
-        number: quote.quote_number,
-        companyId: company.id,
+    // One transaction for the commercial record: company, purchased quantity,
+    // agreed terms, add-ons and the quote link. The deployment job follows.
+    const company = getRegistryDb().transaction(() => {
+      const created = createCompany({
         name,
         slug,
-        planCode: plan?.code ?? null,
-        licensedTerminalCount,
-        pricingBasis: basis,
+        billingEmail: quote.email,
+        planId,
+        paidThrough: null,
+        trialEndsAt: null,
+      });
+      setLicensedTerminalCount(created.id, licensedTerminalCount);
+      setSubscriptionPricing(created.id, {
+        pricingMode: basis === 'till' ? 'per_terminal' : 'per_store',
         rateCents: tillRateCents,
         storeRateCents: basis === 'till' ? 0 : storeRateCents,
-        addonPrices,
+        customAmountCents: 0,
         setupFeeCents: quote.setup_cents,
-      },
-      reason: `Created client "${name}" from ${quote.quote_number}`,
+        billingPeriod: plan?.billing_period ?? 'monthly',
+      });
+      setSubscriptionAddons(created.id, addons, addonPrices);
+      linkQuoteToCompany(quote.id, created.id);
+      recordAuditLog('office', 'quote_client_created', 'quote', quote.id, {
+        after: {
+          number: quote.quote_number,
+          companyId: created.id,
+          name,
+          slug,
+          planCode: plan?.code ?? null,
+          licensedTerminalCount,
+          stores: split.length,
+          tillsSplit: split,
+          pricingBasis: basis,
+          rateCents: tillRateCents,
+          storeRateCents: basis === 'till' ? 0 : storeRateCents,
+          addonPrices,
+          setupFeeCents: quote.setup_cents,
+          headOffice: Boolean(headOffice),
+        },
+        reason: `Created client "${name}" from ${quote.quote_number}`,
+      });
+      return created;
+    })();
+
+    // The quote becomes the estate it priced: branches with their licensed
+    // counts, and a Head Office when the quote bought the add-on. Without this
+    // the client's store count was zero, so the recurring quote priced every till
+    // as an additional one until someone built the branches by hand.
+    const { job, steps } = await orchestrateClientDeployment({
+      companyId: company.id,
+      deploymentType: headOffice ? 'multi_store' : 'single_store',
+      stores,
+      headOffice,
+      autoDeploy: body['autoDeploy'] !== false,
     });
+
+    const linked = getQuoteById(quote.id)!;
     res.status(201).json({
       ok: true,
       quote: quoteOut(linked),
       company: { id: company.id, name: company.name, slug: company.slug },
+      deployment: { job, steps },
     });
   }),
 );

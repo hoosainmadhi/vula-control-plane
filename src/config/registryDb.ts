@@ -929,10 +929,7 @@ export const getRegistryDb = (): Database.Database => {
   addOfficeColumn('quote_valid_days', 'quote_valid_days INTEGER NOT NULL DEFAULT 30');
   // The once-off pair (2026-10-14): the figures the desk, the onboarding form and
   // the marketing page all read. Defaults are the published prices.
-  addOfficeColumn(
-    'setup_fee_self_cents',
-    'setup_fee_self_cents INTEGER NOT NULL DEFAULT 150000',
-  );
+  addOfficeColumn('setup_fee_self_cents', 'setup_fee_self_cents INTEGER NOT NULL DEFAULT 150000');
   addOfficeColumn(
     'setup_fee_assisted_cents',
     'setup_fee_assisted_cents INTEGER NOT NULL DEFAULT 500000',
@@ -981,6 +978,12 @@ export const getRegistryDb = (): Database.Database => {
   // After the additive pass, so `kind` exists in the table being copied.
   allowWarehouseTerminalCount(db);
   const splitGranted = grantSplitFeatureKeys(db);
+  // The WhatsApp add-on postdates the plans that predate 2026-10-20; give them
+  // the entry price once, so the client subscription editor can offer it.
+  migrateWhatsAppCloudPrice(db);
+  // After the WhatsApp backfill, so the one plan that still carries the old R49
+  // bundle is corrected in the same pass.
+  migratePublishedPricingDefaults(db);
   // After the split, so `layby`/`invoice_import` are priced before anything moves.
   const bundledMoved = moveBundledFeaturesToAddons(db);
   // Both migrations change what a client is entitled to, which means the licences
@@ -1483,6 +1486,114 @@ const grantSplitFeatureKeys = (db: Database.Database): boolean => {
   });
   run();
   return granted;
+};
+
+/**
+ * One-time price backfill for the WhatsApp messaging add-on (2026-10-20).
+ *
+ * The key postdates the plans that already exist, so those plans' price maps
+ * have no entry and the client subscription editor (which offers what the plan
+ * prices) cannot show it. This adds the entry bundle price — R50 for 250
+ * messages — once, to every plan that neither includes nor prices it.
+ *
+ * `user_version` makes it one-time: if the office later removes the price from
+ * a plan, that decision is not undone at the next boot. New plans are seeded
+ * with the whole catalogue by the Plans page.
+ */
+const migrateWhatsAppCloudPrice = (db: Database.Database): void => {
+  const WHATSAPP_PRICE_VERSION = 1;
+  const current = Number(db.pragma('user_version', { simple: true })) || 0;
+  if (current >= WHATSAPP_PRICE_VERSION) return;
+  const defaultPrice = DEFAULT_FEATURE_PRICES.whatsapp_cloud ?? 0;
+  if (defaultPrice > 0 && tableExists(db, 'plans')) {
+    const rows = db.prepare('SELECT * FROM plans').all() as PlanRecord[];
+    const setPrices = db.prepare('UPDATE plans SET feature_prices_json = ? WHERE id = ?');
+    const run = db.transaction(() => {
+      for (const plan of rows) {
+        if (planFeatures(plan).includes('whatsapp_cloud')) continue;
+        const prices = planFeaturePrices(plan);
+        if ('whatsapp_cloud' in prices) continue;
+        setPrices.run(JSON.stringify({ ...prices, whatsapp_cloud: defaultPrice }), plan.id);
+      }
+    });
+    run();
+  }
+  db.pragma(`user_version = ${WHATSAPP_PRICE_VERSION}`);
+};
+
+/**
+ * Align the seeded catalogue with the published per-store list (2026-10-20).
+ *
+ * Two rows predate the 2026-10-14 list and would bill against it:
+ *
+ *  - `vula-standard` was built as "the site's offer in one plan" under the old
+ *    per-till model. When the additional-till rate moved to R49 its terminal
+ *    price was set to R49 but the mode stayed `per_terminal` and the store rate
+ *    stayed 0 — so the plan billed a store's first till at the additional-till
+ *    rate and never charged the R199 store line. It becomes a proper per-store
+ *    plan at the published pair.
+ *  - Every plan seeded before 2026-10-14 still carries the old R99 Head Office
+ *    add-on (`multi_store: 9900`). The list, the quote desk and the marketing
+ *    page all say R199; the plan price is what the New Client wizard charges.
+ *
+ * A one-time `user_version` step, so an office that deliberately sets either
+ * figure again is not overruled on the next boot. Existing clients are not
+ * re-priced: their agreed `company_subscriptions` terms are snapshots.
+ */
+const migratePublishedPricingDefaults = (db: Database.Database): void => {
+  const PRICING_DEFAULTS_VERSION = 2;
+  const current = Number(db.pragma('user_version', { simple: true })) || 0;
+  if (current >= PRICING_DEFAULTS_VERSION) return;
+  if (!tableExists(db, 'plans')) return;
+
+  const rows = db.prepare('SELECT * FROM plans').all() as PlanRecord[];
+  const update = db.prepare(
+    `UPDATE plans
+        SET pricing_mode = ?, terminal_price_cents = ?, store_price_cents = ?,
+            feature_prices_json = ?, updated_at = datetime('now')
+      WHERE id = ?`,
+  );
+  const changed: string[] = [];
+  const run = db.transaction(() => {
+    for (const plan of rows) {
+      const prices = planFeaturePrices(plan);
+      let mode = plan.pricing_mode;
+      let terminalPrice = plan.terminal_price_cents;
+      let storePrice = plan.store_price_cents;
+      let touched = false;
+
+      if (prices.multi_store === 9900) {
+        prices.multi_store = 19900;
+        touched = true;
+      }
+
+      // Vula Standard is the one catalogue row that was never moved to the
+      // per-store mode; it must charge the store rate, not the extra-till rate.
+      if (plan.code === 'vula-standard' && mode !== 'per_store') {
+        mode = 'per_store';
+        terminalPrice = 4900;
+        storePrice = 19900;
+        touched = true;
+      }
+
+      // The WhatsApp entry bundle is R50 for 250 messages. The old plan row
+      // carried R49 (the per-store add-on pattern) and would have sold a bundle
+      // the other plans price at R50.
+      if (plan.code === 'vula-standard' && prices.whatsapp_cloud === 4900) {
+        prices.whatsapp_cloud = 5000;
+        touched = true;
+      }
+
+      if (!touched) continue;
+      update.run(mode, terminalPrice, storePrice, JSON.stringify(prices), plan.id);
+      changed.push(plan.code);
+    }
+  });
+  run();
+  if (changed.length > 0) {
+    logger.info(`Registry migration: aligned published pricing on ${changed.join(', ')}`);
+  }
+  db.pragma(`user_version = ${PRICING_DEFAULTS_VERSION}`);
 };
 
 /**
@@ -2035,8 +2146,7 @@ export const PLAN_PERIODS: readonly PlanPeriod[] = ['monthly', 'annual', 'once-o
 const defaultSelfSetupFeeCents = (db: Database.Database): number =>
   (
     db.prepare('SELECT setup_fee_self_cents AS c FROM office_settings WHERE id = 1').get() as
-      | { c: number }
-      | undefined
+      { c: number } | undefined
   )?.c ?? 150_000;
 
 export const createPlan = (input: PlanInput): PlanRecord => {

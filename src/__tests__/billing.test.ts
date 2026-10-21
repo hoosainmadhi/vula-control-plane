@@ -722,6 +722,16 @@ describe('L3 Billing & Invoicing', () => {
         name: 'Urban Threads (Demo)',
         slug: 'urban-threads-demo',
         planId: (planRes.body as { id: number }).id,
+        // Head Office is a multi-store capability (owner, 2026-10-20): a
+        // single-store deployment provisions no panel, so this fixture selects
+        // the topology explicitly. The branch count is what the add-on
+        // quantities follow, and it stays one here.
+        deploymentType: 'multi_store',
+        headOffice: {
+          name: 'Urban Threads Head Office',
+          slug: 'urban-threads-demo-ho',
+          baseUrl: 'http://localhost:3260',
+        },
         autoDeploy: false,
         features: [
           'multi_store',

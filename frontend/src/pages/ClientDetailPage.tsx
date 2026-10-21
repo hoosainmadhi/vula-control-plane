@@ -22,8 +22,8 @@ import type {
   StoreFormValues,
 } from '../types';
 import { SETUP_FEE_LABEL, type Notice } from '../lib/storeVocab';
+import { WHATSAPP_BUNDLES, whatsAppBundle, whatsAppMessagesForCents } from '../lib/whatsapp';
 import {
-  addonLinesFor,
   ASSISTED_SETUP_CENTS,
   perStoreLabel,
   perTerminalLabel,
@@ -31,6 +31,7 @@ import {
   rand,
 } from '../lib/money';
 import { officeSetupFees } from '../lib/officeFees';
+import SubscriptionQuotePreview from '../components/SubscriptionQuotePreview';
 
 /** The site's assisted-setup price, offered as a quick pick beside the plan's self figure. */
 
@@ -40,116 +41,6 @@ const SETUP_FEE_LABELS: Record<SetupFeeStatus, string> = {
   paid: 'Paid',
   waived: 'Waived',
 };
-
-/**
- * The live quote inside the subscription editor — the figure the invoice will
- * carry, itemised. It mirrors `quoteForSubscription` (services/pricing.ts): the
- * plan's rate × licensed terminals plus every ticked add-on, at the price agreed
- * with this client when there is one (grandfathering) and the plan's price
- * otherwise. Showing the terminals line alone understated the bill by the price
- * of every add-on on it.
- */
-function SubscriptionQuotePreview({
-  plan,
-  licensed,
-  stores,
-  addonOptions,
-  selected,
-  agreedPrices,
-}: {
-  plan: Plan | undefined;
-  licensed: number;
-  /** The client's trading stores — what a per-store plan bills. */
-  stores: number;
-  /** What the plan sells and at what price — the lines the ticks can produce. */
-  addonOptions: Array<{ key: string; cents: number; label: string }>;
-  selected: string[];
-  /** Prices already agreed with this client; they govern over the plan's. */
-  agreedPrices: Record<string, number>;
-}) {
-  if (!plan) return null;
-  const addonLines = addonLinesFor(addonOptions, selected, agreedPrices, stores);
-  const addonsCents = addonLines.reduce((sum, line) => sum + line.cents, 0);
-  const period = plan.billingPeriod === 'once-off' ? '' : PERIOD_LABEL[plan.billingPeriod];
-  const custom = plan.pricingMode === 'custom';
-  const perStore = plan.pricingMode === 'per_store';
-  const additional = Math.max(0, licensed - stores);
-  const storesCents = perStore ? stores * plan.storePriceCents : 0;
-  const terminalsCents = custom
-    ? 0
-    : perStore
-      ? additional * plan.terminalPriceCents
-      : plan.terminalPriceCents * licensed;
-  return (
-    <div className="rounded-xl bg-slate-50 px-3.5 py-3 text-xs">
-      {custom ? (
-        <div className="flex justify-between">
-          <span className="text-slate-500">Recurring</span>
-          <span className="font-bold text-slate-800">Custom pricing — agreed per client</span>
-        </div>
-      ) : (
-        <>
-          {perStore ? (
-            <>
-              <div className="flex justify-between">
-                <span className="text-slate-500">
-                  Stores ({stores} × {rand(plan.storePriceCents)})
-                </span>
-                <span className="font-mono text-slate-700">{rand(storesCents)}</span>
-              </div>
-              <div className="mt-1 flex justify-between">
-                <span className="text-slate-500">
-                  Additional tills ({additional} × {rand(plan.terminalPriceCents)})
-                </span>
-                <span className="font-mono text-slate-700">{rand(terminalsCents)}</span>
-              </div>
-            </>
-          ) : (
-            <div className="flex justify-between">
-              <span className="text-slate-500">
-                Licensed terminals ({licensed} × {rand(plan.terminalPriceCents)})
-              </span>
-              <span className="font-mono text-slate-700">{rand(terminalsCents)}</span>
-            </div>
-          )}
-          {addonLines.map((line) => (
-            <div key={line.key} className="mt-1 flex justify-between">
-              <span className="text-slate-500">
-                {line.label}
-                {line.quantity > 1 ? (
-                  <span className="text-slate-400">
-                    {' '}
-                    ({line.quantity} × {rand(line.unitCents)})
-                  </span>
-                ) : null}
-              </span>
-              <span className="font-mono text-slate-700">{rand(line.cents)} / month</span>
-            </div>
-          ))}
-          <div className="mt-1 flex justify-between border-t border-slate-200 pt-1.5">
-            <span className="font-semibold text-slate-600">Recurring</span>
-            <span className="font-mono font-black text-slate-900">
-              {rand(storesCents + terminalsCents + addonsCents)} {period}
-            </span>
-          </div>
-        </>
-      )}
-      {custom && addonLines.length > 0 && (
-        <p className="mt-1 text-[11px] text-slate-500">
-          {addonLines.length === 1 ? 'This add-on is' : 'These add-ons are'} carried inside the
-          agreed flat amount — the invoice shows {addonLines.length === 1 ? 'it' : 'them'} as
-          included, not on top.
-        </p>
-      )}
-      <div className="mt-1 flex justify-between">
-        <span className="text-slate-500">{SETUP_FEE_LABEL}</span>
-        <span className="font-mono font-semibold text-slate-800">
-          {plan.setupFeeCents > 0 ? rand(plan.setupFeeCents) : 'None'}
-        </span>
-      </div>
-    </div>
-  );
-}
 
 export default function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -181,6 +72,8 @@ export default function ClientDetailPage() {
   const [assistedSetupCents, setAssistedSetupCents] = useState(ASSISTED_SETUP_CENTS);
   /** The paid add-ons the client holds — what the editor's ticks will send. */
   const [subFeatures, setSubFeatures] = useState<string[]>([]);
+  /** The chosen WhatsApp bundle in messages (250/500/750/1000). */
+  const [whatsappBundle, setWhatsappBundle] = useState<number>(250);
   const [subAllocations, setSubAllocations] = useState<
     Array<{ storeId: number; name: string; licensed: string }>
   >([]);
@@ -300,6 +193,8 @@ export default function ClientDetailPage() {
     setSubSetupFeeStatus(sub?.setupFeeStatus ?? data.client.setupFeeStatus ?? 'not_invoiced');
     setSubSetupFee(String(sub?.setupFeeCents ?? data.client.setupFeeCents ?? 0));
     setSubFeatures((sub?.addons ?? []).map((a) => a.key));
+    const whatsapp = sub?.addons.find((a) => a.key === 'whatsapp_cloud');
+    setWhatsappBundle(whatsAppMessagesForCents(whatsapp?.cents));
     setSubAllocations(
       (data.stores ?? []).map((store) => {
         const allocation = sub?.allocations.find((a) => a.storeId === store.id);
@@ -315,16 +210,31 @@ export default function ClientDetailPage() {
   };
 
   /**
-   * The add-ons the editor can sell: what the plan in the form prices, minus
-   * what it already includes (a bundled feature is the client's already, so
-   * ticking it would be selling them what they have).
+   * The add-ons the editor can sell, plus the ones this client already holds.
+   *
+   * The plan's prices are the list: what the office can newly sell. A held
+   * add-on must remain visible even if the plan no longer prices it (it may
+   * have come from a quote on agreed terms) — hiding it would make it
+   * impossible to see or remove. A feature the plan already INCLUDES is not an
+   * add-on: the client has it already.
    */
   const planForEditor = plans.find((p) => String(p.id) === subPlanId);
-  const subAddonOptions = planForEditor
+  const planIncluded = new Set(planForEditor?.features ?? []);
+  const planAddonOptions = planForEditor
     ? Object.entries(planForEditor.featurePrices ?? {})
-        .filter(([key, cents]) => cents > 0 && !planForEditor.features.includes(key))
+        .filter(([key, cents]) => cents > 0 && !planIncluded.has(key))
         .map(([key, cents]) => ({ key, cents, label: featureLabels[key] ?? key }))
     : [];
+  const heldAddonOptions = (data?.subscription?.addons ?? [])
+    .filter(
+      (addon) => !planIncluded.has(addon.key) && !planAddonOptions.some((o) => o.key === addon.key),
+    )
+    .map((addon) => ({
+      key: addon.key,
+      cents: addon.cents,
+      label: featureLabels[addon.key] ?? addon.key,
+    }));
+  const subAddonOptions = [...planAddonOptions, ...heldAddonOptions];
   /**
    * The tills the client's stores already RUN (configured slots, not licensed).
    * The purchased quantity may never drop below it: a subscription cannot
@@ -371,8 +281,10 @@ export default function ClientDetailPage() {
           // The client's own once-off charge: assisted vs self setup (2026-10-12).
           setupFeeCents: Number(subSetupFee) || 0,
           // The paid add-ons. A feature the plan already includes is not offered
-          // below (the client has it), so this list is only what they BUY.
+          // below (the client has it), so this list is only what they BUY. The
+          // WhatsApp bundle chosen here sets that add-on's agreed price.
           features: subFeatures,
+          ...(subFeatures.includes('whatsapp_cloud') ? { whatsappBundle } : {}),
           ...(isMulti
             ? {
                 // The purchased quantity FIRST, then where it sits: the server
@@ -1616,16 +1528,47 @@ export default function ClientDetailPage() {
                           <span className="font-medium text-slate-800">{option.label}</span>
                         </span>
                         <span className="font-mono text-xs text-slate-500">
-                          {rand(agreedAddonPrices[option.key] ?? option.cents)} / month
-                          {agreedAddonPrices[option.key] !== undefined &&
-                          agreedAddonPrices[option.key] !== option.cents
-                            ? ' · agreed'
-                            : ''}
+                          {option.key === 'whatsapp_cloud' ? (
+                            <>
+                              {whatsAppBundle(whatsappBundle).label} ·{' '}
+                              {rand(whatsAppBundle(whatsappBundle).cents)} / month
+                            </>
+                          ) : (
+                            <>
+                              {rand(agreedAddonPrices[option.key] ?? option.cents)} / month
+                              {agreedAddonPrices[option.key] !== undefined &&
+                              agreedAddonPrices[option.key] !== option.cents
+                                ? ' · agreed'
+                                : ''}
+                            </>
+                          )}
                         </span>
                       </label>
                     ))
                   )}
                 </div>
+                {subFeatures.includes('whatsapp_cloud') ? (
+                  <div className="mt-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2">
+                    <label className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                      <span className="font-medium text-slate-700">WhatsApp message bundle</span>
+                      <select
+                        className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs"
+                        value={whatsappBundle}
+                        onChange={(e) => setWhatsappBundle(Number(e.target.value))}
+                      >
+                        {WHATSAPP_BUNDLES.map((bundle) => (
+                          <option key={bundle.messages} value={bundle.messages}>
+                            {bundle.label} — {rand(bundle.cents)} / month
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <p className="mt-1 text-[11px] text-sky-800">
+                      Per company per month. The register refuses sends after the monthly allowance
+                      is used.
+                    </p>
+                  </div>
+                ) : null}
               </div>
 
               {client.topology === 'multi_store' ? (

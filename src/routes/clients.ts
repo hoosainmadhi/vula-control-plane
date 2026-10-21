@@ -52,7 +52,11 @@ import {
   requireFeature,
   requireSellableFeature,
 } from '../services/subscriptions.js';
-import { PRICED_FEATURE_KEYS, validateFeatureKeys } from '../services/features.js';
+import {
+  PRICED_FEATURE_KEYS,
+  validateFeatureKeys,
+  whatsAppBundleCents,
+} from '../services/features.js';
 import { quoteForSubscription } from '../services/pricing.js';
 import {
   summariseSubscription,
@@ -112,6 +116,7 @@ const buyAddons = (
   plan: PlanRecord | null,
   keys: string[],
   reason: string,
+  overrides: Record<string, number> = {},
 ): void => {
   if (!plan || keys.length === 0) return;
   const subscription = getSubscription(companyId);
@@ -121,7 +126,9 @@ const buyAddons = (
     const price = planFeaturePrice(plan, key);
     if (price === undefined) continue; // the plan does not sell it
     bought.add(key);
-    prices[key] = prices[key] ?? price; // an existing agreement stands
+    // A bundle chosen at onboarding is the agreed price; otherwise an existing
+    // agreement stands, then the plan's list.
+    prices[key] = overrides[key] ?? prices[key] ?? price;
   }
   if (bought.size === 0) return;
   setSubscriptionAddons(companyId, [...bought], prices);
@@ -588,8 +595,17 @@ clientsRouter.put(
       body.features !== undefined
         ? validateFeatureKeys(body.features).filter((key) => PRICED_FEATURE_KEYS.includes(key))
         : undefined;
+    // The chosen WhatsApp bundle (250/500/750/1000 messages) overrides the plan's
+    // entry price for THIS client; the licence derives the monthly allowance.
+    const whatsappCents = whatsAppBundleCents(body.whatsappBundle);
     if (requestedFeatures !== undefined) {
-      const notPriced = requestedFeatures.filter((key) => !(key in planPricesForRequest));
+      // Keep a held add-on editable when its plan price has been removed: it was
+      // bought on agreed terms (a quote can price it), and the plan's current
+      // list must not silently strip it. A new purchase still needs a plan price.
+      const heldFeatures = subscriptionFeatures(getSubscription(company.id));
+      const notPriced = requestedFeatures.filter(
+        (key) => !(key in planPricesForRequest) && !heldFeatures.includes(key),
+      );
       if (notPriced.length > 0) {
         throw new HttpError(
           400,
@@ -653,11 +669,15 @@ clientsRouter.put(
         const agreedPrices = subscriptionAddonPrices(getSubscription(company.id));
         const nextPrices: Record<string, number> = {};
         for (const key of requestedFeatures) {
-          // A feature the client already had keeps the price they agreed; a newly
-          // bought one is priced from the plan today.
-          nextPrices[key] = existingFeatures.includes(key)
-            ? (agreedPrices[key] ?? planPricesForRequest[key] ?? 0)
-            : (planPricesForRequest[key] ?? 0);
+          // An explicitly chosen WhatsApp bundle wins; otherwise a feature the
+          // client already had keeps the price they agreed, and a newly bought
+          // one is priced from the plan today.
+          nextPrices[key] =
+            key === 'whatsapp_cloud' && whatsappCents !== undefined
+              ? whatsappCents
+              : existingFeatures.includes(key)
+                ? (agreedPrices[key] ?? planPricesForRequest[key] ?? 0)
+                : (planPricesForRequest[key] ?? 0);
         }
         setSubscriptionAddons(company.id, requestedFeatures, nextPrices);
         recordAuditLog('office', 'subscription_addons_set', 'company', company.id, {
@@ -839,6 +859,7 @@ clientsRouter.post(
     const requestedAddons = validateFeatureKeys(req.body?.features ?? []).filter((key) =>
       PRICED_FEATURE_KEYS.includes(key),
     );
+    const onboardingWhatsAppCents = whatsAppBundleCents(req.body?.whatsappBundle);
     if (requestedAddons.length > 0) {
       const planAtCreation = planId !== null ? getPlanById(planId) : null;
       const notSold = requestedAddons.filter(
@@ -851,6 +872,16 @@ clientsRouter.post(
       }
     }
 
+    // Head Office is a multi-store capability: there is one panel for the
+    // business, and a single-store deployment provisions none. The quote desk and
+    // the marketing page already refuse it below two stores; the wizard must too,
+    // or a client pays for a panel that does not exist.
+    if (deploymentType === 'single_store' && requestedAddons.includes('multi_store')) {
+      throw new ValidationError(
+        'Head Office needs two or more stores — switch the deployment to multi-store, or leave Head Office off.',
+      );
+    }
+
     // The once-off onboarding charge chosen at onboarding: the plan's default is
     // self setup (R1 500); assisted setup (R5 000) is stated here. Validated up
     // front like the add-ons, so a refused request writes nothing.
@@ -859,22 +890,12 @@ clientsRouter.post(
         ? requireInt(req.body, 'setupFeeCents', { min: 0, max: 5_000_000 })
         : undefined;
 
-    // 1. Create company record
-    const company = createCompany({
-      name,
-      slug,
-      billingEmail,
-      planId,
-    });
-
-    recordAuditLog('office', 'client_created', 'company', company.id, {
-      after: { name, slug, deploymentType },
-      reason: 'Created new client via onboarding wizard',
-    });
-
-    // 2. Format stores list. `terminalCount` is what the POS is configured to
-    // run; `licensedTerminalCount` is what the client buys — absent means the
-    // same number, which is the wizard's default.
+    // 1. Format and validate the estate BEFORE anything is written. A refused
+    // wizard used to leave a company row behind because the company was created
+    // above these checks — an orphan client with no subscription, stores or job.
+    // `terminalCount` is what the POS is configured to run;
+    // `licensedTerminalCount` is what the client buys — absent means the same
+    // number, which is the wizard's default.
     const rawStores = req.body?.stores;
     if (rawStores !== undefined && !Array.isArray(rawStores)) {
       throw new ValidationError(
@@ -907,12 +928,35 @@ clientsRouter.post(
       );
     }
 
-    // What the client purchased, recorded up front: the sum of the per-store
-    // licences the wizard asked for. Every allocation below is drawn from it, and
-    // the recurring fee is this quantity × the plan's rate.
+    // Head Office, if multi_store.
+    let headOffice:
+      { name: string; slug: string; baseUrl: string; adminEmail?: string } | undefined;
+    if (deploymentType === 'multi_store') {
+      headOffice = await validateNestedHeadOffice(req.body?.headOffice, {
+        name: `${name} Head Office`,
+        slug: `${slug}-ho`,
+        baseUrl: `https://${slug}-ho.vula-app.co.za`,
+        adminEmail: billingEmail || undefined,
+      });
+    }
+
+    // What the client purchased: the sum of the per-store licences the wizard
+    // asked for. Every allocation below is drawn from it, and the recurring fee
+    // is `stores × store rate + extra tills × till rate`.
     const licensedTotal = stores.reduce((n, s) => n + s.licensedTerminalCount, 0);
+
+    // The plan's caps are part of what the client bought, so they are checked
+    // before the company exists. `max_stores` is the same ceiling `POST /stores`
+    // applies to a later branch; the per-store ceiling is the signed licence's
+    // `maxTerminals`.
     if (planId !== null) {
       const chosenPlan = getPlanById(planId)!;
+      if (stores.length > chosenPlan.max_stores) {
+        throw new HttpError(
+          400,
+          `${chosenPlan.name} allows ${chosenPlan.max_stores} store${chosenPlan.max_stores === 1 ? '' : 's'}, but this onboarding has ${stores.length}. Use a higher plan or fewer stores.`,
+        );
+      }
       const overCeiling = stores.find(
         (s) => s.licensedTerminalCount > chosenPlan.max_terminals_per_store,
       );
@@ -930,48 +974,61 @@ clientsRouter.post(
         );
       }
     }
-    setLicensedTerminalCount(company.id, licensedTotal);
 
-    // The wizard states the quantity and the plan states the price: record both as
-    // the client's agreement, so a later edit to the plan cannot re-price them.
-    recordAgreedPricing(
-      company.id,
-      planId ? getPlanById(planId) : null,
-      'office',
-      'Recorded the price agreed when the client was onboarded',
-    );
-    // The onboarding charge is the client's own: assisted setup states R5 000 on
-    // the wizard, self setup leaves the plan's R1 500 in place. Written AFTER the
-    // agreed terms so the fee lands on a row that already carries its rate; the
-    // terms stay the plan's, exactly as a client who never touches this field.
-    if (requestedSetupFee !== undefined) {
-      setSubscriptionSetupFee(company.id, requestedSetupFee);
-    }
-
-    // The add-ons the operator chose on the wizard's first step — the six the plan
-    // prices (2026-10-10). Bought before any store exists, so the licences that
-    // follow carry them.
-    const onboardingPlan = planId ? getPlanById(planId) : null;
-    buyAddons(company.id, onboardingPlan, requestedAddons ?? [], 'Add-ons purchased at onboarding');
-    // A multi-store client has a Head Office, so it holds that add-on whether or
-    // not the operator ticked it — the topology needs the capability.
-    if (deploymentType === 'multi_store') {
-      buyHeadOfficeAddon(company.id, onboardingPlan);
-    }
-
-    // 3. Format Head Office if multi_store
-    let headOffice:
-      { name: string; slug: string; baseUrl: string; adminEmail?: string } | undefined;
-    if (deploymentType === 'multi_store') {
-      headOffice = await validateNestedHeadOffice(req.body?.headOffice, {
-        name: `${name} Head Office`,
-        slug: `${slug}-ho`,
-        baseUrl: `https://${slug}-ho.vula-app.co.za`,
-        adminEmail: billingEmail || undefined,
+    // 2. Everything commercial is one transaction: the company, its purchased
+    // quantity, the agreed price, the setup choice and the add-ons. A failure in
+    // any of them leaves no half-onboarded client.
+    const company = getRegistryDb().transaction(() => {
+      const created = createCompany({
+        name,
+        slug,
+        billingEmail,
+        planId,
       });
-    }
 
-    // 4. Trigger orchestration
+      recordAuditLog('office', 'client_created', 'company', created.id, {
+        after: { name, slug, deploymentType },
+        reason: 'Created new client via onboarding wizard',
+      });
+
+      setLicensedTerminalCount(created.id, licensedTotal);
+
+      // The wizard states the quantity and the plan states the price: record both
+      // as the client's agreement, so a later edit to the plan cannot re-price.
+      recordAgreedPricing(
+        created.id,
+        planId ? getPlanById(planId) : null,
+        'office',
+        'Recorded the price agreed when the client was onboarded',
+      );
+      // The onboarding charge is the client's own: assisted setup states R5 000 on
+      // the wizard, self setup leaves the plan's R1 500 in place. Written AFTER the
+      // agreed terms so the fee lands on a row that already carries its rate.
+      if (requestedSetupFee !== undefined) {
+        setSubscriptionSetupFee(created.id, requestedSetupFee);
+      }
+
+      // The add-ons the operator chose on the wizard's first step — the six the
+      // plan prices (2026-10-10). Bought before any store exists, so the licences
+      // that follow carry them.
+      const onboardingPlan = planId ? getPlanById(planId) : null;
+      buyAddons(
+        created.id,
+        onboardingPlan,
+        requestedAddons ?? [],
+        'Add-ons purchased at onboarding',
+        onboardingWhatsAppCents !== undefined ? { whatsapp_cloud: onboardingWhatsAppCents } : {},
+      );
+      // A multi-store client has a Head Office, so it holds that add-on whether or
+      // not the operator ticked it — the topology needs the capability.
+      if (deploymentType === 'multi_store') {
+        buyHeadOfficeAddon(created.id, onboardingPlan);
+      }
+
+      return created;
+    })();
+
+    // 3. Trigger orchestration
     const { job, steps } = await orchestrateClientDeployment({
       companyId: company.id,
       deploymentType,
@@ -1023,9 +1080,6 @@ clientsRouter.post(
       return;
     }
 
-    // The upgrade is the moment Head Office is bought, like the wizard.
-    buyHeadOfficeAddon(company.id, effectivePlan);
-
     const headOffice = await validateNestedHeadOffice(req.body?.headOffice, {
       name: `${company.name} Head Office`,
       slug: `${company.slug}-ho`,
@@ -1033,39 +1087,18 @@ clientsRouter.post(
       adminEmail: company.billing_email || undefined,
     });
 
-    let newStore:
-      | {
-          name: string;
-          slug: string;
-          baseUrl: string;
-          terminalCount: number;
-          licensedTerminalCount: number;
-          adminEmail?: string;
-        }
-      | undefined;
+    // The new branch goes through the same validator the wizard and POST /stores
+    // use — a bad slug, count or supplied URL is refused before the client is
+    // charged for a Head Office or an upgrade job is created.
     const rawNewStore = req.body?.newStore as Record<string, unknown> | undefined;
-    if (rawNewStore) {
-      const terminalCount =
-        typeof rawNewStore.terminalCount === 'number' ? rawNewStore.terminalCount : 1;
-      newStore = {
-        name:
-          typeof rawNewStore.name === 'string'
-            ? rawNewStore.name.trim()
-            : `${company.name} Branch 2`,
-        slug: typeof rawNewStore.slug === 'string' ? rawNewStore.slug.trim() : `${company.slug}-2`,
-        baseUrl:
-          typeof rawNewStore.baseUrl === 'string'
-            ? rawNewStore.baseUrl.trim()
-            : `https://${company.slug}-2.vula-app.co.za`,
-        terminalCount,
-        licensedTerminalCount:
-          typeof rawNewStore.licensedTerminalCount === 'number'
-            ? rawNewStore.licensedTerminalCount
-            : terminalCount,
-        adminEmail:
-          typeof rawNewStore.adminEmail === 'string' ? rawNewStore.adminEmail.trim() : undefined,
-      };
-    }
+    const newStore = rawNewStore
+      ? await validateNestedStore(rawNewStore, {
+          name: `${company.name} Branch 2`,
+          slug: `${company.slug}-2`,
+          baseUrl: `https://${company.slug}-2.vula-app.co.za`,
+          adminEmail: company.billing_email || undefined,
+        })
+      : undefined;
 
     // Upgrading means the client buys more licences: the existing branches keep
     // theirs (unless the operator reallocates here) and the new branch draws from
@@ -1136,16 +1169,36 @@ clientsRouter.post(
           `${newStore.name} is configured for ${newStore.terminalCount} tills but licensed for only ${newStore.licensedTerminalCount}.`,
         );
       }
-      setLicensedTerminalCount(company.id, total);
-      for (const a of finalExisting) {
-        const store = getStoreById(a.storeId)!;
-        const check = checkAllocation(company, a.storeId, a.count);
-        if (!check.ok) {
-          throw new HttpError(402, `${store.name}: ${check.reason}`, check.code);
+      // The plan's store cap applies to the new topology too. `POST /stores`
+      // refuses it on a later branch; the upgrade should refuse it before it
+      // buys Head Office for an estate the plan cannot hold.
+      if (effectivePlanForTerms && newStore) {
+        const currentStores = listStores().filter((s) => s.company_id === company.id).length;
+        if (currentStores + 1 > effectivePlanForTerms.max_stores) {
+          throw new HttpError(
+            400,
+            `${effectivePlanForTerms.name} allows ${effectivePlanForTerms.max_stores} store${effectivePlanForTerms.max_stores === 1 ? '' : 's'}; this upgrade would make ${currentStores + 1}. Choose a higher plan.`,
+          );
         }
-        allocateTerminals(company, a.storeId, a.count);
       }
+      // One transaction: a refused allocation must not leave the purchased
+      // quantity raised or the earlier stores reallocated.
+      getRegistryDb().transaction(() => {
+        setLicensedTerminalCount(company.id, total);
+        for (const a of finalExisting) {
+          const store = getStoreById(a.storeId)!;
+          const check = checkAllocation(company, a.storeId, a.count);
+          if (!check.ok) {
+            throw new HttpError(402, `${store.name}: ${check.reason}`, check.code);
+          }
+          allocateTerminals(company, a.storeId, a.count);
+        }
+      })();
     }
+
+    // The upgrade is the moment Head Office is bought, like the wizard — after
+    // every validation, so a refused upgrade sells no panel.
+    buyHeadOfficeAddon(company.id, effectivePlan);
 
     const planId = optionalInt(req.body, 'planId');
 

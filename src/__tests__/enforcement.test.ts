@@ -1,6 +1,11 @@
 import request from 'supertest';
 import { createApp } from '../app.js';
 import { resetRegistryDb } from '../config/registryDb.js';
+import {
+  DEFAULT_FEATURE_PRICES,
+  PER_COMPANY_FEATURE_KEYS,
+  PRICED_FEATURE_KEYS,
+} from '../services/features.js';
 import { jsonResponse, loginAsOffice, authHeader } from './helpers.js';
 
 /**
@@ -109,18 +114,32 @@ describe('feature vocabulary', () => {
     const keys = (res.body as Array<{ key: string }>).map((f) => f.key);
     // `layby` and `invoice_import` joined the vocabulary on 2026-10-10: both were
     // implied by other keys (lay-bys by credit, the invoice importer by nothing at
-    // all), and each is now sold and switched off on its own.
+    // all), and each is now sold and switched off on its own. `whatsapp_cloud`
+    // joined on 2026-10-20 as the paid automatic-delivery add-on.
     expect(keys).toEqual([
       'customer_credit',
       'advanced_reports',
       'multi_store',
       'stock_transfers',
       'ecommerce_bridges',
+      'whatsapp_cloud',
       'ai_assistant',
       'layby',
       'invoice_import',
     ]);
     expect(res.body[0]).toMatchObject({ label: expect.any(String), enforcedBy: expect.any(Array) });
+  });
+
+  it('sells WhatsApp messaging once per company at the entry bundle price', async () => {
+    expect(PRICED_FEATURE_KEYS).toContain('whatsapp_cloud');
+    expect(PER_COMPANY_FEATURE_KEYS).toContain('whatsapp_cloud');
+    expect(DEFAULT_FEATURE_PRICES.whatsapp_cloud).toBe(5000);
+    const res = await request(app).get('/api/public/pricing').expect(200);
+    expect(res.body.pricing.addons.whatsapp_cloud).toMatchObject({
+      label: 'WhatsApp messaging',
+      cents: 5000,
+      perStore: false,
+    });
   });
 
   it('refuses a plan granting an unknown feature key, naming it', async () => {

@@ -113,7 +113,10 @@ publicRouter.get(
          * store.
          */
         addons: Object.fromEntries(
-          PRICED_FEATURE_KEYS.map((key) => [
+          // An add-on with no list price yet is not advertised as free. It
+          // becomes visible here once the office sets a positive price on the
+          // plan. (`whatsapp_cloud` starts at 0 for this reason.)
+          PRICED_FEATURE_KEYS.filter((key) => (DEFAULT_FEATURE_PRICES[key] ?? 0) > 0).map((key) => [
             key,
             {
               label: FEATURE_LABELS[key] ?? key,

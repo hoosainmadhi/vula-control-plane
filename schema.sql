@@ -8,8 +8,13 @@ CREATE TABLE IF NOT EXISTS stores (
   slug                   TEXT    NOT NULL UNIQUE,
   name                   TEXT    NOT NULL,
   vertical               TEXT    NOT NULL DEFAULT 'general',
+  -- 'store' sells; 'warehouse' only holds stock and transfers it out. A
+  -- warehouse does not consume the plan's store allowance and runs no tills
+  -- (owner decisions, 2026-10-09) — which is why terminal_count may be 0.
+  kind                   TEXT    NOT NULL DEFAULT 'store'
+    CHECK (kind IN ('store', 'warehouse')),
   terminal_count         INTEGER NOT NULL DEFAULT 1
-    CHECK (terminal_count BETWEEN 1 AND 99),
+    CHECK (terminal_count BETWEEN 0 AND 99),
   base_url               TEXT    NOT NULL
     CHECK (base_url LIKE 'http://%' OR base_url LIKE 'https://%'),
   control_plane_token    TEXT    NOT NULL,
@@ -42,10 +47,12 @@ CREATE TABLE IF NOT EXISTS stores (
   updated_at             TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
--- Subscription plans (four tiers seeded; every value editable). Pricing is a rate
--- per licensed terminal per period plus a once-off onboarding fee; `custom` means
--- the deal is negotiated — it may carry an agreed amount (billed flat, never
--- calculated from terminals) or 0, which leaves each invoice to the office.
+-- Subscription plans (eight tiers seeded; every value editable). `per_store` is
+-- the published model: a rate per trading store with its first till included,
+-- plus a rate per ADDITIONAL till (`terminal_price_cents` on that mode).
+-- `per_terminal` is the older model kept for grandfathered agreements; `custom`
+-- is a negotiated flat amount per period. The once-off onboarding fee is a
+-- separate plan field.
 CREATE TABLE IF NOT EXISTS plans (
   id                      INTEGER PRIMARY KEY AUTOINCREMENT,
   code                    TEXT    NOT NULL UNIQUE,
@@ -53,9 +60,14 @@ CREATE TABLE IF NOT EXISTS plans (
   max_stores              INTEGER NOT NULL DEFAULT 1,
   max_terminals_per_store INTEGER NOT NULL DEFAULT 2,
   features_json           TEXT    NOT NULL DEFAULT '[]',
+  feature_prices_json     TEXT    NOT NULL DEFAULT '{}',
   pricing_mode            TEXT    NOT NULL DEFAULT 'per_terminal'
-    CHECK (pricing_mode IN ('per_terminal', 'custom')),
+    CHECK (pricing_mode IN ('per_terminal', 'per_store', 'custom')),
   terminal_price_cents    INTEGER NOT NULL DEFAULT 0 CHECK (terminal_price_cents >= 0),
+  -- A per_store plan's rate per trading store, the first till included
+  -- (R199/m). On that mode terminal_price_cents is the ADDITIONAL-till rate
+  -- (R49/m); a warehouse is not a trading store and carries no line.
+  store_price_cents       INTEGER NOT NULL DEFAULT 0 CHECK (store_price_cents >= 0),
   -- A custom plan's agreed charge per period (0 = negotiated per client, so an
   -- amountless invoice is refused). Ignored on a per_terminal plan.
   custom_amount_cents     INTEGER NOT NULL DEFAULT 0 CHECK (custom_amount_cents >= 0),
@@ -99,6 +111,9 @@ CREATE TABLE IF NOT EXISTS company_subscriptions (
   -- been recorded and the quote falls back to the plan (and says so).
   pricing_mode            TEXT,
   rate_cents              INTEGER,
+  -- The agreed per-store rate (`per_store` deals only); rate_cents is the
+  -- additional-till rate on that mode.
+  store_rate_cents        INTEGER,
   custom_amount_cents     INTEGER,
   setup_fee_cents         INTEGER,
   billing_period          TEXT,
@@ -165,6 +180,11 @@ CREATE TABLE IF NOT EXISTS invoices (
   amount_cents         INTEGER NOT NULL,
   terminal_count       INTEGER,
   terminal_price_cents INTEGER,
+  -- On a per-store invoice: the trading stores billed and the store rate, beside
+  -- the terminal pair. `terminal_count` stays the licensed TOTAL, so the
+  -- additional-till count is the difference.
+  store_count          INTEGER,
+  store_price_cents    INTEGER,
   -- The paid add-ons billed, with the price agreed for each — the other half of
   -- the recurring evidence (2026-10-10), itemised on the document.
   addons_json          TEXT,
@@ -254,6 +274,14 @@ CREATE TABLE IF NOT EXISTS quotes (
   -- Where the quote came from: the website's builder, or the office's own draft.
   source                  TEXT    NOT NULL DEFAULT 'website'
     CHECK (source IN ('website','office')),
+  -- The quote's own price basis and rate overrides (2026-10-14): `store` is the
+  -- published list, `till` honours the older per-till terms; NULL/0 means the
+  -- list's own figure.
+  pricing_basis           TEXT    NOT NULL DEFAULT 'store',
+  store_rate_cents        INTEGER,
+  till_rate_cents         INTEGER,
+  setup_fee_override_cents INTEGER,
+  addon_rates_json        TEXT    NOT NULL DEFAULT '{}',
   -- What the visitor's page showed, as JSON [{label,amount}].
   requested_lines_json    TEXT    NOT NULL DEFAULT '[]',
   requested_monthly_cents INTEGER,
@@ -301,6 +329,12 @@ CREATE TABLE IF NOT EXISTS office_settings (
   -- How long a quotation stays valid, in days (§5f).
   quote_valid_days  INTEGER NOT NULL DEFAULT 30
     CHECK (quote_valid_days BETWEEN 1 AND 180),
+  -- The published onboarding pair (2026-10-14): the desk, the onboarding form,
+  -- the subscription editor and the marketing page all read these.
+  setup_fee_self_cents     INTEGER NOT NULL DEFAULT 150000
+    CHECK (setup_fee_self_cents >= 0),
+  setup_fee_assisted_cents INTEGER NOT NULL DEFAULT 500000
+    CHECK (setup_fee_assisted_cents >= 0),
   invoice_footer    TEXT    NOT NULL DEFAULT '',
   -- The vendor's own registration and the rate its inclusive prices carry.
   vat_reg_no        TEXT    NOT NULL DEFAULT '',

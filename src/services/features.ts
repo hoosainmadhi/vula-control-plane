@@ -3,12 +3,14 @@ import { ValidationError } from '../utils/validate.js';
 /**
  * The curated plan-feature vocabulary (L4).
  *
- * Eight keys: six sold monthly as add-ons (`PRICED_FEATURE_KEYS` — Head Office,
- * AI Copilot, Upload invoice, Credit accounts, Lay-by, E-commerce) and two
- * included by whichever plan grants them (`advanced_reports`,
- * `stock_transfers`). `layby` and `invoice_import` became their own keys on
- * 2026-10-10, split out of `customer_credit` and `ai_assistant` so each could be
- * sold and gated on its own.
+ * Nine keys: seven sold monthly as add-ons (`PRICED_FEATURE_KEYS` — Head Office,
+ * AI Copilot, Upload invoice, Credit accounts, Lay-by, E-commerce, WhatsApp
+ * receipts) and two included by whichever plan grants them
+ * (`advanced_reports`, `stock_transfers`). `layby` and `invoice_import` became
+ * their own keys on 2026-10-10, split out of `customer_credit` and
+ * `ai_assistant` so each could be sold and gated on its own. `whatsapp_cloud`
+ * was added on 2026-10-20: the automatic Meta Cloud API delivery path is a paid
+ * add-on, while manual `wa.me` sharing stays free.
  *
  * A plan's feature set is written into every licence it signs, and the
  * applications gate on
@@ -62,6 +64,13 @@ export const PLAN_FEATURES: readonly PlanFeature[] = [
     enforcedBy: ['store'],
   },
   {
+    key: 'whatsapp_cloud',
+    label: 'WhatsApp messaging',
+    description:
+      'Automatic delivery of receipts, quotations, customer orders and purchase orders through the business’s WhatsApp Cloud API sender. Needs Meta credentials and an approved template per document; manual WhatsApp sharing remains free and always available.',
+    enforcedBy: ['store'],
+  },
+  {
     key: 'ai_assistant',
     label: 'AI Copilot',
     description:
@@ -98,17 +107,21 @@ export const PRICED_FEATURE_KEYS: readonly string[] = [
   'customer_credit',
   'layby',
   'ecommerce_bridges',
+  'whatsapp_cloud',
 ];
 
 /**
  * The add-ons charged once per COMPANY, not once per trading store (owner,
- * 2026-10-14). There are two, and each is one thing for the whole business:
+ * 2026-10-14). There are three, and each is one thing for the whole business:
  *
  *  - `multi_store` (Head Office) — there is one panel for the company.
  *  - `ecommerce_bridges` — one storefront connection to WooCommerce/Shopify. The
  *    online shop is the business's, not a shop's; a second branch does not open a
  *    second storefront, so charging per store would bill the same integration
  *    again for every branch.
+ *  - `whatsapp_cloud` — one WhatsApp Business sender/number for the company. A
+ *    branch may override the sender configuration later, but the entitlement is
+ *    bought once for the business.
  *
  * Every other paid add-on is a per-store capability — each register either takes
  * lay-bys, holds credit accounts, asks the assistant or imports invoices, so the
@@ -116,7 +129,11 @@ export const PRICED_FEATURE_KEYS: readonly string[] = [
  * the one place this is applied; the marketing page's `data-per` attributes are
  * its display copy.
  */
-export const PER_COMPANY_FEATURE_KEYS: readonly string[] = ['multi_store', 'ecommerce_bridges'];
+export const PER_COMPANY_FEATURE_KEYS: readonly string[] = [
+  'multi_store',
+  'ecommerce_bridges',
+  'whatsapp_cloud',
+];
 
 /**
  * The add-ons a suspended account may not use.
@@ -128,7 +145,11 @@ export const PER_COMPANY_FEATURE_KEYS: readonly string[] = ['multi_store', 'ecom
  * lay-by, e-commerce — stay in the claim: suspension blocks new sales, not a
  * merchant's access to data it already owns (CONTEXT §5).
  */
-export const SUSPENSION_STRIPPED_FEATURES: readonly string[] = ['ai_assistant', 'invoice_import'];
+export const SUSPENSION_STRIPPED_FEATURES: readonly string[] = [
+  'ai_assistant',
+  'invoice_import',
+  'whatsapp_cloud',
+];
 
 /**
  * What a feature is called on an invoice, a quote, and everywhere the office
@@ -144,10 +165,49 @@ export const FEATURE_LABELS: Record<string, string> = Object.fromEntries(
  * What each add-on costs per month (2026-10-10; Head Office repriced
  * 2026-10-14): R199 for Head Office — hosting and software, the same as a store
  * — R99 for AI Copilot and Upload invoice; R49 for Credit accounts, Lay-by and
- * E-commerce. Seeded onto every plan; the Plans page edits them, and a client's
- * agreed price is snapshotted when they buy, so this change re-prices nobody
- * already holding it.
+ * E-commerce; R50 for the WhatsApp messaging entry bundle (250 messages).
+ * Seeded onto every plan; the Plans page edits them, and a client's agreed
+ * price is snapshotted when they buy, so this change re-prices nobody already
+ * holding it.
  */
+/**
+ * The WhatsApp messaging bundles. The price is per COMPANY per month and the
+ * messages are that company's monthly allowance. The add-on's plan price is the
+ * entry bundle; a client can choose a larger bundle on a quote or in its
+ * subscription, and the chosen price travels with the subscription/licence.
+ */
+export const WHATSAPP_BUNDLES = [
+  { messages: 250, cents: 5000, label: '250 messages' },
+  { messages: 500, cents: 10_000, label: '500 messages' },
+  { messages: 750, cents: 15_000, label: '750 messages' },
+  { messages: 1000, cents: 20_000, label: '1000 messages' },
+] as const;
+
+/** A wizard's bundle selection (messages) → its cents, or undefined when absent. */
+export function whatsAppBundleCents(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const messages = Number(raw);
+  const bundle = WHATSAPP_BUNDLES.find((b) => b.messages === messages);
+  if (!bundle) {
+    throw new ValidationError('whatsappBundle must be 250, 500, 750 or 1000 messages');
+  }
+  return bundle.cents;
+}
+
+/**
+ * The monthly allowance a subscription's agreed price buys. A custom price
+ * between tiers gets the lower bundle (the client is never charged for a larger
+ * allowance than the tier below their price).
+ */
+export function whatsAppMessagesForPrice(cents: number | null | undefined): number {
+  if (!cents || cents <= 0) return 0;
+  if (cents >= 20_000) return 1000;
+  if (cents >= 15_000) return 750;
+  if (cents >= 10_000) return 500;
+  if (cents >= 5_000) return 250;
+  return 0;
+}
+
 export const DEFAULT_FEATURE_PRICES: Record<string, number> = {
   multi_store: 19_900,
   ai_assistant: 9900,
@@ -155,6 +215,12 @@ export const DEFAULT_FEATURE_PRICES: Record<string, number> = {
   customer_credit: 4900,
   layby: 4900,
   ecommerce_bridges: 4900,
+  // The entry bundle: R50/month for 250 messages. The office can set R100
+  // (500 messages), R150 (750) or R200 (1000) on a plan or an individual quote;
+  // the price recorded on the subscription is what the client is billed. The register's
+  // daily send cap is a safety limit, not the bundle meter (per-company message
+  // metering is a later slice).
+  whatsapp_cloud: 5000,
 };
 
 /**

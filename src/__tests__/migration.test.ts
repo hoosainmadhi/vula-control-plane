@@ -802,7 +802,7 @@ describe('plans pricing_mode migration (per_store)', () => {
                             features_json, feature_prices_json, pricing_mode,
                             terminal_price_cents, setup_fee_cents, sort_order)
          VALUES (1, 'vula-standard', 'Vula Standard', 1, 2, '[]', '{}', 'per_terminal', 4900, 150000, 1),
-                (2, 'vula-grow', 'Vula Grow', 1, 3, '[]', '{}', 'per_terminal', 12000, 300000, 2)`,
+                (2, 'vula-grow', 'Vula Grow', 1, 3, '[]', '{"multi_store":9900}', 'per_terminal', 12000, 300000, 2)`,
       )
       .run();
     seed.close();
@@ -865,6 +865,34 @@ describe('plans pricing_mode migration (per_store)', () => {
     expect(rows.map((r) => r.id)).toEqual([1, 2]);
     expect(rows[0]).toMatchObject({ code: 'vula-standard', terminal_price_cents: 4900 });
     expect(rows[1]).toMatchObject({ code: 'vula-grow', terminal_price_cents: 12000 });
+  });
+
+  it('aligns the published list: Vula Standard is per-store and Head Office is R199', () => {
+    const db = bootFixture();
+    const standard = db
+      .prepare(
+        `SELECT pricing_mode, store_price_cents, terminal_price_cents
+           FROM plans WHERE code = 'vula-standard'`,
+      )
+      .get() as {
+      pricing_mode: string;
+      store_price_cents: number;
+      terminal_price_cents: number;
+    };
+    // It charged R49 per till (the additional-till rate) with no store line.
+    expect(standard).toEqual({
+      pricing_mode: 'per_store',
+      store_price_cents: 19_900,
+      terminal_price_cents: 4_900,
+    });
+
+    const grow = db
+      .prepare('SELECT feature_prices_json FROM plans WHERE code = ?')
+      .get('vula-grow') as { feature_prices_json: string };
+    const prices = JSON.parse(grow.feature_prices_json) as Record<string, number>;
+    expect(prices.multi_store).toBe(19_900);
+    // The WhatsApp entry bundle was added by the earlier backfill and is untouched.
+    expect(prices.whatsapp_cloud).toBe(5000);
   });
 });
 

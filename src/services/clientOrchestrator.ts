@@ -506,7 +506,12 @@ export async function orchestrateUpgradeToMultiStore(
       name: input.newStore.name,
       slug: input.newStore.slug,
       baseUrl: input.newStore.baseUrl,
+      kind: input.newStore.kind ?? 'store',
       terminalCount: input.newStore.terminalCount,
+      // The branch's licences come from the subscription; without this the store
+      // step falls back to the configured count and a licensed-but-unallocated
+      // quantity is silently lost.
+      licensedTerminalCount: input.newStore.licensedTerminalCount,
       adminEmail: input.newStore.adminEmail,
     });
   }

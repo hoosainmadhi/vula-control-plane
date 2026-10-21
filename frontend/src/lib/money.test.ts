@@ -84,9 +84,20 @@ describe('addonLinesFor', () => {
     // The regression: the editor's quote showed terminals alone, so the operator
     // saved an add-on-inclusive subscription against a preview that was R148 light.
     expect(addonLinesFor(options, ['ai_assistant'])).toEqual([
-      { key: 'ai_assistant', label: 'AI Copilot', cents: 9900 },
+      { key: 'ai_assistant', label: 'AI Copilot', cents: 9900, unitCents: 9900, quantity: 1 },
     ]);
     expect(addonLinesFor(options, [])).toEqual([]);
+  });
+
+  it('charges a capability add-on once per trading store, a per-company one once', () => {
+    const withHeadOffice = [
+      ...options,
+      { key: 'multi_store', cents: 19_900, label: 'Head Office' },
+    ];
+    expect(addonLinesFor(withHeadOffice, ['ai_assistant', 'multi_store'], {}, 3)).toEqual([
+      { key: 'ai_assistant', label: 'AI Copilot', cents: 29_700, unitCents: 9900, quantity: 3 },
+      { key: 'multi_store', label: 'Head Office', cents: 19_900, unitCents: 19_900, quantity: 1 },
+    ]);
   });
 
   it('keeps the list order so the editor and the invoice read the same', () => {
@@ -99,7 +110,7 @@ describe('addonLinesFor', () => {
   it('prefers the price agreed with this client over the plan`s', () => {
     // Grandfathering: the terms are what the client holds, not today's catalogue.
     expect(addonLinesFor(options, ['ai_assistant'], { ai_assistant: 4900 })).toEqual([
-      { key: 'ai_assistant', label: 'AI Copilot', cents: 4900 },
+      { key: 'ai_assistant', label: 'AI Copilot', cents: 4900, unitCents: 4900, quantity: 1 },
     ]);
   });
 

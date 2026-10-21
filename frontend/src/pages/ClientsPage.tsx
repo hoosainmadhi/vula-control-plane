@@ -6,97 +6,25 @@ import {
   ASSISTED_SETUP_CENTS,
   perStoreLabel,
   perTerminalLabel,
-  PERIOD_LABEL,
+  PER_COMPANY_ADDONS,
   rand,
 } from '../lib/money';
 import { officeSetupFees } from '../lib/officeFees';
+import { WHATSAPP_BUNDLES, whatsAppBundle, whatsAppMessagesForCents } from '../lib/whatsapp';
+import SubscriptionQuotePreview from '../components/SubscriptionQuotePreview';
 
 /**
  * Clients, and the onboarding wizard that creates one.
  *
  * Two numbers matter commercially and are entered here: which PLAN the client
- * takes, and how many LICENSED TERMINALS it buys. The wizard quotes both live —
- * `licensed × rate` plus the once-off onboarding charge — because the licensed
- * quantity is what the client pays for. The store's configured tills default to
- * the licensed quantity; they can be trimmed later, never exceeded.
+ * takes, and how many LICENSED TERMINALS it buys. On a per-store plan the
+ * recurring fee is `stores × store rate + extra tills × till rate`; on the older
+ * per-terminal plans it is `licensed × rate`. The wizard quotes both live, plus
+ * every selected add-on and the once-off onboarding charge, through the same
+ * preview the client-detail subscription editor uses. The store's configured
+ * tills default to the licensed quantity; they can be trimmed later, never
+ * exceeded.
  */
-/**
- * The live commercial summary: what this onboarding will cost the client.
- * Rendered from the plan's rate and the licensed quantity entered above, so the
- * figure the operator quotes and the figure the first invoice carries agree.
- */
-function WizardQuote({
-  plan,
-  licensedTerminals,
-  storeBreakdown,
-  setupFeeCents,
-}: {
-  plan: Plan | undefined;
-  licensedTerminals: number;
-  storeBreakdown?: Array<{ label: string; licensed: number }>;
-  /** The once-off charge chosen for this client; the plan's when untouched. */
-  setupFeeCents?: number;
-}) {
-  if (!plan) return null;
-  const recurring =
-    plan.pricingMode === 'per_terminal' ? plan.terminalPriceCents * licensedTerminals : null;
-  const setupFee = setupFeeCents ?? plan.setupFeeCents;
-
-  return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs">
-      <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
-        Commercial summary
-      </div>
-      {storeBreakdown && storeBreakdown.length > 0 && (
-        <div className="mt-2 space-y-1">
-          {storeBreakdown.map((s, i) => (
-            <div key={i} className="flex justify-between text-[11px]">
-              <span className="text-slate-500">{s.label}</span>
-              <span className="font-mono font-semibold text-slate-700">{s.licensed}</span>
-            </div>
-          ))}
-          <div className="flex justify-between border-t border-slate-200 pt-1 text-[11px]">
-            <span className="font-bold text-slate-600">Total licensed terminals</span>
-            <span className="font-mono font-black text-slate-900">{licensedTerminals}</span>
-          </div>
-        </div>
-      )}
-      <div className="mt-2 space-y-1">
-        {recurring === null ? (
-          <div className="flex justify-between">
-            <span className="text-slate-500">Recurring</span>
-            <span className="font-bold text-slate-800">Custom pricing — agreed per client</span>
-          </div>
-        ) : (
-          <div className="flex justify-between">
-            <span className="text-slate-500">
-              Recurring ({licensedTerminals} × {rand(plan.terminalPriceCents)})
-            </span>
-            <span className="font-mono font-black text-slate-900">
-              {rand(recurring)}{' '}
-              {plan.billingPeriod === 'once-off' ? '' : PERIOD_LABEL[plan.billingPeriod]}
-            </span>
-          </div>
-        )}
-        <div className="flex justify-between">
-          <span className="text-slate-500">Once-off onboarding</span>
-          <span className="font-mono font-semibold text-slate-800">
-            {setupFee > 0 ? rand(setupFee) : 'None'}
-          </span>
-        </div>
-        {plan.features.includes('multi_store') && (
-          <div className="flex justify-between">
-            <span className="text-slate-500">Head Office</span>
-            <span className="font-semibold text-emerald-700">
-              {plan.features.includes('multi_store') ? 'Included' : '—'}
-            </span>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 export default function ClientsPage() {
   const [clients, setClients] = useState<ClientListItem[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
@@ -112,8 +40,14 @@ export default function ClientsPage() {
   const [billingEmail, setBillingEmail] = useState('');
   const [planId, setPlanId] = useState<string>('');
   const [vertical, setVertical] = useState<StoreVertical>('general');
-  /** Add-ons bought at onboarding — the six the plan prices (2026-10-10). */
+  /** Add-ons bought at onboarding — the plan's priced capabilities (2026-10-10). */
   const [addons, setAddons] = useState<string[]>([]);
+  /**
+   * The WhatsApp message bundle chosen at onboarding. The plan carries the entry
+   * price (R50/250); the office may buy a larger bundle (R100/500, R150/750 or R200/1000),
+   * and the chosen price is what the subscription records.
+   */
+  const [whatsappBundle, setWhatsappBundle] = useState<number>(WHATSAPP_BUNDLES[0].messages);
   /** The vocabulary: names, and which features are sold monthly. */
   const [catalogue, setCatalogue] = useState<
     Array<{ key: string; label: string; soldMonthly: boolean }>
@@ -161,7 +95,20 @@ export default function ClientsPage() {
       setPlans(pList);
       setCatalogue(vocabulary);
       if (pList.length > 0 && !planId) {
-        setPlanId(String(pList[0].id));
+        const active = pList.filter((p) => p.isActive !== false);
+        // The wizard's default estate is two tills in one store, and the site's
+        // default is 3 stores × 2 tills. Pick a plan that can hold that rather
+        // than the first row in the catalogue — `vula-start` (1 till/store) made
+        // the wizard's own defaults refuse to deploy.
+        const fitting =
+          active.find((p) => p.maxStores >= 3 && p.maxTerminalsPerStore >= 2) ??
+          active.find((p) => p.maxTerminalsPerStore >= 2) ??
+          active[0];
+        if (fitting) {
+          setPlanId(String(fitting.id));
+          // Start the WhatsApp bundle on the one the plan's entry price buys.
+          setWhatsappBundle(whatsAppMessagesForCents(fitting.featurePrices?.whatsapp_cloud));
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load clients');
@@ -224,6 +171,9 @@ export default function ClientsPage() {
         // Only what the operator chose; a multi-store deployment adds Head Office
         // server-side even if it was missed here.
         features: addons,
+        // The chosen WhatsApp bundle's price is the agreed add-on price; the
+        // licence derives the monthly message allowance from it.
+        ...(addons.includes('whatsapp_cloud') ? { whatsappBundle } : {}),
         // The once-off charge for THIS client: the plan carries the self-setup
         // default, assisted setup states its own figure (2026-10-12).
         setupFeeCents: effectiveSetupFeeCents,
@@ -288,6 +238,7 @@ export default function ClientsPage() {
     setHoAdminEmail('');
     setMultiStores([{ name: '', slug: '', baseUrl: '', terminalCount: 2 }]);
     setSetupFeeCents(null);
+    setWhatsappBundle(whatsAppMessagesForCents(selectedPlan?.featurePrices?.whatsapp_cloud));
   };
 
   const singleStoreCount = clients.filter((c) => c.topology === 'single_store').length;
@@ -303,15 +254,51 @@ export default function ClientsPage() {
    */
   const effectiveSetupFeeCents = setupFeeCents ?? selectedPlan?.setupFeeCents ?? 0;
 
+  /** The estate as the wizard will send it — one store, or every branch row. */
+  const estateStores = deploymentType === 'single_store' ? 1 : multiStores.length;
+  const estateTillsPerStore =
+    deploymentType === 'single_store'
+      ? Number(singleStoreTills) || 1
+      : Math.max(...multiStores.map((s) => s.terminalCount || 1), 1);
+  const estateLicensed =
+    deploymentType === 'single_store'
+      ? Number(singleStoreTills) || 1
+      : multiStores.reduce((n, s) => n + (s.terminalCount || 1), 0);
+  /**
+   * What the preview and the request carry as bought. Head Office is forced on
+   * multi-store (the server buys it either way); on a single-store deployment it
+   * is neither offered nor sent — a panel would not exist for it.
+   */
+  const previewSelected = Array.from(
+    new Set([...addons, ...(deploymentType === 'multi_store' ? ['multi_store'] : [])]),
+  );
+  /**
+   * The plan's caps are what the server enforces. Showing the mismatch here means
+   * the operator fixes the plan or the estate before pressing Deploy, instead of
+   * receiving a 400 after the form is complete.
+   */
+  const planFitError = !selectedPlan
+    ? null
+    : estateStores > selectedPlan.maxStores
+      ? `${selectedPlan.name} allows ${selectedPlan.maxStores} store${selectedPlan.maxStores === 1 ? '' : 's'}; this onboarding has ${estateStores}.`
+      : estateTillsPerStore > selectedPlan.maxTerminalsPerStore
+        ? `${selectedPlan.name} allows ${selectedPlan.maxTerminalsPerStore} till${selectedPlan.maxTerminalsPerStore === 1 ? '' : 's'} per store; a branch is set to ${estateTillsPerStore}.`
+        : null;
+
   /** The add-ons the chosen plan SELLS. Head Office shows as forced when the
    *  deployment is multi-store: the topology buys it either way. */
+  const chosenWhatsApp = whatsAppBundle(whatsappBundle);
   const addonOptions = catalogue
     .filter((f) => f.soldMonthly && selectedPlan?.featurePrices?.[f.key])
     .map((f) => ({
       key: f.key,
       label: f.label,
-      cents: selectedPlan?.featurePrices?.[f.key] ?? 0,
+      cents:
+        f.key === 'whatsapp_cloud'
+          ? chosenWhatsApp.cents
+          : (selectedPlan?.featurePrices?.[f.key] ?? 0),
       forced: f.key === 'multi_store' && deploymentType === 'multi_store',
+      blocked: f.key === 'multi_store' && deploymentType === 'single_store',
     }));
 
   const toggleAddon = (key: string): void =>
@@ -641,7 +628,13 @@ export default function ClientsPage() {
                     </label>
                     <select
                       value={planId}
-                      onChange={(e) => setPlanId(e.target.value)}
+                      onChange={(e) => {
+                        setPlanId(e.target.value);
+                        const next = plans.find((p) => String(p.id) === e.target.value);
+                        setWhatsappBundle(
+                          whatsAppMessagesForCents(next?.featurePrices?.whatsapp_cloud),
+                        );
+                      }}
                       className="mt-1 w-full rounded-lg border border-slate-300 p-2.5 text-sm"
                     >
                       {/* Archived plans stay on existing clients but are not offered to new ones. */}
@@ -655,9 +648,15 @@ export default function ClientsPage() {
                               : p.pricingMode === 'per_terminal'
                                 ? ` — ${perTerminalLabel(p.terminalPriceCents, p.billingPeriod)}`
                                 : ' — custom pricing'}
+                            {` · up to ${p.maxStores} store${p.maxStores === 1 ? '' : 's'} · ${p.maxTerminalsPerStore} till${p.maxTerminalsPerStore === 1 ? '' : 's'}/store`}
                           </option>
                         ))}
                     </select>
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      The rate is the same across the catalogue; the cap is what distinguishes a
+                      plan. A plan cannot be used for an estate above its store or per-store till
+                      ceiling.
+                    </p>
                     {/* Assisted vs self setup: the site sells both at different
                         prices, and the choice belongs to the client, not the
                         plan — so it is stated here and stored on the
@@ -692,14 +691,30 @@ export default function ClientsPage() {
                       </button>
                     </div>
                     <p className="mt-1 text-[11px] text-slate-400">
-                      Self setup is the plan's figure
-                      {setupFeeCents === null
-                        ? ' — switch to Assisted if we build it with them.'
-                        : setupFeeCents === (selectedPlan?.setupFeeCents ?? 0)
-                          ? '; this plan charges the same either way.'
-                          : setupFeeCents > (selectedPlan?.setupFeeCents ?? 0)
-                            ? `; assisted adds ${rand(setupFeeCents - (selectedPlan?.setupFeeCents ?? 0))} for the client.`
-                            : `; note assisted is BELOW this plan's self figure (${rand(selectedPlan?.setupFeeCents ?? 0)}) — check the plan.`}
+                      {setupFeeCents === null ? (
+                        <>
+                          Self setup is this plan's figure —{' '}
+                          {rand(selectedPlan?.setupFeeCents ?? 0)}. Assisted is{' '}
+                          {rand(assistedCents)}; switch to Assisted if we build it with them.
+                        </>
+                      ) : setupFeeCents === (selectedPlan?.setupFeeCents ?? 0) ? (
+                        <>
+                          Self setup is {rand(selectedPlan?.setupFeeCents ?? 0)} on this plan;
+                          Assisted is the same figure.
+                        </>
+                      ) : setupFeeCents > (selectedPlan?.setupFeeCents ?? 0) ? (
+                        <>
+                          Self setup is {rand(selectedPlan?.setupFeeCents ?? 0)} on this plan;
+                          Assisted is {rand(setupFeeCents)} —{' '}
+                          {rand(setupFeeCents - (selectedPlan?.setupFeeCents ?? 0))} more for the
+                          client.
+                        </>
+                      ) : (
+                        <>
+                          Assisted ({rand(setupFeeCents)}) is below this plan's self figure (
+                          {rand(selectedPlan?.setupFeeCents ?? 0)}). Check the plan.
+                        </>
+                      )}
                     </p>
                   </div>
                   <div>
@@ -728,31 +743,67 @@ export default function ClientsPage() {
                       <span className="font-normal text-slate-400">(monthly, per plan)</span>
                     </label>
                     <p className="mt-0.5 text-[11px] text-slate-400">
-                      What this client buys on top of the per-till rate. Unticked can be added later
-                      from the client's subscription.
+                      What this client buys on top of the plan. A capability add-on is charged per
+                      trading store; Head Office, E-commerce and WhatsApp are one charge for the
+                      business. Unticked can be added later from the client's subscription.
                     </p>
                     <div className="mt-2 grid gap-2 sm:grid-cols-2">
                       {addonOptions.map((option) => (
                         <label
                           key={option.key}
-                          className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                          className={`flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2 text-sm ${
+                            option.blocked ? 'opacity-55' : ''
+                          }`}
                         >
                           <span className="flex items-center gap-2">
                             <input
                               type="checkbox"
                               checked={option.forced || addons.includes(option.key)}
-                              disabled={option.forced}
+                              disabled={option.forced || option.blocked}
                               onChange={() => toggleAddon(option.key)}
                             />
                             <span className="font-medium text-slate-800">{option.label}</span>
                           </span>
                           <span className="font-mono text-xs text-slate-500">
-                            {rand(option.cents)} / month
-                            {option.forced ? ' · with Head Office' : ''}
+                            {rand(option.cents)} / month ·{' '}
+                            {PER_COMPANY_ADDONS.includes(option.key) ? 'business' : 'store'}
+                            {option.forced
+                              ? ' · with Head Office'
+                              : option.blocked
+                                ? ' · needs multi-store'
+                                : ''}
                           </span>
                         </label>
                       ))}
                     </div>
+                    {addons.includes('whatsapp_cloud') ? (
+                      <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                          WhatsApp message bundle
+                        </div>
+                        <div className="mt-1.5 flex flex-wrap gap-2">
+                          {WHATSAPP_BUNDLES.map((bundle) => (
+                            <button
+                              key={bundle.messages}
+                              type="button"
+                              onClick={() => setWhatsappBundle(bundle.messages)}
+                              aria-pressed={whatsappBundle === bundle.messages}
+                              className={`rounded-lg border px-3 py-2 text-xs font-semibold ${
+                                whatsappBundle === bundle.messages
+                                  ? 'border-brand-500 bg-brand-50 text-brand-700'
+                                  : 'border-slate-300 text-slate-600 hover:bg-slate-50'
+                              }`}
+                            >
+                              {bundle.label} — {rand(bundle.cents)} / month
+                            </button>
+                          ))}
+                        </div>
+                        <p className="mt-1 text-[11px] text-slate-400">
+                          The bundle price is what the client pays; the signed licence carries the
+                          monthly message allowance.
+                        </p>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
 
@@ -777,7 +828,12 @@ export default function ClientsPage() {
                 </p>
                 <div className="grid grid-cols-2 gap-4">
                   <div
-                    onClick={() => setDeploymentType('single_store')}
+                    onClick={() => {
+                      setDeploymentType('single_store');
+                      // Head Office is a multi-store capability; a single-store
+                      // deployment provisions no panel, so it cannot be sold.
+                      setAddons((prev) => prev.filter((key) => key !== 'multi_store'));
+                    }}
                     className={`cursor-pointer rounded-xl border p-4 transition ${
                       deploymentType === 'single_store'
                         ? 'border-brand-600 bg-brand-50/50 ring-2 ring-brand-500/20'
@@ -880,11 +936,19 @@ export default function ClientsPage() {
                         />
                       </div>
                     </div>
-                    <WizardQuote
+                    <SubscriptionQuotePreview
                       plan={selectedPlan}
-                      licensedTerminals={Number(singleStoreTills) || 0}
+                      licensed={estateLicensed}
+                      stores={1}
+                      addonOptions={addonOptions}
+                      selected={previewSelected}
                       setupFeeCents={effectiveSetupFeeCents}
                     />
+                    {planFitError && (
+                      <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-800">
+                        {planFitError}
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-4">
@@ -995,18 +1059,19 @@ export default function ClientsPage() {
                         ))}
                       </div>
                     </div>
-                    <WizardQuote
+                    <SubscriptionQuotePreview
                       plan={selectedPlan}
-                      licensedTerminals={multiStores.reduce(
-                        (n, s) => n + (s.terminalCount || 0),
-                        0,
-                      )}
-                      storeBreakdown={multiStores.map((s, i) => ({
-                        label: s.name || `${clientName || 'Branch'} ${i + 1}`,
-                        licensed: s.terminalCount || 0,
-                      }))}
+                      licensed={estateLicensed}
+                      stores={estateStores}
+                      addonOptions={addonOptions}
+                      selected={previewSelected}
                       setupFeeCents={effectiveSetupFeeCents}
                     />
+                    {planFitError && (
+                      <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-800">
+                        {planFitError}
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -1072,23 +1137,19 @@ export default function ClientsPage() {
                   )}
                 </div>
 
-                <WizardQuote
+                <SubscriptionQuotePreview
                   plan={selectedPlan}
-                  licensedTerminals={
-                    deploymentType === 'single_store'
-                      ? Number(singleStoreTills) || 0
-                      : multiStores.reduce((n, s) => n + (s.terminalCount || 0), 0)
-                  }
-                  storeBreakdown={
-                    deploymentType === 'multi_store'
-                      ? multiStores.map((s, i) => ({
-                          label: s.name || `${clientName || 'Branch'} ${i + 1}`,
-                          licensed: s.terminalCount || 0,
-                        }))
-                      : undefined
-                  }
+                  licensed={estateLicensed}
+                  stores={estateStores}
+                  addonOptions={addonOptions}
+                  selected={previewSelected}
                   setupFeeCents={effectiveSetupFeeCents}
                 />
+                {planFitError && (
+                  <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[11px] font-semibold text-rose-800">
+                    {planFitError} Choose a plan with enough headroom before deploying.
+                  </p>
+                )}
 
                 <div className="rounded-lg bg-amber-50 p-3 text-[11px] text-amber-800 border border-amber-200">
                   ⚡ Automatic orchestration will create client resources, configure initial
@@ -1105,7 +1166,7 @@ export default function ClientsPage() {
                   </button>
                   <button
                     type="button"
-                    disabled={deploying}
+                    disabled={deploying || Boolean(planFitError)}
                     onClick={handleDeployClient}
                     className="rounded-lg bg-emerald-600 px-6 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50"
                   >

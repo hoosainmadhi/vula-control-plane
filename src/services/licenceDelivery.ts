@@ -152,6 +152,7 @@ export const deliverStoreLicence = async (store: StoreRecord): Promise<LicenceDe
     planCode: ent.planCode,
     planName: ent.planName,
     features: licenceFeaturesFor(ent),
+    whatsappMessages: ent.whatsappMessages,
     maxStores: ent.maxStores,
     maxTerminalsPerStore: ent.maxTerminalsPerStore,
     // This store's own allowance — the register gates new device claims on it.
@@ -187,6 +188,7 @@ export const deliverPanelLicence = async (panel: PanelRecord): Promise<LicenceDe
     planCode: ent.planCode,
     planName: ent.planName,
     features: licenceFeaturesFor(ent),
+    whatsappMessages: ent.whatsappMessages,
     maxStores: ent.maxStores,
     maxTerminalsPerStore: ent.maxTerminalsPerStore,
     paidThrough: ent.paidThrough,

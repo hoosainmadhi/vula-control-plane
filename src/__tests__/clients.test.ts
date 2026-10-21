@@ -1,6 +1,11 @@
 import request from 'supertest';
 import { createApp } from '../app.js';
-import { createCompany, createStore, resetRegistryDb, setStoreCompany } from '../config/registryDb.js';
+import {
+  createCompany,
+  createStore,
+  resetRegistryDb,
+  setStoreCompany,
+} from '../config/registryDb.js';
 import { jsonResponse, loginAsOffice, authHeader } from './helpers.js';
 
 const app = createApp();
@@ -33,15 +38,15 @@ afterEach(() => {
 
 const auth = (): Record<string, string> => authHeader(token);
 
-/** The seeded multi-store plan id — multi-store topology is a plan feature (L4). */
-const multiStorePlanId = async (): Promise<number> => {
+const planIdByCode = async (code: string): Promise<number> => {
   const res = await request(app).get('/api/plans').set(auth()).expect(200);
-  const plan = (res.body as Array<{ id: number; code: string }>).find(
-    (p) => p.code === 'vula-network',
-  );
+  const plan = (res.body as Array<{ id: number; code: string }>).find((p) => p.code === code);
   expect(plan).toBeDefined();
   return plan!.id;
 };
+
+/** The seeded multi-store plan id — multi-store topology is a plan feature (L4). */
+const multiStorePlanId = (): Promise<number> => planIdByCode('vula-network');
 
 describe('Client-Centric Management & Orchestration (§1, §5, §6, §7)', () => {
   it('creates and deploys a single-store client via onboarding wizard (§5)', async () => {
@@ -86,9 +91,9 @@ describe('Client-Centric Management & Orchestration (§1, §5, §6, §7)', () =>
     // The client LIST carries light store rows so the client card can link
     // straight into each store (stores are reached through the client).
     const list = await request(app).get('/api/clients').set(auth()).expect(200);
-    const listed = (list.body as Array<{ slug: string; stores: Array<{ slug: string; healthState: string }> }>).find(
-      (c) => c.slug === 'gardens-pharmacy',
-    );
+    const listed = (
+      list.body as Array<{ slug: string; stores: Array<{ slug: string; healthState: string }> }>
+    ).find((c) => c.slug === 'gardens-pharmacy');
     expect(listed?.stores.map((st) => st.slug)).toEqual(['gardens-pharmacy-main']);
     expect(listed?.stores[0].healthState).toBeDefined();
 
@@ -327,20 +332,20 @@ describe('client store order', () => {
 
 describe('per-store audit trail', () => {
   it('returns audited actions for a single store, newest first', async () => {
-    const createRes = await request(app)
-      .post('/api/stores')
-      .set(auth())
-      .send({
-        name: 'Audit Trail Store',
-        slug: 'audit-trail',
-        terminalCount: 1,
-        baseUrl: 'http://localhost:3245',
-      });
+    const createRes = await request(app).post('/api/stores').set(auth()).send({
+      name: 'Audit Trail Store',
+      slug: 'audit-trail',
+      terminalCount: 1,
+      baseUrl: 'http://localhost:3245',
+    });
     expect(createRes.status).toBe(201);
     const storeId = (createRes.body as { store: { id: number } }).store.id;
 
     // A privileged action that records an audit entry.
-    await request(app).post(`/api/stores/${storeId}/support`).set(auth()).send({ reason: 'test session' });
+    await request(app)
+      .post(`/api/stores/${storeId}/support`)
+      .set(auth())
+      .send({ reason: 'test session' });
 
     const res = await request(app).get(`/api/stores/${storeId}/audit`).set(auth()).expect(200);
     const logs = res.body.logs as Array<{ target_type: string; target_id: number; action: string }>;
@@ -528,11 +533,133 @@ describe('onboarding payload validation (§19)', () => {
             { name: 'Good A', slug: 'payload-good-a', baseUrl: 'http://localhost:3245' },
             { name: 'Good B', slug: 'payload-good-b', baseUrl: 'http://localhost:3246' },
           ],
-          headOffice: { name: 'Good HO', slug: 'payload-good-ho', baseUrl: 'http://localhost:3260' },
+          headOffice: {
+            name: 'Good HO',
+            slug: 'payload-good-ho',
+            baseUrl: 'http://localhost:3260',
+          },
         }),
       )
       .expect(201);
     expect(res.body.client.headOffice).not.toBeNull();
     expect(res.body.client.storesCount).toBe(2);
+  });
+});
+
+describe('the wizard checks the plan before writing anything', () => {
+  const countClients = async (): Promise<number> => {
+    const res = await request(app).get('/api/clients').set(auth()).expect(200);
+    return (res.body as unknown[]).length;
+  };
+
+  it('refuses more tills than the plan allows per store, and leaves no client behind', async () => {
+    const planId = await planIdByCode('vula-start'); // 1 store, 1 till
+    const before = await countClients();
+    const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send({
+        name: 'Over Ceiling',
+        slug: 'over-ceiling',
+        planId,
+        deploymentType: 'single_store',
+        stores: [
+          {
+            slug: 'over-ceiling-main',
+            baseUrl: 'http://localhost:3245',
+            terminalCount: 2,
+            licensedTerminalCount: 2,
+          },
+        ],
+        autoDeploy: false,
+      });
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toMatch(/allows 1 per store/i);
+    expect(await countClients()).toBe(before);
+  });
+
+  it('refuses more stores than the plan allows, and leaves no client behind', async () => {
+    const planId = await planIdByCode('vula-grow'); // 1 store, 3 tills
+    const before = await countClients();
+    const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send({
+        name: 'Too Many Stores',
+        slug: 'too-many-stores',
+        planId,
+        deploymentType: 'single_store',
+        stores: [
+          { slug: 'too-many-a', baseUrl: 'http://localhost:3245', terminalCount: 1 },
+          { slug: 'too-many-b', baseUrl: 'http://localhost:3246', terminalCount: 1 },
+        ],
+        autoDeploy: false,
+      });
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toMatch(/allows 1 store/i);
+    expect(await countClients()).toBe(before);
+  });
+
+  it('does not buy Head Office when an upgrade is refused', async () => {
+    const planId = await planIdByCode('vula-branch'); // 3 stores, 2 tills/store
+    const created = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send({
+        name: 'No Panel Yet',
+        slug: 'no-panel-yet',
+        planId,
+        deploymentType: 'single_store',
+        stores: [{ slug: 'no-panel-main', baseUrl: 'http://localhost:3245', terminalCount: 1 }],
+        autoDeploy: false,
+      })
+      .expect(201);
+    const clientId = created.body.client.id as number;
+
+    // The new branch is above the plan's per-store ceiling, so the upgrade is
+    // refused before the client is charged for a Head Office.
+    const refused = await request(app)
+      .post(`/api/clients/${clientId}/upgrade-to-multistore`)
+      .set(auth())
+      .send({
+        planId,
+        newStore: {
+          name: 'Too Big',
+          slug: 'no-panel-big',
+          baseUrl: 'http://localhost:3246',
+          terminalCount: 3,
+          licensedTerminalCount: 3,
+        },
+        autoDeploy: false,
+      });
+    expect(refused.status).toBe(402);
+    expect(String(refused.body.error)).toMatch(/allows 2 licensed terminals per store/i);
+
+    const detail = await request(app).get(`/api/clients/${clientId}`).set(auth()).expect(200);
+    expect(detail.body.headOffice).toBeNull();
+    const subscription = detail.body.subscription as { addons?: Array<{ key: string }> };
+    expect(subscription.addons?.some((a) => a.key === 'multi_store')).toBeFalsy();
+    // The purchased quantity did not move either.
+    expect(detail.body.subscription.licensedTerminalCount).toBe(1);
+  });
+
+  it('refuses Head Office on a single-store deployment', async () => {
+    const planId = await planIdByCode('vula-grow');
+    const before = await countClients();
+    const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send({
+        name: 'Lonely Panel',
+        slug: 'lonely-panel',
+        planId,
+        deploymentType: 'single_store',
+        features: ['multi_store'],
+        stores: [{ slug: 'lonely-panel-main', baseUrl: 'http://localhost:3245', terminalCount: 1 }],
+        autoDeploy: false,
+      });
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toMatch(/needs two or more stores/i);
+    expect(await countClients()).toBe(before);
   });
 });

@@ -47,6 +47,10 @@ const ADDON_ORDER = [
   'customer_credit',
   'layby',
   'ecommerce_bridges',
+  // The WhatsApp messaging add-on is sold from the CP (R50/company entry
+  // bundle) but is not on the marketing page yet, so it sits last. Which keys
+  // ARE add-ons still comes from the vocabulary's `soldMonthly`.
+  'whatsapp_cloud',
 ] as const;
 
 /** A plan's monthly price at its own ceiling, and with every add-on it sells. */

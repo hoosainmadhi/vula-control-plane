@@ -30,6 +30,12 @@ export interface LicenceClaims {
   planCode: string;
   planName: string;
   features: string[];
+  /**
+   * The company's monthly WhatsApp message allowance (250/500/750/1000), derived
+   * from the agreed bundle price. Additive claim: a licence without it leaves
+   * the register on its daily safety cap until the next push.
+   */
+  whatsappMessages?: number;
   maxStores: number;
   /** The plan's ceiling for any one store. */
   maxTerminalsPerStore: number;
@@ -147,6 +153,7 @@ export interface IssueLicenceInput {
   planCode?: string;
   planName?: string;
   features?: string[];
+  whatsappMessages?: number;
   maxStores?: number;
   maxTerminalsPerStore?: number;
   /** This store's licence allowance; omit on a Head Office licence. */
@@ -187,6 +194,7 @@ export function issueLicence(input: IssueLicenceInput): SignedLicence {
     planCode: input.planCode ?? 'unassigned',
     planName: input.planName ?? 'Unassigned',
     features: input.features ?? [],
+    whatsappMessages: input.whatsappMessages ?? 0,
     maxStores: input.maxStores ?? 1,
     maxTerminalsPerStore: input.maxTerminalsPerStore ?? 1,
     ...(input.maxTerminals !== undefined ? { maxTerminals: input.maxTerminals } : {}),
@@ -206,9 +214,11 @@ export function issueLicence(input: IssueLicenceInput): SignedLicence {
 }
 
 /** Verify a licence the control plane issued (used by tests and diagnostics). */
-export function verifyLicenceToken(
-  token: string,
-): { valid: boolean; claims?: LicenceClaims; error?: string } {
+export function verifyLicenceToken(token: string): {
+  valid: boolean;
+  claims?: LicenceClaims;
+  error?: string;
+} {
   try {
     const [payloadB64, sigB64] = token.split('.');
     if (!payloadB64 || !sigB64) return { valid: false, error: 'Malformed licence structure' };
@@ -216,15 +226,27 @@ export function verifyLicenceToken(
     const ok = crypto.verify(
       'sha256',
       Buffer.from(payloadB64),
-      { key: crypto.createPublicKey({ key: fromB64Url(licencePublicKey()), format: 'der', type: 'spki' }), dsaEncoding: 'ieee-p1363' },
+      {
+        key: crypto.createPublicKey({
+          key: fromB64Url(licencePublicKey()),
+          format: 'der',
+          type: 'spki',
+        }),
+        dsaEncoding: 'ieee-p1363',
+      },
       fromB64Url(sigB64),
     );
     if (!ok) return { valid: false, error: 'Invalid licence signature' };
 
-    const claims = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf-8')) as LicenceClaims;
+    const claims = JSON.parse(
+      Buffer.from(payloadB64, 'base64url').toString('utf-8'),
+    ) as LicenceClaims;
     return { valid: true, claims };
   } catch (err) {
-    return { valid: false, error: err instanceof Error ? err.message : 'Licence verification failed' };
+    return {
+      valid: false,
+      error: err instanceof Error ? err.message : 'Licence verification failed',
+    };
   }
 }
 

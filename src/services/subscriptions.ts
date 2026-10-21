@@ -8,10 +8,12 @@ import {
   planFeaturePrice,
   planFeatures,
   countStoresForCompany,
+  subscriptionAddonPrices,
   type CompanyRecord,
   type PlanRecord,
   type StoreRecord,
 } from '../config/registryDb.js';
+import { whatsAppMessagesForPrice } from './features.js';
 import { terminalAllowance } from './terminalLicences.js';
 
 /**
@@ -31,6 +33,12 @@ export interface Entitlements {
   planCode: string;
   planName: string;
   features: string[];
+  /**
+   * The company's monthly WhatsApp message allowance, derived from the agreed
+   * bundle price. 0 when the add-on is absent or unpriced; the register refuses
+   * automatic sends at 0.
+   */
+  whatsappMessages: number;
   maxStores: number;
   maxTerminalsPerStore: number;
   /**
@@ -61,6 +69,7 @@ export const UNASSIGNED: Entitlements = {
   planCode: 'unassigned',
   planName: 'Unassigned',
   features: [],
+  whatsappMessages: 0,
   maxStores: 1,
   maxTerminalsPerStore: 1,
   licensedTerminalCount: 0,
@@ -166,6 +175,7 @@ export function entitlementsFor(
     );
   }
 
+  const features = effectiveFeatures(plan, subscription);
   return {
     companyId: company.id,
     companyName: company.name,
@@ -173,7 +183,14 @@ export function entitlementsFor(
     planName: plan?.name ?? 'Unassigned',
     // What the client actually has: the plan's included features plus the paid
     // add-ons on its subscription. This list is what the signed licence carries.
-    features: effectiveFeatures(plan, subscription),
+    features,
+    whatsappMessages: features.includes('whatsapp_cloud')
+      ? whatsAppMessagesForPrice(
+          subscriptionAddonPrices(subscription).whatsapp_cloud ??
+            planFeaturePrice(plan, 'whatsapp_cloud') ??
+            0,
+        )
+      : 0,
     maxStores: plan?.max_stores ?? 1,
     maxTerminalsPerStore: plan?.max_terminals_per_store ?? 1,
     licensedTerminalCount,
