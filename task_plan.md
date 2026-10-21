@@ -14,6 +14,39 @@ container and exposes `/api/internal/*` guarded by a per-store
 `CONTROL_PLANE_TOKEN` (tenant-side workstream; contract authored here in
 CONTEXT.md "Internal API contract").
 
+## Phase: WhatsApp add-on on Plans, Quotes and New Client (2026-10-20) — complete, uncommitted
+
+- [x] **Plans** — `ADDON_ORDER` includes `whatsapp_cloud`, so the plan editor prices it.
+- [x] **New Client** — bundle picker (250/500/750/1000) when WhatsApp is ticked; the chosen
+      bundle is sent, priced in the preview, recorded on the subscription and carried by
+      the licence.
+- [x] **Quote** — selecting WhatsApp opens the Prices block with the bundle selector
+      (250/500/750/1000, no bare "List" row), defaulting to the entry bundle; the send
+      panel explains the bundle is set on the quote.
+- [x] **Bundles** — the four published tiers are 250/R50, 500/R100, 750/R150 and **1000/R200**; the server's price→allowance map and every picker read the same list.
+- [x] **Tests** — frontend 34/34 (bundle price → allowance), backend 473/473, build clean.
+
+## Phase: the published price list reaches Plans, Quotes and New Client (2026-10-20) — complete, uncommitted
+
+Owner asked whether Plans/Quotes/Clients could fulfil the marketing model. The quote
+desk and public list already matched; the onboarding surfaces did not. All fixed:
+
+- [x] **Plan data** — one-time `user_version = 2` migration: `vula-standard` becomes
+      `per_store` R199/R49 (it was per-terminal R49 with no store line); every plan's Head
+      Office add-on moves 9900 → 19900. Existing agreed subscriptions do not move.
+- [x] **New Client preview** — shared `SubscriptionQuotePreview`, used by the client
+      detail and the wizard; per-store stores + extra tills + add-ons + setup are itemised.
+- [x] **New Client defaults/caps** — the default plan fits the default estate; caps are
+      shown; Deploy is blocked with the server's own refusal text.
+- [x] **No orphan clients** — validate the estate and caps before creating the company;
+      the commercial writes are one transaction.
+- [x] **Head Office** — refused on a single-store deployment by the server and the wizard.
+- [x] **Quote conversion** — creates branches from the quote's split and a Head Office
+      when bought; starts the deployment job; checks caps/slugs first.
+- [x] **Docs/schema** — `schema.sql`, `CONTEXT.md`, `AGENTS.md`; marketing hydration now
+      moves the visible rate banner and add-on cards, not only the builder total.
+- [x] **Tests** — CP 473/473 (36 suites), frontend 31/31, typecheck and builds clean.
+
 ## Phase: the add-on model adds up (2026-10-10) — complete, uncommitted
 
 The owner's add-on pricing (six keys sold at R99/R49 per month, priced per plan and

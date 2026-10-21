@@ -1,5 +1,18 @@
 # Tidbits — small deferred items & backlog
 
+## Correction (2026-10-20): the "Vula Standard is R99/terminal" note below is historical
+
+The 2026-10-12 consolidation entry records `vula-standard` as a R99/terminal plan. It was
+left behind when the list moved per-store on 2026-10-14 and then carried R49/terminal with
+no store line — a trap, because every other plan had moved. The `user_version = 2`
+migration now makes it `per_store` R199/R49 and gives every plan's Head Office add-on the
+published R199. Existing clients on the plan keep their agreed per-terminal terms.
+
+Still open: the WhatsApp messaging add-on (R50/company) is not on the marketing page; the
+page sells the other six. And "pay from go-live" remains an operator step (no
+`go_live_at` field) — onboarding leaves the client suspended until the first invoice is
+settled.
+
 > Prioritised for the next workspace. ~~Struck~~ items are done.
 
 ## "Pay from go-live" replaced "first month free" on the site (2026-10-12) — the office's steps

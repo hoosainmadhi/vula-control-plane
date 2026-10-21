@@ -3314,3 +3314,114 @@ off-list quote's edit panel open and pre-filled at R99.
 Verified through the built UI on the local control plane: a draft for 3 stores × 2 tills priced
 per till at R99 reads **6 tills · 6 × R 99,00 — list R 744,00 — R 594,00/month**, carries the
 off-list banner, and R 5 000 set-up. CP 465/465. Nothing committed yet.
+
+## The restaurant golden was stale (2026-10-17)
+
+`demo-restaurant`'s golden was last written 12 Oct, two days before the tenant seeder dropped
+the Bacon & Cheese Burger, so the nightly 02:17 reset kept restoring a menu the owner had
+asked to remove. The deployed database was re-seeded from a consistent snapshot with the
+corrected tenant seeder and installed over both the live bind path and
+`/backups/vula-app/demo-golden/demo-restaurant.db` (checksums match; licence and users
+preserved; products 32 → 31). Safety copies of the replaced live DB and golden remain at
+`/tmp/demo-restaurant-{live,golden}-before-bacon-fix.db` on the host. The other goldens were
+checked (sale dates are spread, not flat) and need no refresh. Tenant-side write-up:
+`za-pos/findings.md`, 2026-10-17.
+
+## 2026-10-20 — `whatsapp_cloud`: the paid WhatsApp receipts add-on
+
+Added the ninth feature key, `whatsapp_cloud`, to the curated vocabulary. It is sold
+monthly (in `PRICED_FEATURE_KEYS`), charged **once per company** (one business WhatsApp
+sender, like Head Office and the e-commerce bridges), and stripped on suspension. The
+store's `SUBSCRIPTION_GATED_FEATURES` already lists it; the tenant verifies it on every
+automatic send, so a store without it sees only manual sharing.
+
+Pricing is the **R50/250-message entry bundle**, with R100/500 and R150/750 chosen in the
+new-client form, client subscription editor or a quote. A one-time `user_version`
+migration backfills the entry price onto existing plans, so the client editor can offer
+it; the office can still change or remove it afterwards. A held add-on remains visible
+and savable when its plan no longer prices it (new purchases still need a plan price).
+The chosen bundle price is stored on the subscription, `entitlementsFor` derives
+`whatsappMessages` (250/500/750), and the signed licence carries it; the register counts
+accepted sends in the month and refuses at the allowance. A bundle-price change now
+re-pushes the licence even when the feature set is unchanged. **Multi-store:** each branch
+receives the full company allowance and enforces its own count; splitting it or
+aggregating company usage is the next decision.
+
+Tests: CP **468/468** across 36 suites, including the vocabulary, per-company,
+entry-price, bundle-allowance and held-add-on checks. Local company 1 was put on the
+R100/500 bundle through the API; the licence (sequence 36) carries
+`whatsappMessages: 500` and the running store reports `monthlyLimit: 500,
+sentThisMonth: 3, remainingThisMonth: 497`. Revoking and restoring the entitlement was
+verified earlier (`manual` + 403 while absent, `test` + `canSend` when restored). This
+repo is not committed.
+
+## The published list reaches Plans, Quotes and New Client (2026-10-20)
+
+Owner: _"look at the marketing website pricing — is the CP Plans/Quotes/Clients -New Client
+all correct and can I use to fulfill the model outlined in the pricing"_. The arithmetic was
+right — the quote desk and `GET /api/public/pricing` match the site to the cent — but the
+onboarding surfaces were not. Fixed:
+
+- **Plans data.** A one-time `user_version = 2` migration
+  (`migratePublishedPricingDefaults`) moves the legacy `vula-standard` row from
+  `per_terminal` R49/R0-store to `per_store` R199/R49, and aligns the old R99 Head Office
+  add-on (`multi_store: 9900`) to **R199** on every plan. One-time, so a later deliberate
+  plan price is not overruled; existing subscriptions are snapshots and do not move.
+- **New Client preview.** The local `WizardQuote` only knew `per_terminal`, so every
+  per-store plan showed "Custom pricing — agreed per client". Extracted
+  `components/SubscriptionQuotePreview` (one component for the client-detail editor and
+  the wizard) and fed it the estate, add-ons and setup choice.
+- **New Client defaults and caps.** The wizard defaulted to `vula-start` (1 till/store)
+  while its forms defaulted to 2 tills — its own defaults were refused. It now picks a
+  plan that holds the default 3 stores × 2 tills, shows each plan's caps in the picker,
+  and blocks Deploy with the same message the server would return.
+- **No orphan clients.** `POST /clients` created the company before validating the plan
+  ceiling; a refused wizard left a client with no subscription. Store/Head Office
+  validation and all cap checks now run first, and the company, quantity, agreed terms,
+  setup fee and add-ons commit in one transaction.
+- **Head Office is multi-store only.** The wizard no longer offers or sends the
+  `multi_store` add-on on a single-store deployment (the quote desk and the site already
+  refused it below two stores); the server refuses it by name.
+- **Quote → client builds the estate.** The conversion used to create only the company,
+  so a 3-store quote's recurring line counted zero stores and priced every till as an
+  additional one (R294 instead of R744). It now derives the per-store split from the
+  quote (or distributes an overridden total evenly), creates the branches with their
+  licensed counts, creates the Head Office when the quote bought it, and starts the
+  deployment job. Plan caps and store/panel slug clashes are checked before anything is
+  written.
+- **Documents.** `schema.sql` mirrors the live pricing columns (plans, subscriptions,
+  invoices, quotes, settings, stores.kind); `CONTEXT.md` and `AGENTS.md` state the
+  per-store model and the R199/R49 list.
+
+Tests: CP **473/473** across 36 suites (new: the plan alignment, the no-orphan ceiling and
+store-cap refusals, the single-store Head Office refusal, and the quote conversion's
+estate → monthly equals the quote), frontend **31/31**, `typecheck` and both builds clean.
+The live local registry now shows all nine plans per-store at 19900/4900 and Head Office
+19900; `user_version = 2`. Not committed.
+
+## The WhatsApp add-on reaches every desk surface — including R200/1000 (2026-10-20)
+
+Owner, testing the onboarding screens: _"Plans dont show WA add-on"_, _"Quote - how do I
+choose the whatsapp plan?"_, _"New client I can only choose WA 50/month"_. The server
+vocabulary and pricing had the add-on; three surfaces did not expose it:
+
+- **Plans.** `ADDON_ORDER` in the Plans editor was a hardcoded six-key display list, so
+  `whatsapp_cloud` never appeared even though the plan rows priced it at R50. Added last
+  (the six published cards keep their order, and which keys ARE add-ons still comes from
+  `soldMonthly`).
+- **New Client.** The wizard listed the plan's R50 entry price but had no bundle picker
+  and never sent `whatsappBundle`, so onboarding could only buy 250 messages. It now
+  shows 250/500/750/1000 (R50/R100/R150/R200) when WhatsApp is ticked, defaults the bundle to the
+  plan's entry price, sends the chosen bundle, and the commercial preview uses that
+  price. `buyAddons` records it as the agreed add-on price and the licence derives the
+  allowance.
+- **Quote.** The bundle selector already existed in the Prices block, but it was behind a
+  collapsed toggle and the add-on list gave no clue. Selecting WhatsApp in a create/edit
+  quote now opens the Prices block with the bundle picker and defaults it to the entry
+  bundle; the send panel says the bundle is set on the quote and to edit it to change it.
+  The dropdown lists **only bundles** (250/500/750/1000) — the bare `List — R50` row is
+  gone; a legacy custom WhatsApp price keeps a "Current" option so an old quote is not
+  silently snapped to a bundle.
+
+Tests: frontend **33/33** (new: the bundle price → allowance mapping); backend **473/473**,
+typecheck and build clean.

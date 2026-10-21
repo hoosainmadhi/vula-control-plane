@@ -148,9 +148,13 @@ ambiguity alive. See `CONTEXT.md` §2a. The same rule applies to what clients
 
 ## Commercial rules locked with the owner
 
-- **`licensed terminals × rate` is the whole recurring model, and the rate
-  includes support** (2026-09-16). No support line, no support tier, no support
-  charge type. Do not add one without the owner saying so.
+- **The recurring model is per trading store**, and the price includes support
+  (owner, 2026-10-14): `stores × store rate + max(0, licensed − stores) ×
+  additional-till rate` — R199/R49 on the published list — plus the add-ons at
+  their quantities. `per_terminal` plans (`licensed × rate`) remain for
+  grandfathered agreements, and `custom` is a negotiated flat amount. A warehouse
+  is not a trading store and carries no line. No support line, no support tier,
+  no support charge type. Do not add one without the owner saying so.
 - The **once-off onboarding charge is captured automatically** on the next invoice
   raised for a client that has never been billed it — across `initial`, `renewal`
   and hand-priced invoices. `includeOnboarding: false` is the one-invoice opt-out.
@@ -199,8 +203,8 @@ ambiguity alive. See `CONTEXT.md` §2a. The same rule applies to what clients
 | POST `/stores/:id/licence`                   | office                          | re-issue and deliver the signed licence (carries the store's `maxTerminals`); **asks the deployment for the sequence it holds first** and raises our counter to match, so a registry rebuilt or restored out of a backup cannot issue a stale licence. Returns `reconciled: {from,to,reported}` when it had to catch up |
 | POST `/stores/:id/reset-admin`               | office                          | store resets its admin pw; temp password shown once, never stored                                                                                                                             |
 | GET `/stores/licence/key`                    | office                          | the public verification key stores install (never the private key)                                                                                                                            |
-| GET/POST `/plans`, PUT `/plans/:id`          | office                          | plan catalogue: store cap, per-store terminal ceiling, features, `pricingMode` + `terminalPriceCents` + `customAmountCents` (a custom plan's agreed flat charge per period; 0 = per-invoice) + `setupFeeCents` + `billingPeriod`; code immutable; per_terminal needs a rate > 0       |
-| GET `/plans/features`                        | office                          | the curated feature vocabulary (6 keys) plans may grant — validated on plan write; the store/head-office gates mirror it (L4)                                                                  |
+| GET/POST `/plans`, PUT `/plans/:id`          | office                          | plan catalogue: store cap, per-store terminal ceiling, features, `pricingMode` (`per_store`/`per_terminal`/`custom`) + `terminalPriceCents` + `storePriceCents` + `customAmountCents` (a custom plan's agreed flat charge per period; 0 = per-invoice) + `setupFeeCents` + `billingPeriod`; code immutable; per_terminal needs a terminal rate > 0 and per_store a store rate > 0 |
+| GET `/plans/features`                        | office                          | the curated feature vocabulary (9 keys: 7 sold add-ons + 2 included by plans) — validated on plan write; the store/head-office gates mirror it (L4)                                          |
 | GET/POST `/companies`, GET/PUT/DELETE `/:id` | office                          | merchant accounts — the unit of billing and owner of the subscription; DELETE is 409 `company_in_use` while it owns stores, a Head Office **or any invoice** (financial history is retained — suspend instead; a successful delete is audited `company_deleted`); PUT accepts `licensedTerminalCount` + `setupFeeStatus`, applies the whole edit in one transaction, and treats an explicit `null` as clearing (`paidThrough`/`trialEndsAt`) |
 | GET/POST `/panels`, GET/PUT/DELETE `/:id`    | office                          | one Head Office per merchant; POST/DELETE are the registration only — DELETE is 409 `panel_active` while active (**pause-first teardown**, like stores); PUT accepts `status` (`active`/`paused`, anything else 400) and re-probes a changed `baseUrl` through the managed-endpoint policy (CONTEXT §3a)                                                                                                                           |
 | GET `/panels/licence/key`                    | office                          | as `/stores/licence/key`                                                                                                                                                                      |

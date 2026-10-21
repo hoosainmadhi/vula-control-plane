@@ -1,5 +1,60 @@
 # Findings
 
+## 2026-10-20 — the WhatsApp add-on was sold by the server, invisible on three screens
+
+The vocabulary has priced `whatsapp_cloud` since the 2026-10-20 WhatsApp pass, and
+`/plans/features` reports it sold monthly at R50. The surfaces had gaps:
+
+- the Plans editor's `ADDON_ORDER` was a hardcoded six-key list, so no plan could show or
+  edit the WhatsApp price;
+- the New Client wizard showed the plan's R50 entry price but had no bundle picker and did
+  not send `whatsappBundle`, so it could only buy 250 messages;
+- the Quote desk had the bundle selector, but only inside the collapsed Prices block, so
+  selecting WhatsApp gave R50 with no visible route to 500/750/1000.
+
+Fixed by adding the key to `ADDON_ORDER`, adding the bundle picker to the wizard (and
+sending the chosen bundle), and auto-opening the Prices block when WhatsApp is selected on
+a quote.
+
+## 2026-10-20 — the price list was right; the onboarding surfaces were not
+
+The published list (R199/store first till in, R49/extra till, the six add-ons and the
+setup pair) was already implemented in `quotePricing.ts`, `pricing.ts` and
+`GET /api/public/pricing`. The defects were upstream/downstream of that arithmetic:
+
+- **`vula-standard` billed R49 per till.** It was created under the old model
+  (`per_terminal`, terminal 4900) and never moved with the eight tiers on 2026-10-14.
+  A 3-store/6-till client would have paid R294/month instead of R744. The plan data
+  migration now moves it to `per_store` 19900/4900.
+- **Head Office was R99 on every plan.** `DEFAULT_FEATURE_PRICES.multi_store` moved to
+  19900 on 2026-10-14, but `seedPlans` only prices new rows and `grantSplitFeatureKeys`
+  only fills empty maps — the existing plans kept `multi_store: 9900`. The wizard's
+  `buyAddons` reads the plan price, so direct onboarding under-billed by R100/month while
+  the quote desk charged R199. The one-time migration aligns every plan.
+- **The wizard's preview only knew `per_terminal`.** `WizardQuote` returned
+  "Custom pricing" for every per-store plan, hiding the recurring figure from the
+  operator. The shared `SubscriptionQuotePreview` now mirrors `quoteForSubscription`.
+- **The wizard's defaults could not deploy.** `listPlans()` sorts by `sort_order`; the
+  first row is `vula-start` (1 till/store), while the forms default to 2 tills. The
+  server refused the request — after `createCompany`, leaving an orphan client row.
+  Validation now runs before the company write, and the default plan is chosen to fit.
+- **Head Office could be sold on a single store.** The site and quote desk refuse
+  `multi_store` below two stores; the wizard offered it. Refused by name now.
+- **Quote conversion created no estate.** It wrote the company/subscription but no
+  branches or panel. With zero trading stores, `quoteForSubscription` priced every till
+  as an additional one (a 3-store/6-till quote read R294, not R744) and there was no
+  Head Office until someone built the topology by hand. The conversion now creates the
+  branches from the quote split, the panel when bought, and the deployment job.
+  The existing test inserted three stores manually to make the monthly match — that
+  crutch is gone.
+- **Stale docs/schema.** `schema.sql` still had the two-mode `pricing_mode` CHECK and no
+  `store_price_cents`/`store_rate_cents`/quote pricing columns; `CONTEXT.md` still said
+  R100–R150/till and R3,000–R6,000 setup. Both now describe the per-store list.
+- **Marketing hydration drifted visibly.** The page moved its builder maths from
+  `/api/public/pricing` but not the banner or the add-on cards/buttons; a repriced list
+  would show one rate in the copy and another in the total. The hydration now updates
+  every visible figure.
+
 ## 2026-10-11 — the 10 October review's P0s were real, and the redirect one was wider than it said
 
 Verified claim by claim before building (the full narrative lives in the za-pos repo's

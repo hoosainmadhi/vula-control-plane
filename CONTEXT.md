@@ -54,13 +54,15 @@ control plane is what makes the two confusable in conversation. Do not write
   count against.
 - **Plan · subscription · billing are three different things** (2026-09-13). The
   **plan** is the catalogue entry: what a client *may* buy (store cap, per-store
-  terminal ceiling, features, rate per licensed terminal, once-off onboarding).
+  terminal ceiling, features, its pricing mode and rates, once-off onboarding).
   The **subscription** is what this client *did* buy — one row per company in
   `company_subscriptions` (`licensed_terminal_count` + `setup_fee_status`) plus a
   `store_terminal_licences` row per store saying where those licences sit.
-  **Billing** is the arithmetic: `licensed terminals × rate`, plus the once-off
-  onboarding charge on the first invoice. Only the first is editable as a
-  catalogue; the others are per-customer facts. **Every price is quoted including
+  **Billing** is the arithmetic: on `per_store` plans, `trading stores × store rate
+  + max(0, licensed − stores) × additional-till rate`; on legacy `per_terminal`
+  plans, `licensed terminals × rate`; plus the once-off onboarding charge on the
+  first invoice. Only the first is editable as a catalogue; the others are
+  per-customer facts. **Every price is quoted including
   VAT** (owner, 2026-09-16): the invoice states the total and the tax inside it,
   never a rate the office then has to add tax to. **The rate covers support** — the
   owner decided the same day that support is included per terminal, so there is no
@@ -69,12 +71,18 @@ control plane is what makes the two confusable in conversation. Do not write
   its pricing, and the add-on prices it sells. Eight tiers are seeded and every value
   is editable: `vula-start` (1 store / 1 terminal), `vula-grow` (1/3), `vula-branch`
   (3/2), `vula-network` (5/3), `vula-market` (1/10), `vula-market-plus` (10/15),
-  `vula-market-enterprise` (50/20) and `vula-spares-network` (50/5) — all
-  per-terminal at R100–R150 per licensed terminal per month, with a once-off
-  onboarding charge of R3,000–R6,000. Operators can also **create their own plans** —
-  the seeded tiers are a starting point, not a closed catalogue. Each plan also carries
-  what it SELLS as add-ons (`feature_prices_json`), seeded from the approved pricing
-  page (§5, `DEFAULT_FEATURE_PRICES`).
+  `vula-market-enterprise` (50/20) and `vula-spares-network` (50/5). They all carry
+  the published list: **R199,00 per trading store per month, its first till
+  included, plus R49,00 per additional till**, and a **R1,500 self / R5,000
+  assisted** once-off onboarding charge (the plan carries the self figure; the
+  client's own row carries the assisted choice). A plan may also be `per_terminal`
+  (the older agreed model) or `custom` (a negotiated flat amount). Operators can
+  also **create their own plans** — the seeded tiers are a starting point, not a
+  closed catalogue. Each plan also carries what it SELLS as add-ons
+  (`feature_prices_json`), seeded from the approved pricing page (§5,
+  `DEFAULT_FEATURE_PRICES`). Head Office is R199,00 for the business; E-commerce
+  and WhatsApp are one charge for the business; AI Copilot and Upload invoice are
+  R99,00 per store; Credit accounts and Lay-by are R49,00 per store.
 - **Four terminal quantities, and only one of them is billable.** **Licensed** is
   the commercial quantity (bought from the vendor, drives the fee). **Configured**
   is the terminal slots the POS is told to run (`stores.terminal_count`). **Claimed**
@@ -84,8 +92,10 @@ control plane is what makes the two confusable in conversation. Do not write
   *licensed* for, so the POS slots and the signed licence cannot drift apart.
 - **A plan's price always carries its recurrence.** `billing_period` is one of
   `monthly` | `annual` | `once-off`, and the UI never shows a bare number — a figure
-  without its period is not a price. `pricing_mode` is `per_terminal` (recurring
-  rate × licensed terminals) or `custom` (a negotiated deal). A custom plan may
+  without its period is not a price. `pricing_mode` is `per_store` (the published
+  model: stores × store rate + extra tills × additional-till rate),
+  `per_terminal` (the older recurring rate × licensed terminals, kept for
+  grandfathered agreements) or `custom` (a negotiated deal). A custom plan may
   carry an **agreed amount** (`custom_amount_cents`, billed flat per period — the
   office states it once and renewals follow from it), or 0, which means "negotiated
   per client": an amountless invoice is then refused and the renewal sweep skips
@@ -177,26 +187,40 @@ Served machine-readably at `GET /api/plans/features` (see `src/services/features
 | `ai_assistant`      | AI Copilot                   | store · Head Office                 |
 | `layby`             | Lay-by                       | store                               |
 | `invoice_import`    | Upload invoice (AI assisted) | store                               |
+| `whatsapp_cloud`    | WhatsApp messaging           | store                               |
 
 `layby` and `invoice_import` joined on 2026-10-10: lay-bys were gated on
 `customer_credit` (so buying credit alone handed them over, and buying lay-by alone
 unlocked nothing) and the supplier-invoice importer was gated on **no key at all**.
-Six of the eight are sold per month and priced per plan (§5, `feature_prices_json`);
-the other two are included by whichever plan grants them.
+`whatsapp_cloud` joined on 2026-10-20 as the paid automatic-delivery add-on; manual
+`wa.me` sharing remains free. Seven of the nine are sold per month and priced per
+plan (§5, `feature_prices_json`); the other two are included by whichever plan grants
+them. `whatsapp_cloud` is a **per-company** add-on (one business WhatsApp sender),
+alongside `multi_store` and `ecommerce_bridges`. Its entry bundle is **R50 for 250
+messages**; **R100/500**, **R150/750** and **R200/1000** are chosen in the new-client form, the
+client subscription editor or a quote, and the chosen price is stored on the
+subscription. Existing plans were backfilled with R50 once (`user_version` guards
+the migration, so an office removal is not undone). `entitlementsFor` derives
+`whatsappMessages` from the agreed price and the signed licence carries it, so the
+register enforces the monthly allowance. A bundle-price change re-pushes the
+licence even when the feature set is unchanged. **Multi-store:** each branch
+currently receives the full company allowance and enforces it against its own
+count; splitting it across branches or aggregating company usage is the next
+decision.
 
 ### What a suspension does to the add-ons (2026-10-10)
 
 The signed claim is kept in step with the intent, on both sides:
 
-- The control plane omits `ai_assistant` and `invoice_import` from the licence it
-  signs while the client is suspended — `SUSPENSION_STRIPPED_FEATURES`
+- The control plane omits `ai_assistant`, `invoice_import` and `whatsapp_cloud` from
+  the licence it signs while the client is suspended — `SUSPENSION_STRIPPED_FEATURES`
   (`src/services/features.ts`), applied at the one delivery boundary
   (`services/licenceDelivery.ts`), so every issue path obeys it.
 - The register applies the same rule on its own side (`SUBSCRIPTION_GATED_FEATURES`):
-  with either key present but the licence **suspended**, the gate refuses **402
-  `subscription_suspended`** rather than `feature_not_in_plan`, so a deployment still
-  holding an older licence cannot keep using them. The two lists name the same two
-  keys and must be changed together.
+  with any of those keys present but the licence **suspended**, the gate refuses
+  **402 `subscription_suspended`** rather than `feature_not_in_plan`, so a deployment
+  still holding an older licence cannot keep using them. The two lists name the same
+  three keys and must be changed together.
 
 Settling the account restores both on the next push. The operational add-ons — Head
 Office, credit accounts, lay-by, e-commerce — are never stripped: suspension stops new
@@ -833,7 +857,7 @@ copied onto the subscription:
 
 | `company_subscriptions` | Meaning                                              |
 | ----------------------- | ---------------------------------------------------- |
-| `pricing_mode`          | `per_terminal` or `custom`, as agreed                |
+| `pricing_mode`          | `per_store`, `per_terminal` or `custom`, as agreed   |
 | `rate_cents`            | The agreed per-terminal rate                         |
 | `custom_amount_cents`   | The agreed flat charge, for a negotiated deal         |
 | `setup_fee_cents`       | The agreed once-off onboarding charge                |
@@ -1103,27 +1127,29 @@ existing client pays — related words, different things; keep them apart.
   highest number already written). `LIKE 'VULA-<year>-%'` cannot match a quote,
   nor the reverse, so the two sequences never see each other's rows.
 - **The desk prices; the page's figures are evidence.** `services/quotePricing.ts`
-  holds the list (the page's own figures: R99/till/month; add-ons from
-  `DEFAULT_FEATURE_PRICES`; the R5 000 assisted / R1 500 self set-up pair). The
-  record keeps the visitor's figures (`requested_*`) beside the catalogue's
-  (`priced_*`); a disagreement — or an unreadable figure — sets `drift`, and the
-  desk's email names both. Refused by name: an unknown add-on, a missing setup
-  choice, Head Office below two stores, and **fewer tills than stores** — tills are
-  the total across the stores, and the office's forms ask the product's own two
-  numbers (stores × tills per store) so the multiplication is never left to the
-  typist (the desk once recorded 3 stores / 1 till at R99; the owner caught it in
-  testing), and the priced line spells the split out — `3 tills (1 till per store ×
-  3 stores)` — because the terse `(3 × 1)` is how that misreading happened; a
-  single-store quote prints no split, and the marketing builder's line reads the same
-  way. The till line also snaps its unit rate (`rateCents`/`quantity` on the priced
-  line — the invoice's `terminal_price_cents` discipline) and both renderers compose
-  it the invoice's own way, `6 × R 99,00` beside the line total, so the quotation's
-  arithmetic is checkable; a flat add-on carries no rate — its amount is the rate. An
-  uneven estate is stateable too: the office's forms take a real per-store split
-  (`tillsSplit`, e.g. 2, 3, 1), the list then sets both the store count and the total,
-  and the line reads `6 tills (2 + 3 + 1 across 3 stores)` — the price is unchanged,
-  because pricing is per till wherever the till is. The page must deploy before the CP:
-  the endpoint requires the structured fields, and the old endpoint ignores them.
+  holds the list (the page's own figures: **R199/trading store/month with its first
+  till included, R49 per additional till**; add-ons from `DEFAULT_FEATURE_PRICES`;
+  the R5 000 assisted / R1 500 self set-up pair). The record keeps the visitor's
+  figures (`requested_*`) beside the catalogue's (`priced_*`); a disagreement — or
+  an unreadable figure — sets `drift`, and the desk's email names both. Refused by
+  name: an unknown add-on, a missing setup choice, Head Office below two stores,
+  and **fewer tills than stores** — tills are the total across the stores, and the
+  office's forms ask the product's own two numbers (stores × tills per store) so
+  the multiplication is never left to the typist (the desk once recorded 3 stores /
+  1 till; the owner caught it in testing), and the priced line spells the split out
+  — `3 stores (first till included · (2 tills per store))` plus `3 additional
+  tills` — because the terse `(3 × 1)` is how that misreading happened; a
+  single-store quote prints no split, and the marketing builder's line reads the
+  same way. Each line snaps its unit rate (`rateCents`/`quantity` on the priced
+  line — the invoice's `store_price_cents`/`terminal_price_cents` discipline) and
+  both renderers compose it the invoice's own way, `3 × R 199,00` beside the line
+  total, so the quotation's arithmetic is checkable; a flat add-on carries no rate
+  — its amount is the rate. An uneven estate is stateable too: the office's forms
+  take a real per-store split (`tillsSplit`, e.g. 2, 3, 1), the list then sets both
+  the store count and the total, and the stores line reads `3 stores (4 + 3 + 2
+  across 3 stores)` with the additional line `(3 + 2 + 1 extra across 3 stores)` —
+  the price is `stores × R199 + extra tills × R49`. The page must deploy before the
+  CP: the endpoint requires the structured fields, and the old endpoint ignores them.
 - **A quote can be drafted, corrected or removed** (2026-10-13). `POST /api/quotes`
   drafts one from the office's input for a prospect who called or emailed instead of
   using the site; `PUT /api/quotes/:id` edits a `new`/`quoted` quote — the prospect's
