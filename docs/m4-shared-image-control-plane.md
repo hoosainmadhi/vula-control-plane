@@ -195,11 +195,15 @@ New suite: `src/__tests__/releases.test.ts` — **29 tests**:
 - stop-on-failure wave; paused tenant skip;
 - office auth, release creation and a dry-run wave through the HTTP API.
 
-Full Control Plane backend: **506/506 tests, 37 suites**; `npm run typecheck` and
-`npm run build` clean. No frontend files were changed for M4.
+Full Control Plane backend on the isolated `m4/shared-image-release` branch:
+**502/502 tests, 37 suites**; the main `dev` working tree with its pre-existing
+unrelated tests is **506/506**. `npm run typecheck` and `npm run build` are
+clean on the branch. No frontend files were changed for M4.
 
-See `docs/m4-architecture-review.md` for the P0/P1/P2 review and the M4.1
-live-integration plan.
+See `docs/m4-architecture-review.md` for the P0/P1/P2 review and
+`docs/m4.1-live-integration-plan.md` for the Stage A isolated live-integration
+plan. Stage A is not approved or executed; the Coolify token-scope and
+unpushed-branch gates are recorded there.
 
 ## 6. Deferred / known limits
 
@@ -222,7 +226,8 @@ live-integration plan.
 - **No background queue.** A large wave runs synchronously in the API request;
   a durable worker and resume endpoint are the next production step.
 - **Live Coolify API assumptions** (`application.status`, storage/deployment
-  list shapes) are mocked in tests and must be confirmed in M4.1.
+  list shapes) were confirmed read-only for Dockerfile apps; a live Docker Image
+  app and live stop remain to be exercised in Stage A/B.
 - **The production allowlist is static env.** A newly provisioned app's UUID
   must be added to `VULA_ALLOWED_APP_UUIDS` before its first upgrade; a
   DB-backed allowlist is a follow-up.

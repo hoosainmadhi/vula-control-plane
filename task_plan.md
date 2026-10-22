@@ -1172,18 +1172,27 @@ and test locally; do not deploy the CP or migrate tenants.
   revision health proof, stop-first SQLite protection, `/data`/identity
   preflight, app allowlist, trigger/app persistence, in-flight reconciliation,
   `release_state`/phase tracking.
-- [x] Tests: `releases.test.ts` 29/29; full backend **506/506**; typecheck and
-  production build clean.
-- [x] Isolated M4 branch `m4/shared-image-release` (commit `14c9133`) prepared
-  from clean HEAD; unrelated working-tree changes preserved on `dev`. Branch
-  suite 502/502, typecheck and build clean.
+- [x] Tests: `releases.test.ts` 29/29; main `dev` full backend **506/506**;
+  isolated branch **502/502**; typecheck and production build clean on both.
+- [x] Isolated M4 branch `m4/shared-image-release` (implementation `14c9133`;
+  M4.1 docs `1092f69`, `9c9a654`, `dcb1311`) prepared from clean HEAD;
+  unrelated working-tree changes preserved on `dev`. Branch suite 502/502,
+  typecheck and build clean.
 - [x] Read-only Coolify 4.4.7 contract check: application status, `/data`
   storage, deployment records/status and deployment-by-UUID confirmed; stop is
   an async queued job (exited state, containers removed). No live image app or
   stop exercised.
-- [ ] M4.1 live integration on isolated staging apps (separate approval; exact
-  targets, credentials, test releases, aborts and cleanup in
-  `docs/m4.1-live-integration-plan.md`).
+- [x] Stage A preparation: CP-driven single-Store plan, exact URLs/TLS
+  arrangement, `/data/control-plane.db` volume contract, exact ownership
+  manifest and stop-first recovery documented. `docs/m4.1-live-integration-plan.md`
+  and `docs/m4.1-staging-ownership.json`.
+- [ ] Stage A approval gates: explicit acceptance of Root Team token residual
+  (Coolify has no project/app-scoped token), push the exact isolated branch
+  commit (currently unpushed), and create the isolated Coolify project/token.
+- [ ] M4.1 Stage A live execution: deploy `vula-cp-m4-staging`, register only
+  Store release A, provision `za-pos-m4-store-a` through the CP, verify digest/
+  arm64/TLS/DB/single writer, then stop. Separate approval required.
+- [ ] M4.1 Stage B: release B, upgrade/rollback and waves; not approved.
 - [ ] Existing Dockerfile→dockerimage blue/green migration (separate approval).
 - [ ] Image signature/attestation verification (supply-chain follow-up).
 - [ ] Panel schema reporting from live telemetry (currently only set by this
