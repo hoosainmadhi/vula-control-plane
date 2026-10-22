@@ -16,8 +16,9 @@ for shared GHCR images:
   previous release are persisted on `stores` / `panels`;
 - new onboarding uses the latest active **stable** release when one exists,
   creating a Coolify `dockerimage` application from the digest instead of a
-  Git/Dockerfile build; without a stable release it falls back to the existing
-  Dockerfile path;
+  Git/Dockerfile build. Production refuses a Dockerfile build when no stable
+  release exists; non-production fallback requires the explicit
+  `ALLOW_LEGACY_DOCKERFILE_ONBOARDING=true` opt-in;
 - existing `dockerimage` tenants can be upgraded by digest;
 - every operation is per-tenant locked and deduplicated;
 - schema compatibility is checked before Coolify is called;

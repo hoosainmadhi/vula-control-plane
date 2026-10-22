@@ -142,10 +142,14 @@ same app rather than creating a second.
   refresh the store's schema from telemetry immediately before every release;
   adding that read is a follow-up (the store telemetry endpoint exposes
   `schemaVersion`). Existing panels without a reported schema fail closed.
-- **Coolify API shape assumptions.** `application.status`, storage field names
-  and deployment list shape are mocked in tests and must be confirmed against
-  the live Coolify 4.4.7 API in M4.1. If `status` is absent, stop-first fails
-  closed rather than risking two SQLite writers.
+- **Coolify API shape assumptions.** Read-only checks against installed Coolify
+  4.4.7 confirmed `application.status`, `/applications/{uuid}/storages`
+  (`/data`, persistent), deployment list records (`finished`, timestamps) and
+  deployment-by-UUID. The image fields were nullable on the inspected Dockerfile
+  apps, and the stop path is an async queued job that removes containers and
+  writes `exited`; a live Docker Image app and a live stop must still be
+  exercised in M4.1. If `status` is absent, stop-first fails closed rather than
+  risking two SQLite writers.
 - **No automatic rollback.** A failed deployment is recorded and the tenant is
   failed; the operator chooses the schema-safe rollback target.
 - **Release authorization is office-wide.** Every office JWT can publish and
@@ -195,6 +199,7 @@ New:
 - `src/__tests__/releases.test.ts`
 - `docs/m4-shared-image-control-plane.md`
 - `docs/m4-architecture-review.md`
+- `docs/m4.1-live-integration-plan.md`
 
 Modified:
 
@@ -216,7 +221,10 @@ Modified:
 ## 7. M4.1 live-integration plan (approval required before execution)
 
 **Objective:** validate the controller against the real Coolify API and one
-isolated test tenant, without migrating an existing demo.
+isolated test tenant, without migrating an existing demo. The exact staging
+targets, credential boundaries, test-release strategy, read-only contract
+evidence, abort conditions and cleanup are in
+[`docs/m4.1-live-integration-plan.md`](./m4.1-live-integration-plan.md).
 
 1. **Preconditions**
    - CP deployed to staging from the reviewed `dev` commit (separate approval).

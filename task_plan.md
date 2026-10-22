@@ -1174,9 +1174,16 @@ and test locally; do not deploy the CP or migrate tenants.
   `release_state`/phase tracking.
 - [x] Tests: `releases.test.ts` 29/29; full backend **506/506**; typecheck and
   production build clean.
-- [ ] Release UI (next increment).
-- [ ] M4.1 live integration on one isolated test tenant (separate approval;
-  plan in `docs/m4-architecture-review.md`).
+- [x] Isolated M4 branch `m4/shared-image-release` (commit `14c9133`) prepared
+  from clean HEAD; unrelated working-tree changes preserved on `dev`. Branch
+  suite 502/502, typecheck and build clean.
+- [x] Read-only Coolify 4.4.7 contract check: application status, `/data`
+  storage, deployment records/status and deployment-by-UUID confirmed; stop is
+  an async queued job (exited state, containers removed). No live image app or
+  stop exercised.
+- [ ] M4.1 live integration on isolated staging apps (separate approval; exact
+  targets, credentials, test releases, aborts and cleanup in
+  `docs/m4.1-live-integration-plan.md`).
 - [ ] Existing Dockerfile→dockerimage blue/green migration (separate approval).
 - [ ] Image signature/attestation verification (supply-chain follow-up).
 - [ ] Panel schema reporting from live telemetry (currently only set by this
