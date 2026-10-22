@@ -228,7 +228,16 @@ export const createImageRelease = (input: unknown): ImageRelease => {
       );
     return getImageRelease(Number(info.lastInsertRowid))!;
   } catch (err) {
-    if (err instanceof Error && /UNIQUE constraint failed/i.test(err.message)) {
+    // Native SQLite errors are not reliably `instanceof Error` across every
+    // runtime/test realm, so identify the constraint by code or message.
+    const code = (err as { code?: unknown } | null)?.code;
+    const message =
+      err instanceof Error
+        ? err.message
+        : typeof (err as { message?: unknown } | null)?.message === 'string'
+          ? String((err as { message: string }).message)
+          : String(err);
+    if (code === 'SQLITE_CONSTRAINT_UNIQUE' || /UNIQUE constraint failed/i.test(message)) {
       throw new HttpError(
         409,
         'A release with this kind and tag or digest already exists',
