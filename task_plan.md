@@ -1187,7 +1187,8 @@ and test locally; do not deploy the CP or migrate tenants.
   manifest and stop-first recovery documented. `docs/m4.1-live-integration-plan.md`
   and `docs/m4.1-staging-ownership.json`.
 - [ ] Stage A approval gates: explicit acceptance of Root Team token residual
-  (Coolify has no project/app-scoped token), push the exact isolated branch
+  (Coolify has no project/app-scoped token), revoke/rotate the existing token
+  exposed in a local tool log during preparation, push the exact isolated branch
   commit (currently unpushed), and create the isolated Coolify project/token.
 - [ ] M4.1 Stage A live execution: deploy `vula-cp-m4-staging`, register only
   Store release A, provision `za-pos-m4-store-a` through the CP, verify digest/

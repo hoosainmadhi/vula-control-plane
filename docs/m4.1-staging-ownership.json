@@ -6,6 +6,11 @@
   "purpose": "Disposable M4.1 Stage A live-integration resources. No production, demo or super-stores resource belongs in this manifest.",
   "createdAt": null,
   "verifiedAt": null,
+  "security": {
+    "existingRootTeamCoolifyTokenExposedLocally": true,
+    "rotateOrRevokeBeforeStageA": true,
+    "stagingMustUseNewToken": true
+  },
   "coolify": {
     "project": {
       "name": "vula-m4-staging",

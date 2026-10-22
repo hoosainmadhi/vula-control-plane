@@ -240,7 +240,9 @@ exact-resource manifest is
 - **The CP UUID allowlist is not token scoping.** `VULA_ALLOWED_APP_UUIDS` is a
   Control Plane guard for release operations. It does not reduce what a leaked
   Coolify token can modify. Stage A must explicitly accept the residual Root
-  Team access or remain blocked.
+  Team access or remain blocked. During preparation, shell-sourcing the CP
+  `.env` emitted part of the existing token into a local tool log; treat that
+  token as exposed and revoke/rotate it before Stage A.
 - **The isolated branch is unpushed.** Stage A must deploy the exact reviewed
   `m4/shared-image-release` commit, not dirty `dev`; until that commit is on the
   CP remote (or packaged as an approved image), Stage A cannot start.
