@@ -12,6 +12,7 @@ import { errorsRouter } from './errors.js';
 import { devicesRouter } from './devices.js';
 import { versionsRouter } from './versions.js';
 import { deploymentsRouter } from './deployments.js';
+import { releasesRouter } from './releases.js';
 
 export const apiRouter = Router();
 
@@ -31,3 +32,4 @@ apiRouter.use('/errors', errorsRouter);
 apiRouter.use('/devices', devicesRouter);
 apiRouter.use('/versions', versionsRouter);
 apiRouter.use('/deployments', deploymentsRouter);
+apiRouter.use('/releases', releasesRouter);

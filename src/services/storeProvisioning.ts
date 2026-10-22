@@ -1,15 +1,20 @@
 import crypto from 'node:crypto';
-import {
-  getStoreById,
-  setStoreDeployStatus,
-  type StoreRecord,
-} from '../config/registryDb.js';
+import { env } from '../config/env.js';
+import { getStoreById, setStoreDeployStatus, type StoreRecord } from '../config/registryDb.js';
 import {
   createStoreDeployment,
+  createStoreImageDeployment,
   isCoolifyConfigured,
   triggerDeploy,
   CoolifyError,
 } from './coolify.js';
+import {
+  recordProvisionedRelease,
+  resolveDefaultRelease,
+  setTenantReleaseState,
+  type ImageRelease,
+} from './releaseCatalog.js';
+import { verifyImageDeployment } from './releaseOrchestrator.js';
 import { pushTerminals } from './storeClient.js';
 import { deliverStoreLicence } from './licenceDelivery.js';
 import { trySendAdminCredentialsEmail } from './mailer.js';
@@ -113,31 +118,80 @@ export async function runStoreProvisioning(
 
   let coolifyUuid = store.coolify_uuid;
   let volumeName = store.volume_name;
+  let imageRelease: ImageRelease | null = null;
+  let imageDeploymentUuid: string | null = null;
 
   try {
-    // 1. Create Coolify Application & Storage volume if not already created
+    // 1. Create Coolify Application & Storage volume if not already created.
+    // A default stable GHCR release makes this a shared-image deployment with
+    // no Git/build step. A production tenant requires an approved stable
+    // release; the legacy Dockerfile path remains only for non-production
+    // development/demo onboarding until those tenants are migrated.
     if (!coolifyUuid) {
-      const deployResult = await createStoreDeployment({
-        slug: store.slug,
-        domain: store.base_url,
-        // Deployments live under the client that owns them, so a single-store
-        // client that later becomes multi-store grows a subtree rather than
-        // moving its existing data. A store with no client is its own directory.
-        clientSlug: clientSlugFor(store.company_id, store.slug),
-        controlPlaneToken: store.control_plane_token,
-      });
+      const clientSlug = clientSlugFor(store.company_id, store.slug);
+      const release = resolveDefaultRelease('store');
+      if (
+        !release &&
+        (store.environment === 'production' || !env.allowLegacyDockerfileOnboarding)
+      ) {
+        throw new Error(
+          'No approved stable Store release is registered; refusing to create a new tenant from a Dockerfile build',
+        );
+      }
+      const deployResult = release
+        ? await createStoreImageDeployment({
+            slug: store.slug,
+            domain: store.base_url,
+            deploymentName: store.deployment_name ?? `${clientSlug}-${store.name}`,
+            clientSlug,
+            release,
+            controlPlaneToken: store.control_plane_token,
+            onCreated: ({ coolifyUuid: createdUuid, volumeName: createdVolume }) => {
+              coolifyUuid = createdUuid;
+              volumeName = createdVolume;
+              imageRelease = release;
+              setStoreDeployStatus(storeId, 'provisioning', {
+                coolifyUuid: createdUuid,
+                volumeName: createdVolume,
+              });
+              recordProvisionedRelease('store', storeId, release, createdUuid, createdVolume);
+            },
+          })
+        : await createStoreDeployment({
+            slug: store.slug,
+            domain: store.base_url,
+            deploymentName: store.deployment_name ?? `${clientSlug}-${store.name}`,
+            // Deployments live under the client that owns them, so a single-store
+            // client that later becomes multi-store grows a subtree rather than
+            // moving its existing data. A store with no client is its own directory.
+            clientSlug,
+            controlPlaneToken: store.control_plane_token,
+          });
       coolifyUuid = deployResult.coolifyUuid;
       volumeName = deployResult.volumeName;
       setStoreDeployStatus(storeId, 'provisioning', { coolifyUuid, volumeName });
+      if (release) {
+        imageRelease = release;
+        recordProvisionedRelease('store', storeId, release, coolifyUuid, volumeName);
+        imageDeploymentUuid = await triggerDeploy(coolifyUuid, true);
+      }
     } else {
       // Re-trigger deploy on existing Coolify app
       await triggerDeploy(coolifyUuid);
     }
 
-    // 2. Poll for health
-    const isUp = await waitForStoreHealth(store.base_url);
-    if (!isUp) {
-      throw new Error(`Store ${store.slug} timed out waiting for health check at ${store.base_url}`);
+    // 2. Verify the deployment the image path actually started. The public
+    // health endpoint alone is not proof: the release's version/revision must
+    // be the one the new container reports.
+    if (imageRelease) {
+      await verifyImageDeployment(coolifyUuid, imageRelease, imageDeploymentUuid, store.base_url);
+    } else {
+      const isUp = await waitForStoreHealth(store.base_url);
+      if (!isUp) {
+        throw new Error(
+          `Store ${store.slug} timed out waiting for health check at ${store.base_url}`,
+        );
+      }
     }
 
     // 3. Bootstrap initial store admin user if email was specified — the
@@ -181,9 +235,13 @@ export async function runStoreProvisioning(
     }
 
     setStoreDeployStatus(storeId, 'deployed');
+    if (imageRelease) setTenantReleaseState('store', storeId, 'healthy');
     logger.info(`Store ${store.slug} successfully provisioned and deployed via Coolify!`);
   } catch (err: any) {
     logger.error(`Coolify provisioning failed for store ${store.slug}: ${err?.message || err}`);
-    setStoreDeployStatus(storeId, 'failed', { error: err?.message ? String(err.message) : String(err) });
+    setStoreDeployStatus(storeId, 'failed', {
+      error: err?.message ? String(err.message) : String(err),
+    });
+    if (imageRelease) setTenantReleaseState('store', storeId, 'failed');
   }
 }

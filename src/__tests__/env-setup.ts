@@ -6,6 +6,8 @@ process.env.OFFICE_ADMIN_EMAIL = 'office@test.local';
 process.env.OFFICE_ADMIN_PASSWORD = 'office-pass-123';
 process.env.STORE_REQUEST_TIMEOUT_MS = '100';
 process.env.LOG_LEVEL = 'error';
+// Legacy Dockerfile onboarding is opt-in; tests exercise that path explicitly.
+process.env.ALLOW_LEGACY_DOCKERFILE_ONBOARDING = 'true';
 // A real Resend key in a developer's .env would make the mailer attempt live
 // sends from tests (and the quote endpoint's suite asserts the payload it built,
 // not what a live service did with it). Pinned empty, like the Coolify keys

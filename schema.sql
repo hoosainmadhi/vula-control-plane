@@ -43,6 +43,14 @@ CREATE TABLE IF NOT EXISTS stores (
   volume_name            TEXT,
   admin_email            TEXT,
   terminal_names_json    TEXT,
+  image_digest           TEXT,
+  image_tag              TEXT,
+  release_channel        TEXT    NOT NULL DEFAULT 'stable',
+  desired_release_id     INTEGER,
+  last_release_id        INTEGER,
+  previous_release_id    INTEGER,
+  last_release_at        TEXT,
+  release_state          TEXT    NOT NULL DEFAULT 'idle',
   created_at             TEXT    NOT NULL DEFAULT (datetime('now')),
   updated_at             TEXT    NOT NULL DEFAULT (datetime('now'))
 );
@@ -165,6 +173,15 @@ CREATE TABLE IF NOT EXISTS panels (
     CHECK (deploy_status IN ('not_deployed', 'provisioning', 'deployed', 'failed')),
   coolify_uuid        TEXT,
   volume_name         TEXT,
+  image_digest        TEXT,
+  image_tag           TEXT,
+  release_channel     TEXT    NOT NULL DEFAULT 'stable',
+  desired_release_id  INTEGER,
+  last_release_id     INTEGER,
+  previous_release_id INTEGER,
+  last_release_at     TEXT,
+  release_state       TEXT    NOT NULL DEFAULT 'idle',
+  schema_version      INTEGER,
   created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
 );
@@ -402,6 +419,106 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_deployment_jobs_company ON deployment_jobs(company_id);
 CREATE INDEX IF NOT EXISTS idx_deployment_job_steps_job ON deployment_job_steps(job_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_type, target_id);
+
+-- Shared-image release catalog and tenant release state.
+CREATE TABLE IF NOT EXISTS image_releases (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind           TEXT NOT NULL CHECK (kind IN ('store', 'ho')),
+  tag            TEXT NOT NULL,
+  digest         TEXT NOT NULL,
+  version        TEXT NOT NULL,
+  revision       TEXT,
+  channel        TEXT NOT NULL DEFAULT 'stable'
+    CHECK (channel IN ('stable', 'beta', 'canary')),
+  schema_version INTEGER NOT NULL,
+  schema_min     INTEGER NOT NULL,
+  schema_max     INTEGER NOT NULL,
+  notes          TEXT,
+  is_active      INTEGER NOT NULL DEFAULT 1,
+  published_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (kind, digest),
+  UNIQUE (kind, tag)
+);
+
+CREATE TABLE IF NOT EXISTS release_batches (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  release_id   INTEGER NOT NULL REFERENCES image_releases(id),
+  kind         TEXT NOT NULL CHECK (kind IN ('store', 'ho')),
+  channel      TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'planned'
+    CHECK (status IN ('planned', 'running', 'complete', 'partial', 'failed', 'dry_run')),
+  wave_size    INTEGER NOT NULL DEFAULT 1 CHECK (wave_size BETWEEN 1 AND 50),
+  requested_by TEXT NOT NULL,
+  dry_run      INTEGER NOT NULL DEFAULT 0,
+  stop_on_failure INTEGER NOT NULL DEFAULT 1,
+  total        INTEGER NOT NULL DEFAULT 0,
+  succeeded    INTEGER NOT NULL DEFAULT 0,
+  failed       INTEGER NOT NULL DEFAULT 0,
+  skipped      INTEGER NOT NULL DEFAULT 0,
+  error        TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  started_at   TEXT,
+  completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS release_batch_items (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id      INTEGER NOT NULL REFERENCES release_batches(id) ON DELETE CASCADE,
+  tenant_type   TEXT NOT NULL CHECK (tenant_type IN ('store', 'panel')),
+  tenant_id     INTEGER NOT NULL,
+  wave_no       INTEGER NOT NULL,
+  action        TEXT NOT NULL CHECK (action IN ('provision', 'upgrade', 'rollback')),
+  status        TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'running', 'complete', 'failed', 'skipped')),
+  from_digest   TEXT,
+  to_digest     TEXT,
+  error         TEXT,
+  metadata_json TEXT,
+  started_at    TEXT,
+  completed_at  TEXT,
+  UNIQUE (batch_id, tenant_type, tenant_id)
+);
+
+CREATE TABLE IF NOT EXISTS release_deployments (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  tenant_type     TEXT NOT NULL CHECK (tenant_type IN ('store', 'panel')),
+  tenant_id       INTEGER NOT NULL,
+  release_id      INTEGER REFERENCES image_releases(id),
+  batch_id        INTEGER REFERENCES release_batches(id) ON DELETE SET NULL,
+  action          TEXT NOT NULL CHECK (action IN ('provision', 'upgrade', 'rollback')),
+  from_release_id INTEGER,
+  to_release_id   INTEGER,
+  from_digest     TEXT,
+  to_digest       TEXT,
+  status          TEXT NOT NULL DEFAULT 'running'
+    CHECK (status IN ('running', 'complete', 'failed', 'skipped')),
+  phase           TEXT NOT NULL DEFAULT 'queued',
+  error           TEXT,
+  coolify_uuid    TEXT,
+  coolify_deployment_uuid TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at    TEXT
+);
+
+CREATE TABLE IF NOT EXISTS deployment_locks (
+  tenant_type  TEXT NOT NULL CHECK (tenant_type IN ('store', 'panel')),
+  tenant_id    INTEGER NOT NULL,
+  lock_token   TEXT NOT NULL,
+  batch_id     INTEGER,
+  reason       TEXT,
+  acquired_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  expires_at   TEXT NOT NULL,
+  PRIMARY KEY (tenant_type, tenant_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_image_releases_kind_channel
+  ON image_releases(kind, channel, published_at);
+CREATE INDEX IF NOT EXISTS idx_release_batches_release ON release_batches(release_id);
+CREATE INDEX IF NOT EXISTS idx_release_batch_items_batch ON release_batch_items(batch_id);
+CREATE INDEX IF NOT EXISTS idx_release_deployments_tenant
+  ON release_deployments(tenant_type, tenant_id, id);
+CREATE INDEX IF NOT EXISTS idx_deployment_locks_expiry ON deployment_locks(expires_at);
 
 -- Grouped failure feed (§30 observability). One row per fingerprint × source ×
 -- entity, incremented when the same fault recurs, so the table grows with the

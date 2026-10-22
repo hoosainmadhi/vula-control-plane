@@ -51,6 +51,7 @@ export interface StoreRecord {
   id: number;
   slug: string;
   name: string;
+  deployment_name: string | null;
   vertical: StoreVertical;
   kind: StoreKind;
   terminal_count: number;
@@ -91,6 +92,16 @@ export interface StoreRecord {
   desired_config_version?: number;
   applied_config_version?: number;
   latency_ms?: number | null;
+  /** Exact shared image currently recorded for this deployment. */
+  image_digest?: string | null;
+  image_tag?: string | null;
+  release_channel?: 'stable' | 'beta' | 'canary';
+  desired_release_id?: number | null;
+  last_release_id?: number | null;
+  previous_release_id?: number | null;
+  last_release_at?: string | null;
+  release_state?:
+    'idle' | 'queued' | 'deploying' | 'verifying' | 'healthy' | 'failed' | 'rolled_back';
   created_at: string;
   updated_at: string;
 }
@@ -100,6 +111,7 @@ const STORES_DDL = `
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
     slug                   TEXT    NOT NULL UNIQUE,
     name                   TEXT    NOT NULL,
+    deployment_name        TEXT,
     vertical               TEXT    NOT NULL DEFAULT 'general',
     -- 'store' sells; 'warehouse' only holds stock and transfers it out. A
     -- warehouse does not consume the plan's store allowance and runs no tills
@@ -147,7 +159,16 @@ const STORES_DDL = `
     last_telemetry_json    TEXT,
     desired_config_version INTEGER NOT NULL DEFAULT 1,
     applied_config_version INTEGER NOT NULL DEFAULT 0,
-    latency_ms             INTEGER
+    latency_ms             INTEGER,
+    -- Shared-image release state. See services/releaseCatalog.ts.
+    image_digest           TEXT,
+    image_tag              TEXT,
+    release_channel        TEXT    NOT NULL DEFAULT 'stable',
+    desired_release_id     INTEGER,
+    last_release_id        INTEGER,
+    previous_release_id    INTEGER,
+    last_release_at        TEXT,
+    release_state          TEXT    NOT NULL DEFAULT 'idle'
   )`;
 
 /**
@@ -390,6 +411,105 @@ const DEPLOYMENT_JOB_STEPS_DDL = `
     completed_at  TEXT
   )`;
 
+const IMAGE_RELEASES_DDL = `
+  CREATE TABLE IF NOT EXISTS image_releases (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind           TEXT NOT NULL CHECK (kind IN ('store', 'ho')),
+    tag            TEXT NOT NULL,
+    digest         TEXT NOT NULL,
+    version        TEXT NOT NULL,
+    revision       TEXT,
+    channel        TEXT NOT NULL DEFAULT 'stable'
+      CHECK (channel IN ('stable', 'beta', 'canary')),
+    -- The schema the image creates (schema_version) and the range it can open.
+    -- A tenant may only receive an image whose range includes its current
+    -- schema; a rollback target whose max is below that is refused.
+    schema_version INTEGER NOT NULL,
+    schema_min     INTEGER NOT NULL,
+    schema_max     INTEGER NOT NULL,
+    notes          TEXT,
+    is_active      INTEGER NOT NULL DEFAULT 1,
+    published_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (kind, digest),
+    UNIQUE (kind, tag)
+  )`;
+
+const RELEASE_BATCHES_DDL = `
+  CREATE TABLE IF NOT EXISTS release_batches (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    release_id   INTEGER NOT NULL REFERENCES image_releases(id),
+    kind         TEXT NOT NULL CHECK (kind IN ('store', 'ho')),
+    channel      TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'planned'
+      CHECK (status IN ('planned', 'running', 'complete', 'partial', 'failed', 'dry_run')),
+    wave_size    INTEGER NOT NULL DEFAULT 1 CHECK (wave_size BETWEEN 1 AND 50),
+    requested_by TEXT NOT NULL,
+    dry_run      INTEGER NOT NULL DEFAULT 0,
+    stop_on_failure INTEGER NOT NULL DEFAULT 1,
+    total        INTEGER NOT NULL DEFAULT 0,
+    succeeded    INTEGER NOT NULL DEFAULT 0,
+    failed       INTEGER NOT NULL DEFAULT 0,
+    skipped      INTEGER NOT NULL DEFAULT 0,
+    error        TEXT,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at   TEXT,
+    completed_at TEXT
+  )`;
+
+const RELEASE_BATCH_ITEMS_DDL = `
+  CREATE TABLE IF NOT EXISTS release_batch_items (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id      INTEGER NOT NULL REFERENCES release_batches(id) ON DELETE CASCADE,
+    tenant_type   TEXT NOT NULL CHECK (tenant_type IN ('store', 'panel')),
+    tenant_id     INTEGER NOT NULL,
+    wave_no       INTEGER NOT NULL,
+    action        TEXT NOT NULL CHECK (action IN ('provision', 'upgrade', 'rollback')),
+    status        TEXT NOT NULL DEFAULT 'pending'
+      CHECK (status IN ('pending', 'running', 'complete', 'failed', 'skipped')),
+    from_digest   TEXT,
+    to_digest     TEXT,
+    error         TEXT,
+    metadata_json TEXT,
+    started_at    TEXT,
+    completed_at  TEXT,
+    UNIQUE (batch_id, tenant_type, tenant_id)
+  )`;
+
+const RELEASE_DEPLOYMENTS_DDL = `
+  CREATE TABLE IF NOT EXISTS release_deployments (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_type     TEXT NOT NULL CHECK (tenant_type IN ('store', 'panel')),
+    tenant_id       INTEGER NOT NULL,
+    release_id      INTEGER REFERENCES image_releases(id),
+    batch_id        INTEGER REFERENCES release_batches(id) ON DELETE SET NULL,
+    action          TEXT NOT NULL CHECK (action IN ('provision', 'upgrade', 'rollback')),
+    from_release_id INTEGER,
+    to_release_id   INTEGER,
+    from_digest     TEXT,
+    to_digest       TEXT,
+    status          TEXT NOT NULL DEFAULT 'running'
+      CHECK (status IN ('running', 'complete', 'failed', 'skipped')),
+    phase           TEXT NOT NULL DEFAULT 'queued',
+    error           TEXT,
+    coolify_uuid    TEXT,
+    coolify_deployment_uuid TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    completed_at    TEXT
+  )`;
+
+const DEPLOYMENT_LOCKS_DDL = `
+  CREATE TABLE IF NOT EXISTS deployment_locks (
+    tenant_type  TEXT NOT NULL CHECK (tenant_type IN ('store', 'panel')),
+    tenant_id    INTEGER NOT NULL,
+    lock_token   TEXT NOT NULL,
+    batch_id     INTEGER,
+    reason       TEXT,
+    acquired_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at   TEXT NOT NULL,
+    PRIMARY KEY (tenant_type, tenant_id)
+  )`;
+
 const AUDIT_LOGS_DDL = `
   CREATE TABLE IF NOT EXISTS audit_logs (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -576,6 +696,7 @@ const PANELS_DDL = `
     company_id          INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     slug                TEXT    NOT NULL UNIQUE,
     name                TEXT    NOT NULL,
+    deployment_name     TEXT,
     base_url            TEXT    NOT NULL
       CHECK (base_url LIKE 'http://%' OR base_url LIKE 'https://%'),
     control_plane_token TEXT    NOT NULL,
@@ -594,6 +715,15 @@ const PANELS_DDL = `
       CHECK (deploy_status IN ('not_deployed', 'provisioning', 'deployed', 'failed')),
     coolify_uuid        TEXT,
     volume_name         TEXT,
+    image_digest        TEXT,
+    image_tag           TEXT,
+    release_channel     TEXT    NOT NULL DEFAULT 'stable',
+    desired_release_id  INTEGER,
+    last_release_id     INTEGER,
+    previous_release_id INTEGER,
+    last_release_at     TEXT,
+    release_state       TEXT    NOT NULL DEFAULT 'idle',
+    schema_version      INTEGER,
     created_at          TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at          TEXT    NOT NULL DEFAULT (datetime('now'))
   )`;
@@ -763,6 +893,11 @@ export const getRegistryDb = (): Database.Database => {
   db.exec(DEPLOYMENT_JOB_STEPS_DDL);
   db.exec(AUDIT_LOGS_DDL);
   db.exec(ERROR_EVENTS_DDL);
+  db.exec(IMAGE_RELEASES_DDL);
+  db.exec(RELEASE_BATCHES_DDL);
+  db.exec(RELEASE_BATCH_ITEMS_DDL);
+  db.exec(RELEASE_DEPLOYMENTS_DDL);
+  db.exec(DEPLOYMENT_LOCKS_DDL);
   db.exec('CREATE INDEX IF NOT EXISTS idx_invoices_company ON invoices(company_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status)');
@@ -782,6 +917,17 @@ export const getRegistryDb = (): Database.Database => {
   db.exec(
     'CREATE INDEX IF NOT EXISTS idx_store_terminal_licences_company ON store_terminal_licences(company_id)',
   );
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_image_releases_kind_channel ON image_releases(kind, channel, published_at)',
+  );
+  db.exec('CREATE INDEX IF NOT EXISTS idx_release_batches_release ON release_batches(release_id)');
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_release_batch_items_batch ON release_batch_items(batch_id)',
+  );
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_release_deployments_tenant ON release_deployments(tenant_type, tenant_id, id)',
+  );
+  db.exec('CREATE INDEX IF NOT EXISTS idx_deployment_locks_expiry ON deployment_locks(expires_at)');
 
   // Lightweight auto-migrations for pre-existing databases.
   const storeCols = db.prepare('PRAGMA table_info(stores)').all() as Array<{ name: string }>;
@@ -818,6 +964,7 @@ export const getRegistryDb = (): Database.Database => {
     db.exec('ALTER TABLE stores DROP COLUMN feature_prices_json');
   }
   addColumn('control_plane_token', `control_plane_token TEXT NOT NULL DEFAULT ''`);
+  addColumn('deployment_name', 'deployment_name TEXT');
   // Per-branch Head Office credential — distinct from the vendor CP token.
   addColumn('head_office_token', 'head_office_token TEXT');
   addColumn('licence_sequence', 'licence_sequence INTEGER NOT NULL DEFAULT 0');
@@ -841,6 +988,14 @@ export const getRegistryDb = (): Database.Database => {
   addColumn('desired_config_version', 'desired_config_version INTEGER NOT NULL DEFAULT 1');
   addColumn('applied_config_version', 'applied_config_version INTEGER NOT NULL DEFAULT 0');
   addColumn('latency_ms', 'latency_ms INTEGER');
+  addColumn('image_digest', 'image_digest TEXT');
+  addColumn('image_tag', 'image_tag TEXT');
+  addColumn('release_channel', "release_channel TEXT NOT NULL DEFAULT 'stable'");
+  addColumn('desired_release_id', 'desired_release_id INTEGER');
+  addColumn('last_release_id', 'last_release_id INTEGER');
+  addColumn('previous_release_id', 'previous_release_id INTEGER');
+  addColumn('last_release_at', 'last_release_at TEXT');
+  addColumn('release_state', "release_state TEXT NOT NULL DEFAULT 'idle'");
 
   const panelCols = db.prepare('PRAGMA table_info(panels)').all() as Array<{ name: string }>;
   const addPanelColumn = (name: string, ddl: string) => {
@@ -849,9 +1004,41 @@ export const getRegistryDb = (): Database.Database => {
   // The Head Office's admin address — the executive login's username and the
   // credential-email recipient (mirrors stores.admin_email).
   addPanelColumn('admin_email', 'admin_email TEXT');
+  addPanelColumn('deployment_name', 'deployment_name TEXT');
   addPanelColumn('deploy_status', "deploy_status TEXT NOT NULL DEFAULT 'not_deployed'");
   addPanelColumn('coolify_uuid', 'coolify_uuid TEXT');
   addPanelColumn('volume_name', 'volume_name TEXT');
+  addPanelColumn('image_digest', 'image_digest TEXT');
+  addPanelColumn('image_tag', 'image_tag TEXT');
+  addPanelColumn('release_channel', "release_channel TEXT NOT NULL DEFAULT 'stable'");
+  addPanelColumn('desired_release_id', 'desired_release_id INTEGER');
+  addPanelColumn('last_release_id', 'last_release_id INTEGER');
+  addPanelColumn('previous_release_id', 'previous_release_id INTEGER');
+  addPanelColumn('last_release_at', 'last_release_at TEXT');
+  addPanelColumn('release_state', "release_state TEXT NOT NULL DEFAULT 'idle'");
+  addPanelColumn('schema_version', 'schema_version INTEGER');
+
+  const releaseCols = db.prepare('PRAGMA table_info(image_releases)').all() as Array<{
+    name: string;
+  }>;
+  if (!releaseCols.some((c) => c.name === 'revision')) {
+    db.exec('ALTER TABLE image_releases ADD COLUMN revision TEXT');
+  }
+  const batchCols = db.prepare('PRAGMA table_info(release_batches)').all() as Array<{
+    name: string;
+  }>;
+  if (!batchCols.some((c) => c.name === 'stop_on_failure')) {
+    db.exec('ALTER TABLE release_batches ADD COLUMN stop_on_failure INTEGER NOT NULL DEFAULT 1');
+  }
+  const releaseDeploymentCols = db
+    .prepare('PRAGMA table_info(release_deployments)')
+    .all() as Array<{ name: string }>;
+  if (!releaseDeploymentCols.some((c) => c.name === 'phase')) {
+    db.exec("ALTER TABLE release_deployments ADD COLUMN phase TEXT NOT NULL DEFAULT 'queued'");
+  }
+  if (!releaseDeploymentCols.some((c) => c.name === 'coolify_deployment_uuid')) {
+    db.exec('ALTER TABLE release_deployments ADD COLUMN coolify_deployment_uuid TEXT');
+  }
 
   const stepCols = db.prepare('PRAGMA table_info(deployment_job_steps)').all() as Array<{
     name: string;
@@ -2685,6 +2872,7 @@ export interface PanelRecord {
   company_id: number;
   slug: string;
   name: string;
+  deployment_name: string | null;
   base_url: string;
   control_plane_token: string;
   admin_email: string | null;
@@ -2700,6 +2888,16 @@ export interface PanelRecord {
   deploy_status: 'not_deployed' | 'provisioning' | 'deployed' | 'failed';
   coolify_uuid: string | null;
   volume_name: string | null;
+  image_digest?: string | null;
+  image_tag?: string | null;
+  release_channel?: 'stable' | 'beta' | 'canary';
+  desired_release_id?: number | null;
+  last_release_id?: number | null;
+  previous_release_id?: number | null;
+  last_release_at?: string | null;
+  release_state?:
+    'idle' | 'queued' | 'deploying' | 'verifying' | 'healthy' | 'failed' | 'rolled_back';
+  schema_version?: number | null;
   created_at: string;
   updated_at: string;
 }

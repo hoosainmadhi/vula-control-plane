@@ -28,8 +28,16 @@ import {
   isCoolifyConfigured,
   createStoreDeployment,
   createHeadOfficeDeployment,
+  createStoreImageDeployment,
+  createHeadOfficeImageDeployment,
   triggerDeploy,
 } from './coolify.js';
+import {
+  recordProvisionedRelease,
+  resolveDefaultRelease,
+  setTenantReleaseState,
+} from './releaseCatalog.js';
+import { verifyImageDeployment } from './releaseOrchestrator.js';
 import {
   pushTerminals,
   ping,
@@ -42,7 +50,7 @@ import { entitlementsFor } from './subscriptions.js';
 import { allocateTerminals, checkAllocation, terminalAllowance } from './terminalLicences.js';
 import { bootstrapStoreAdmin, generateAdminPassword } from './storeProvisioning.js';
 import { trySendAdminCredentialsEmail } from './mailer.js';
-import { logger } from '../config/env.js';
+import { env, logger } from '../config/env.js';
 import { wireStoreToHeadOffice } from './topology.js';
 
 export interface StoreDeploymentInput {
@@ -196,6 +204,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
 
         // Provision the real Head Office image — REQUIRED. The Head Office is a
         // different application (head-office/Dockerfile), not a store deploy.
+        let panelUsedImageRelease = false;
         if (autoDeploy && isCoolifyConfigured()) {
           if (panel.coolify_uuid) {
             // Retry after a failed deploy: re-trigger the existing application.
@@ -203,23 +212,74 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
               await triggerDeploy(panel.coolify_uuid);
             }
           } else {
-            const result = await createHeadOfficeDeployment({
-              slug: panel.slug,
-              domain: panel.base_url,
-              clientSlug: company.slug,
-              controlPlaneToken: panel.control_plane_token,
-            });
+            const release = resolveDefaultRelease('ho');
+            if (!release && (env.isProduction || !env.allowLegacyDockerfileOnboarding)) {
+              throw new Error(
+                'No approved stable Head Office release is registered; refusing to create a new Head Office from a Dockerfile build',
+              );
+            }
+            const panelId = panel.id;
+            const result = release
+              ? await createHeadOfficeImageDeployment({
+                  slug: panel.slug,
+                  domain: panel.base_url,
+                  deploymentName: panel.deployment_name ?? `${company.slug}-ho`,
+                  clientSlug: company.slug,
+                  release,
+                  controlPlaneToken: panel.control_plane_token,
+                  onCreated: ({ coolifyUuid: createdUuid, volumeName: createdVolume }) => {
+                    setPanelDeployStatus(panelId, 'provisioning', {
+                      coolifyUuid: createdUuid,
+                      volumeName: createdVolume,
+                    });
+                    recordProvisionedRelease('panel', panelId, release, createdUuid, createdVolume);
+                  },
+                })
+              : await createHeadOfficeDeployment({
+                  slug: panel.slug,
+                  domain: panel.base_url,
+                  // The short label wins when the office set one; otherwise the
+                  // client's own slug keeps two "Head Office" panels apart.
+                  deploymentName: panel.deployment_name ?? `${company.slug}-ho`,
+                  clientSlug: company.slug,
+                  controlPlaneToken: panel.control_plane_token,
+                });
             const updatedPanel = setPanelDeployStatus(panel.id, 'provisioning', {
               coolifyUuid: result.coolifyUuid,
               volumeName: result.volumeName,
             });
             if (updatedPanel) panel = updatedPanel;
+            if (release) {
+              panelUsedImageRelease = true;
+              recordProvisionedRelease(
+                'panel',
+                panel.id,
+                release,
+                result.coolifyUuid,
+                result.volumeName,
+              );
+              try {
+                const deploymentUuid = await triggerDeploy(result.coolifyUuid, true);
+                await verifyImageDeployment(
+                  result.coolifyUuid,
+                  release,
+                  deploymentUuid,
+                  panel.base_url,
+                );
+              } catch (err) {
+                setTenantReleaseState('panel', panel.id, 'failed');
+                setPanelDeployStatus(panel.id, 'failed', {
+                  error: err instanceof Error ? err.message : String(err),
+                });
+                throw err;
+              }
+            }
           }
         }
 
         // Bootstrap the panel's first admin — best-effort: the container is
         // usually still building at this point. The password is never stored;
-        // the outlet receives it by email when SMTP allows.
+        // the outlet receives it by email once the bootstrap lands.
         if (meta.adminEmail) {
           const panelPassword = generateAdminPassword();
           try {
@@ -250,6 +310,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
         // row has been promising since 'provisioning'. Container liveness is
         // the health badge's claim, not this one's.
         setPanelDeployStatus(panel.id, 'deployed');
+        if (panelUsedImageRelease) setTenantReleaseState('panel', panel.id, 'healthy');
 
         updateDeploymentStep(step.id, {
           status: 'complete',
@@ -300,22 +361,77 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
 
         // Coolify container deployment — REQUIRED. Idempotent: an application
         // that already exists is never created twice.
+        let storeUsedImageRelease = false;
         if (autoDeploy && isCoolifyConfigured()) {
           if (store.coolify_uuid) {
             if (store.deploy_status === 'failed') {
               await triggerDeploy(store.coolify_uuid);
             }
           } else {
-            const result = await createStoreDeployment({
-              slug: store.slug,
-              domain: store.base_url,
-              clientSlug: company.slug,
-              controlPlaneToken: store.control_plane_token,
-            });
+            const release = resolveDefaultRelease('store');
+            if (
+              !release &&
+              (store.environment === 'production' || !env.allowLegacyDockerfileOnboarding)
+            ) {
+              throw new Error(
+                'No approved stable Store release is registered; refusing to create a new tenant from a Dockerfile build',
+              );
+            }
+            const storeId = store.id;
+            const result = release
+              ? await createStoreImageDeployment({
+                  slug: store.slug,
+                  domain: store.base_url,
+                  deploymentName: store.deployment_name ?? `${company.slug}-${store.name}`,
+                  clientSlug: company.slug,
+                  release,
+                  controlPlaneToken: store.control_plane_token,
+                  onCreated: ({ coolifyUuid: createdUuid, volumeName: createdVolume }) => {
+                    setStoreDeployStatus(storeId, 'provisioning', {
+                      coolifyUuid: createdUuid,
+                      volumeName: createdVolume,
+                    });
+                    recordProvisionedRelease('store', storeId, release, createdUuid, createdVolume);
+                  },
+                })
+              : await createStoreDeployment({
+                  slug: store.slug,
+                  domain: store.base_url,
+                  // `jhb`, not `johannesburg`: the label is short, and the client
+                  // slug in the default keeps two Johannesburg stores apart.
+                  deploymentName: store.deployment_name ?? `${company.slug}-${store.name}`,
+                  clientSlug: company.slug,
+                  controlPlaneToken: store.control_plane_token,
+                });
             store = setStoreDeployStatus(store.id, 'provisioning', {
               coolifyUuid: result.coolifyUuid,
               volumeName: result.volumeName,
             })!;
+            if (release) {
+              storeUsedImageRelease = true;
+              recordProvisionedRelease(
+                'store',
+                store.id,
+                release,
+                result.coolifyUuid,
+                result.volumeName,
+              );
+              try {
+                const deploymentUuid = await triggerDeploy(result.coolifyUuid, true);
+                await verifyImageDeployment(
+                  result.coolifyUuid,
+                  release,
+                  deploymentUuid,
+                  store.base_url,
+                );
+              } catch (err) {
+                setTenantReleaseState('store', store.id, 'failed');
+                setStoreDeployStatus(store.id, 'failed', {
+                  error: err instanceof Error ? err.message : String(err),
+                });
+                throw err;
+              }
+            }
           }
         }
 
@@ -362,6 +478,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
         // and Coolify accepted it. 'provisioning' with no writer behind it is
         // how a row ends up claiming a state nobody made true.
         setStoreDeployStatus(store.id, 'deployed');
+        if (storeUsedImageRelease) setTenantReleaseState('store', store.id, 'healthy');
 
         updateDeploymentStep(step.id, {
           status: 'complete',

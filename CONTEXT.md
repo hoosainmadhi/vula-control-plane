@@ -740,6 +740,55 @@ grouped query (`deploymentStepCounts`) rather than per job.
   and auditing — which the control plane does not have (it is a single office
   JWT; see the RBAC item in tidbits.md).
 
+## 5d.1 Shared-image releases (M4, repository-side)
+
+The Control Plane now has a release catalog (`image_releases`) and a per-tenant
+release controller for shared GHCR images. This is repository-side only; no CP
+deployment or tenant migration has been performed.
+
+- **The digest is the deployment identity.** A release is kind (`store`/`ho`),
+  immutable tag, `sha256` digest, version, channel (`stable`/`beta`/`canary`) and
+  a supported schema range. Tags alone are never a deployment target.
+- **Tenant state** on `stores`/`panels`: `image_digest`, `image_tag`,
+  `release_channel`, `desired_release_id`, `last_release_id`,
+  `previous_release_id`, `last_release_at`, `release_state`; panels also carry
+  `schema_version`.
+- **New onboarding** uses the latest active stable release when registered and
+  creates a Coolify Docker Image app from the digest, with a per-tenant volume,
+  the existing control token and runtime-only env. Production refuses a
+  Dockerfile build when no stable release exists; non-production legacy fallback
+  requires `ALLOW_LEGACY_DOCKERFILE_ONBOARDING=true`. The app UUID is persisted
+  before env/storage/trigger work so a retry cannot create a duplicate app.
+- **Existing tenants** must already be Docker Image apps to be upgraded; a
+  Dockerfile app is refused because converting it in place would put a live
+  database behind a half-switched deployment. Before an image change the
+  controller proves `/data` storage and tenant identity, applies the Vula app
+  allowlist (`VULA_ALLOWED_APP_UUIDS`, required in production), stops the old
+  container and waits until it is not running.
+- **Deployment success** requires a terminal successful Coolify deployment,
+  a non-failed application state and `/health` reporting the release's
+  version/revision. A Coolify API 200 is not success. `release_state`
+  (`idle`/`queued`/`deploying`/`verifying`/`healthy`/`failed`/`rolled_back`) and
+  `release_deployments.phase` expose the lifecycle.
+- **Deduplication and locking:** a unique per-tenant `deployment_locks` row and
+  desired-release checks make a repeat request a no-op; a second concurrent
+  request is `locked`, not a duplicate deploy. A stale running deployment is
+  reconciled against Coolify before a new attempt; a live job blocks.
+- **Schema safety:** an existing tenant with no reported schema fails closed; an
+  image whose `schema_min..schema_max` excludes the tenant's schema is refused
+  before Coolify is called; a rollback target is checked the same way.
+- **Rollout:** release batches run in sequential waves, support `dryRun`, skip
+  paused tenants, use `stopOnFailure` (default true) so a failed pilot wave
+  prevents later waves, and record `release_batches`, `release_batch_items` and
+  `release_deployments`. Rollback targets `previous_release_id` or an explicit
+  release; there is no automatic rollback on a failed deploy.
+- **API:** `GET/POST /api/releases`, `GET /api/releases/fleet`, batches, tenant
+  apply/rollback/channel/history and `POST /api/releases/:id/rollout`.
+
+**Status:** repository-side implementation and tests only. Registering a stable
+release in a live CP, deploying the CP, and migrating existing tenants all need
+separate approval.
+
 ## 5e. The office's own settings and the mailer (2026-09-16)
 
 `GET /api/settings` and `PUT /api/settings` (office-gated). Patch semantics:

@@ -80,6 +80,18 @@ export interface Env {
   jwtSecret: string;
   jwtTtlHours: number;
   storeRequestTimeoutMs: number;
+  /** Registry image names for shared-image Store and Head Office deployments. */
+  storeImageName: string;
+  headOfficeImageName: string;
+  /** How long a shared-image release waits for the tenant's public /health. */
+  releaseHealthTimeoutMs: number;
+  releaseHealthIntervalMs: number;
+  /** A per-tenant deployment lock older than this is considered stale. */
+  releaseLockMinutes: number;
+  /** Explicit Coolify application UUID allowlist for image changes. */
+  allowedAppUuids: string[];
+  /** Explicit opt-in for the legacy Dockerfile path on non-production onboarding. */
+  allowLegacyDockerfileOnboarding: boolean;
   /**
    * Licence signing material. The private key never leaves this process; stores
    * receive only the public key and verify what the control plane signs.
@@ -128,6 +140,16 @@ export const env: Env = {
   // JWT_TTL_HOURS still overrides for deployments that want longer.
   jwtTtlHours: Number(process.env.JWT_TTL_HOURS || 24),
   storeRequestTimeoutMs: Number(process.env.STORE_REQUEST_TIMEOUT_MS || 5000),
+  storeImageName: process.env.VULA_STORE_IMAGE || 'ghcr.io/hoosainmadhi/vula-pos-store',
+  headOfficeImageName: process.env.VULA_HO_IMAGE || 'ghcr.io/hoosainmadhi/vula-pos-ho',
+  releaseHealthTimeoutMs: Number(process.env.RELEASE_HEALTH_TIMEOUT_MS || 480000),
+  releaseHealthIntervalMs: Number(process.env.RELEASE_HEALTH_INTERVAL_MS || 5000),
+  releaseLockMinutes: Number(process.env.RELEASE_LOCK_MINUTES || 30),
+  allowedAppUuids: (process.env.VULA_ALLOWED_APP_UUIDS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
+  allowLegacyDockerfileOnboarding: process.env.ALLOW_LEGACY_DOCKERFILE_ONBOARDING === 'true',
   // Not required at boot: when unset the signer generates a dev keypair (and, in
   // production, refuses to serve licences until a real key is configured).
   licencePrivateKey: process.env.LEASE_PRIVATE_KEY?.trim() || null,
