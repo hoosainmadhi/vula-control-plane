@@ -15,6 +15,7 @@ import {
   getReleaseBatch,
   getRunningReleaseDeployment,
   getTenantReleaseState,
+  listImageReleases,
   listReleaseBatchItems,
   listTenantReleaseStates,
   markTenantDeployStatus,
@@ -42,7 +43,7 @@ import {
   type CoolifyDeploymentSummary,
 } from './coolify.js';
 import { assertApplicationAllowed } from './applicationGuard.js';
-import { ping, pingPanel } from './storeClient.js';
+import { fetchTelemetry, ping, pingPanel } from './storeClient.js';
 import {
   getPanelById,
   getStoreById,
@@ -196,7 +197,7 @@ export const waitForCoolifyDeployment = async (
  * do not start the new image until Coolify reports the old one is no longer
  * running.
  */
-const waitForApplicationStopped = async (
+export const waitForApplicationStopped = async (
   coolifyUuid: string,
   timeoutMs = 30_000,
   intervalMs = 500,
@@ -204,8 +205,10 @@ const waitForApplicationStopped = async (
   const deadline = Date.now() + timeoutMs;
   do {
     const application = await getApplication(coolifyUuid);
-    const status = String(application.status ?? '').toLowerCase();
-    if (status && !/running|starting|restarting|deploying/.test(status)) return true;
+    // `container_present === false` is authoritative evidence that the app's
+    // container is gone. The human-readable status can remain running:healthy
+    // after Coolify has removed it, so status alone is not sufficient.
+    if (application.container_present === false) return true;
     if (Date.now() >= deadline) break;
     await delay(intervalMs);
   } while (Date.now() < deadline);
@@ -570,7 +573,7 @@ export const applyReleaseToTenant = async (
       await stopApplication(coolifyUuid);
       if (!(await waitForApplicationStopped(coolifyUuid))) {
         throw new Error(
-          `application_stop_timeout: ${coolifyUuid} still reports a running state; refusing to start a second SQLite writer`,
+          `application_stop_timeout: ${coolifyUuid} container absence was not confirmed by Coolify; refusing to start a second SQLite writer`,
         );
       }
       await updateApplicationImage(coolifyUuid, release);
@@ -915,4 +918,231 @@ export const getBatch = (id: number): BatchResult | null => {
   const batch = getReleaseBatch(id);
   if (!batch) return null;
   return { batch, items: listReleaseBatchItems(id) };
+};
+
+export interface RuntimeReconcileResult {
+  status: 'complete';
+  tenantType: TenantType;
+  tenantId: number;
+  releaseId: number;
+  digest: string;
+  version: string;
+  schemaVersion: number;
+  deployStatus: 'deployed';
+  releaseState: 'healthy';
+}
+
+/**
+ * Read-only verification of a tenant's actual running state, followed by an
+ * audited correction of the registry when the running app conclusively matches
+ * a registered release. Failed release/rollback history is preserved; this
+ * never creates a successful deployment or rollback record.
+ */
+export const reconcileTenantRuntime = async (
+  tenantType: TenantType,
+  tenantId: number,
+  actor: string,
+  reason?: string,
+): Promise<RuntimeReconcileResult> => {
+  if (tenantType !== 'store') {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_store_only: runtime reconciliation is currently supported for Stores only',
+      'runtime_reconciliation_store_only',
+    );
+  }
+  const state = getTenantReleaseState(tenantType, tenantId);
+  if (!state) throw new HttpError(404, 'Store not found');
+  if (!state.coolifyUuid) {
+    throw new HttpError(409, 'runtime_reconciliation_no_app: Store has no Coolify application');
+  }
+
+  const application = await getApplication(state.coolifyUuid);
+  if (application.uuid !== state.coolifyUuid) {
+    throw new HttpError(409, 'runtime_reconciliation_uuid_mismatch: Coolify returned another app');
+  }
+  if (application.container_present !== true) {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_no_container: the application container is not present',
+      'runtime_reconciliation_no_container',
+    );
+  }
+  if (application.build_pack !== 'dockerimage') {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_not_image: application is not a Docker Image app',
+    );
+  }
+  assertApplicationAllowed('store', application);
+
+  const imageName = String(application.docker_registry_image_name ?? '');
+  const imageTag = String(application.docker_registry_image_tag ?? '');
+  const digest = imageName.endsWith('@sha256')
+    ? /^[a-f0-9]{64}$/i.test(imageTag)
+      ? `sha256:${imageTag.toLowerCase()}`
+      : null
+    : (/@sha256:[a-f0-9]{64}$/i.exec(imageName)?.[0].slice(1)?.toLowerCase() ?? null);
+  if (!digest) {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_image_unverified: the running image is not pinned by an immutable digest',
+      'runtime_reconciliation_image_unverified',
+    );
+  }
+
+  const release = listImageReleases({ kind: 'store' }).find(
+    (candidate) => candidate.digest === digest,
+  );
+  if (!release) {
+    throw new HttpError(
+      409,
+      `runtime_reconciliation_release_unknown: no registered Store release matches ${digest}`,
+      'runtime_reconciliation_release_unknown',
+    );
+  }
+
+  const storages = await getApplicationStorages(state.coolifyUuid);
+  const dataStorages = storages.filter(
+    (storage) => storage.type === 'persistent' && storage.mount_path === '/data',
+  );
+  if (dataStorages.length !== 1) {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_storage_unverified: expected exactly one persistent /data storage',
+      'runtime_reconciliation_storage_unverified',
+    );
+  }
+  if (
+    state.volumeName &&
+    dataStorages[0].name &&
+    !dataStorages[0].name.endsWith(state.volumeName)
+  ) {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_volume_mismatch: the /data storage is not the registered tenant volume',
+      'runtime_reconciliation_volume_mismatch',
+    );
+  }
+
+  const coolifyDeployments = await getApplicationDeployments(state.coolifyUuid);
+  const activeDeployment = coolifyDeployments.find((deployment) =>
+    isActive(String(deployment.status ?? '').toLowerCase()),
+  );
+  const runningRelease = getRunningReleaseDeployment(tenantType, tenantId);
+  if (activeDeployment || runningRelease) {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_deployment_active: a Coolify or Control Plane deployment is still active',
+      'runtime_reconciliation_deployment_active',
+    );
+  }
+
+  const store = getStoreById(tenantId)!;
+  const status = (await ping(store)) as { ok?: unknown; storeName?: unknown } | null;
+  if (status?.ok !== true) {
+    throw new HttpError(409, 'runtime_reconciliation_identity_failed: tenant status is not ok');
+  }
+  if (typeof status.storeName === 'string' && status.storeName !== store.name) {
+    throw new HttpError(
+      409,
+      `runtime_reconciliation_identity_mismatch: deployment reports "${status.storeName}", registry expects "${store.name}"`,
+      'runtime_reconciliation_identity_mismatch',
+    );
+  }
+
+  const telemetry = await fetchTelemetry(store);
+  if (telemetry.version !== release.version) {
+    throw new HttpError(
+      409,
+      `runtime_reconciliation_version_mismatch: running ${telemetry.version}, release ${release.version}`,
+      'runtime_reconciliation_version_mismatch',
+    );
+  }
+  if (typeof telemetry.schemaVersion !== 'number') {
+    throw new HttpError(409, 'runtime_reconciliation_schema_unknown: tenant schema is unavailable');
+  }
+  if (!releaseSupportsSchema(release, telemetry.schemaVersion)) {
+    throw new HttpError(
+      409,
+      `runtime_reconciliation_schema_mismatch: schema ${telemetry.schemaVersion} is outside release ${release.id}`,
+      'runtime_reconciliation_schema_mismatch',
+    );
+  }
+
+  const cleanBase = store.base_url.replace(/\/+$/, '');
+  const healthRes = await fetch(`${cleanBase}/health`, {
+    redirect: 'error',
+    signal: AbortSignal.timeout(10000),
+  });
+  const health = (await healthRes.json().catch(() => null)) as {
+    status?: unknown;
+    app?: unknown;
+    version?: unknown;
+    revision?: unknown;
+    database?: unknown;
+  } | null;
+  if (
+    !healthRes.ok ||
+    health?.status !== 'ok' ||
+    health.app !== 'vula' ||
+    health.version !== release.version ||
+    (release.revision && health.revision !== release.revision) ||
+    health.database !== 'connected'
+  ) {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_health_mismatch: running health does not match the registered release',
+      'runtime_reconciliation_health_mismatch',
+    );
+  }
+
+  const before = {
+    imageDigest: state.imageDigest,
+    imageTag: state.imageTag,
+    desiredReleaseId: state.desiredReleaseId,
+    lastReleaseId: state.lastReleaseId,
+    deployStatus: state.deployStatus,
+    releaseState: state.releaseState,
+    schemaVersion: state.schemaVersion,
+  };
+  updateTenantReleaseState(tenantType, tenantId, {
+    imageDigest: release.digest,
+    imageTag: release.tag,
+    releaseId: release.id,
+    channel: release.channel,
+    previousReleaseId:
+      state.lastReleaseId === release.id ? state.previousReleaseId : state.lastReleaseId,
+    schemaVersion: telemetry.schemaVersion,
+    appVersion: release.version,
+    deployStatus: 'deployed',
+    releaseState: 'healthy',
+    coolifyUuid: state.coolifyUuid,
+    volumeName: state.volumeName,
+  });
+  recordAuditLog(actor, 'tenant_runtime_reconciled', tenantType, tenantId, {
+    before,
+    after: {
+      releaseId: release.id,
+      digest: release.digest,
+      tag: release.tag,
+      version: release.version,
+      schemaVersion: telemetry.schemaVersion,
+      deployStatus: 'deployed',
+      releaseState: 'healthy',
+    },
+    reason: reason ?? 'read-only runtime reconciliation',
+  });
+
+  return {
+    status: 'complete',
+    tenantType,
+    tenantId,
+    releaseId: release.id,
+    digest: release.digest,
+    version: release.version,
+    schemaVersion: telemetry.schemaVersion,
+    deployStatus: 'deployed',
+    releaseState: 'healthy',
+  };
 };

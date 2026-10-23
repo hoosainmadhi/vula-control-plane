@@ -645,6 +645,8 @@ export interface CoolifyApplicationSummary {
   uuid: string;
   name?: string;
   status?: string;
+  /** Authoritative runtime presence, independent of the possibly stale status. */
+  container_present?: boolean | null;
   build_pack: string;
   fqdn?: string | null;
   project_uuid?: string | null;

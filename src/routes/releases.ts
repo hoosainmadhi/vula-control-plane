@@ -28,6 +28,7 @@ import {
 import {
   applyReleaseToTenant,
   getBatch,
+  reconcileTenantRuntime,
   rollbackTenant,
   startReleaseBatch,
 } from '../services/releaseOrchestrator.js';
@@ -225,6 +226,22 @@ releasesRouter.patch(
       after: { channel },
     });
     res.json(stateOut(getTenantReleaseState(tenantType, tenantId)! as never));
+  }),
+);
+
+releasesRouter.post(
+  '/tenants/:tenantType/:tenantId/reconcile',
+  asyncHandler(async (req, res) => {
+    const tenantType = tenantTypeOf(req.params.tenantType);
+    const tenantId = parseIdParam(req.params.tenantId);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await reconcileTenantRuntime(
+      tenantType,
+      tenantId,
+      req.auth!.email,
+      optionalString(body, 'reason', 500) ?? undefined,
+    );
+    res.json({ result });
   }),
 );
 

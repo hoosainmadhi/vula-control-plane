@@ -201,6 +201,7 @@ beforeEach(() => {
           name: createdAppName,
           fqdn: createdAppFqdn,
           status: stopped ? 'exited' : 'running:healthy',
+          container_present: !stopped,
           build_pack: 'dockerimage',
           docker_registry_image_name: 'ghcr.io/hoosainmadhi/vula-pos-store',
           docker_registry_image_tag: 'old',
