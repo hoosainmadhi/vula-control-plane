@@ -880,6 +880,23 @@ export const getLastSuccessfulForwardDeployment = (
       }
     | undefined) ?? null;
 
+/** True when the tenant reached `toReleaseId` through a successful rollback. */
+export const hasSuccessfulRollbackInto = (
+  tenantType: TenantType,
+  tenantId: number,
+  toReleaseId: number,
+): boolean =>
+  Boolean(
+    getRegistryDb()
+      .prepare(
+        `SELECT 1 FROM release_deployments
+          WHERE tenant_type = ? AND tenant_id = ? AND status = 'complete'
+            AND action = 'rollback' AND to_release_id = ?
+          LIMIT 1`,
+      )
+      .get(tenantType, tenantId, toReleaseId),
+  );
+
 export const listReleaseDeployments = (tenantType: TenantType, tenantId: number, limit = 20) =>
   getRegistryDb()
     .prepare(

@@ -16,6 +16,7 @@ import {
   getReleaseBatch,
   getRunningReleaseDeployment,
   getTenantReleaseState,
+  hasSuccessfulRollbackInto,
   imageNameFor,
   listImageReleases,
   listReleaseBatchItems,
@@ -802,6 +803,14 @@ export const getRollbackEligibility = (state: TenantReleaseState): RollbackEligi
     state.lastReleaseId,
   );
   if (!forward) {
+    if (hasSuccessfulRollbackInto(state.tenantType, state.id, state.lastReleaseId)) {
+      return {
+        eligible: false,
+        targetReleaseId: null,
+        reason:
+          'The current release was restored by a rollback; there is no earlier verified release to roll back to. Use Upgrade to move forward',
+      };
+    }
     return {
       eligible: false,
       targetReleaseId: null,

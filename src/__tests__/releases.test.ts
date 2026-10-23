@@ -530,7 +530,7 @@ describe('per-tenant release application', () => {
     const eligibility = getRollbackEligibility(after);
     expect(eligibility.eligible).toBe(false);
     expect(eligibility.targetReleaseId).toBeNull();
-    expect(eligibility.reason).toMatch(/No verified successful forward deployment/);
+    expect(eligibility.reason).toMatch(/restored by a rollback/);
 
     await expect(rollbackTenant('store', store.id, 'office@test.local')).rejects.toThrow(
       /rollback_not_eligible/,
@@ -1111,7 +1111,7 @@ describe('release API surface', () => {
     expect(state?.previousReleaseId).toBe(b.id);
     expect(state?.rollbackEligible).toBe(false);
     expect(state?.rollbackReleaseId).toBeNull();
-    expect(state?.rollbackReason).toMatch(/No verified successful forward deployment/);
+    expect(state?.rollbackReason).toMatch(/restored by a rollback/);
 
     await request(app)
       .post(`/api/releases/tenants/store/${store.id}/rollback`)
