@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS stores (
     CHECK (deploy_status IN ('not_deployed', 'provisioning', 'deployed', 'failed')),
   coolify_uuid           TEXT,
   volume_name            TEXT,
+  deploy_mode            TEXT    NOT NULL DEFAULT 'unprovisioned'
+    CHECK (deploy_mode IN ('image', 'dockerfile', 'unprovisioned')),
   admin_email            TEXT,
   terminal_names_json    TEXT,
   image_digest           TEXT,
@@ -177,6 +179,8 @@ CREATE TABLE IF NOT EXISTS panels (
     CHECK (deploy_status IN ('not_deployed', 'provisioning', 'deployed', 'failed')),
   coolify_uuid        TEXT,
   volume_name         TEXT,
+  deploy_mode         TEXT    NOT NULL DEFAULT 'unprovisioned'
+    CHECK (deploy_mode IN ('image', 'dockerfile', 'unprovisioned')),
   image_digest        TEXT,
   image_tag           TEXT,
   release_channel     TEXT    NOT NULL DEFAULT 'stable',

@@ -80,6 +80,7 @@ const stateOut = (state: ReturnType<typeof getTenantReleaseState> & object) => {
     deployStatus: state.deployStatus,
     coolifyUuid: state.coolifyUuid,
     volumeName: state.volumeName,
+    deployMode: state.deployMode,
     imageDigest: state.imageDigest,
     imageTag: state.imageTag,
     releaseChannel: state.releaseChannel,

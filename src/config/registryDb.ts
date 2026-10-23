@@ -47,6 +47,14 @@ export const STORE_ENVIRONMENTS: readonly StoreEnvironment[] = [
 /** A store sells; a warehouse only holds stock and transfers it out. */
 export type StoreKind = 'store' | 'warehouse';
 
+/**
+ * How the Coolify application was provisioned. Legacy Dockerfile deployments
+ * cannot be switched in place to a shared image; they need a blue/green app.
+ * Keeping this explicit stops the release UI from treating them as image
+ * tenants with unknown image state.
+ */
+export type TenantDeployMode = 'image' | 'dockerfile' | 'unprovisioned';
+
 export interface StoreRecord {
   id: number;
   slug: string;
@@ -95,6 +103,8 @@ export interface StoreRecord {
   deploy_status: 'not_deployed' | 'provisioning' | 'deployed' | 'failed';
   coolify_uuid: string | null;
   volume_name: string | null;
+  /** How the Coolify app is provisioned: shared image, legacy Dockerfile, or none. */
+  deploy_mode: TenantDeployMode;
   admin_email: string | null;
   desired_config_version?: number;
   applied_config_version?: number;
@@ -153,6 +163,8 @@ const STORES_DDL = `
       CHECK (deploy_status IN ('not_deployed', 'provisioning', 'deployed', 'failed')),
     coolify_uuid           TEXT,
     volume_name            TEXT,
+    deploy_mode            TEXT    NOT NULL DEFAULT 'unprovisioned'
+      CHECK (deploy_mode IN ('image', 'dockerfile', 'unprovisioned')),
     admin_email            TEXT,
     created_at             TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at             TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -724,6 +736,8 @@ const PANELS_DDL = `
       CHECK (deploy_status IN ('not_deployed', 'provisioning', 'deployed', 'failed')),
     coolify_uuid        TEXT,
     volume_name         TEXT,
+    deploy_mode         TEXT    NOT NULL DEFAULT 'unprovisioned'
+      CHECK (deploy_mode IN ('image', 'dockerfile', 'unprovisioned')),
     image_digest        TEXT,
     image_tag           TEXT,
     release_channel     TEXT    NOT NULL DEFAULT 'stable',
@@ -1029,6 +1043,35 @@ export const getRegistryDb = (): Database.Database => {
   addPanelColumn('last_release_at', 'last_release_at TEXT');
   addPanelColumn('release_state', "release_state TEXT NOT NULL DEFAULT 'idle'");
   addPanelColumn('schema_version', 'schema_version INTEGER');
+
+  // One-time classification of rows that predate the shared-image controller.
+  // An image digest proves the image path; a Coolify app without one is a
+  // legacy Dockerfile deployment. New rows get the column default and are
+  // classified explicitly by provisioning.
+  const deployModeDdl =
+    "deploy_mode TEXT NOT NULL DEFAULT 'unprovisioned' CHECK (deploy_mode IN ('image', 'dockerfile', 'unprovisioned'))";
+  const hadStoreDeployMode = storeCols.some((c) => c.name === 'deploy_mode');
+  const hadPanelDeployMode = panelCols.some((c) => c.name === 'deploy_mode');
+  addColumn('deploy_mode', deployModeDdl);
+  addPanelColumn('deploy_mode', deployModeDdl);
+  if (!hadStoreDeployMode) {
+    db.exec(
+      `UPDATE stores SET deploy_mode = CASE
+         WHEN image_digest IS NOT NULL THEN 'image'
+         WHEN coolify_uuid IS NOT NULL THEN 'dockerfile'
+         ELSE 'unprovisioned'
+       END`,
+    );
+  }
+  if (!hadPanelDeployMode) {
+    db.exec(
+      `UPDATE panels SET deploy_mode = CASE
+         WHEN image_digest IS NOT NULL THEN 'image'
+         WHEN coolify_uuid IS NOT NULL THEN 'dockerfile'
+         ELSE 'unprovisioned'
+       END`,
+    );
+  }
 
   const releaseCols = db.prepare('PRAGMA table_info(image_releases)').all() as Array<{
     name: string;
@@ -1915,8 +1958,6 @@ export interface CreateStoreInput {
   environment?: StoreEnvironment;
   /** The outlet admin's address — the login username and credential-email recipient. */
   adminEmail?: string | null;
-  /** Short Coolify label; absent derives one from the client and store name. */
-  deploymentName?: string | null;
 }
 
 export const createStore = (input: CreateStoreInput, controlPlaneToken: string): StoreRecord => {
@@ -2911,6 +2952,8 @@ export interface PanelRecord {
   deploy_status: 'not_deployed' | 'provisioning' | 'deployed' | 'failed';
   coolify_uuid: string | null;
   volume_name: string | null;
+  /** How the Coolify app is provisioned: shared image, legacy Dockerfile, or none. */
+  deploy_mode: TenantDeployMode;
   image_digest?: string | null;
   image_tag?: string | null;
   release_channel?: 'stable' | 'beta' | 'canary';
@@ -2946,7 +2989,6 @@ export interface PanelInput {
   /** Short Coolify label; absent derives `<client>-ho`. */
   deploymentName?: string | null;
   baseUrl: string;
-  deploymentName?: string | null;
   controlPlaneToken: string;
   adminEmail?: string | null;
 }

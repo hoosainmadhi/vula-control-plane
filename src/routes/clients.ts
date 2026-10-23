@@ -222,7 +222,6 @@ const validateNestedStore = async (
   const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
   const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
   const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
-  const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
 
   if (suppliedUrl) {
     const check = await assertManagedEndpoint(baseUrl, 'store', { allowUnreachable: true });
@@ -243,7 +242,6 @@ const validateNestedStore = async (
     terminalCount,
     licensedTerminalCount,
     ...(adminEmail ? { adminEmail } : {}),
-    ...(deploymentName ? { deploymentName } : {}),
   };
 };
 
@@ -278,7 +276,6 @@ const validateNestedHeadOffice = async (
   const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
   const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
   const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
-  const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
 
   if (suppliedUrl) {
     const check = await assertManagedEndpoint(baseUrl, 'head-office', { allowUnreachable: true });

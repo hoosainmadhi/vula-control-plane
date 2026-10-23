@@ -336,7 +336,14 @@ export default function ReleasesPage() {
                       className="border-t border-slate-100"
                     >
                       <td className="px-4 py-3">
-                        <div className="font-bold text-slate-800">{tenant.name}</div>
+                        <div className="font-bold text-slate-800">
+                          {tenant.name}
+                          {tenant.deployMode === 'dockerfile' && (
+                            <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                              Dockerfile legacy
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[11px] text-slate-400">
                           {kindLabel(tenant.tenantType === 'store' ? 'store' : 'ho')} ·{' '}
                           {tenant.companySlug ?? 'unassigned'} · {tenant.slug}
@@ -354,12 +361,23 @@ export default function ReleasesPage() {
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="font-mono font-semibold text-slate-700">
-                          {tenant.appVersion ?? '—'}
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          {shortDigest(tenant.imageDigest)}
-                        </div>
+                        {tenant.deployMode === 'dockerfile' ? (
+                          <div>
+                            <div className="font-semibold text-amber-700">Dockerfile</div>
+                            <div className="text-[10px] text-amber-600">legacy deployment</div>
+                          </div>
+                        ) : tenant.deployMode === 'unprovisioned' ? (
+                          <div className="font-semibold text-slate-400">Not provisioned</div>
+                        ) : (
+                          <div>
+                            <div className="font-mono font-semibold text-slate-700">
+                              {tenant.appVersion ?? '—'}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              {shortDigest(tenant.imageDigest)}
+                            </div>
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <div className="font-mono font-semibold text-slate-700">
@@ -405,12 +423,21 @@ export default function ReleasesPage() {
                           <ActionButton
                             icon={Rocket}
                             label="Upgrade"
+                            disabled={!canManage || tenant.deployMode !== 'image'}
                             title={
-                              canManage ? 'Apply a release' : 'Release-manager permission required'
+                              !canManage
+                                ? 'Release-manager permission required'
+                                : tenant.deployMode === 'dockerfile'
+                                  ? 'Legacy Dockerfile deployment — shared-image releases require a blue/green migration'
+                                  : tenant.deployMode === 'unprovisioned'
+                                    ? 'No Coolify application yet'
+                                    : 'Apply a release'
                             }
                             className="border-brand-200 text-brand-700 hover:bg-brand-50 disabled:opacity-40"
                             onClick={() =>
-                              canManage && setActionTarget({ tenant, action: 'upgrade' })
+                              canManage &&
+                              tenant.deployMode === 'image' &&
+                              setActionTarget({ tenant, action: 'upgrade' })
                             }
                           />
                           <ActionButton

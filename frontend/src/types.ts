@@ -803,6 +803,7 @@ export interface TenantReleaseState {
   deployStatus: 'not_deployed' | 'provisioning' | 'deployed' | 'failed';
   coolifyUuid: string | null;
   volumeName: string | null;
+  deployMode: 'image' | 'dockerfile' | 'unprovisioned';
   imageDigest: string | null;
   imageTag: string | null;
   releaseChannel: ReleaseChannel;

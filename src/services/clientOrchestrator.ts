@@ -37,12 +37,7 @@ import { assertApplicationAllowed } from './applicationGuard.js';
 import {
   recordProvisionedRelease,
   resolveDefaultRelease,
-  setTenantReleaseState,
-} from './releaseCatalog.js';
-import { verifyImageDeployment } from './releaseOrchestrator.js';
-import {
-  recordProvisionedRelease,
-  resolveDefaultRelease,
+  setTenantDeployMode,
   setTenantReleaseState,
 } from './releaseCatalog.js';
 import { verifyImageDeployment } from './releaseOrchestrator.js';
@@ -82,8 +77,6 @@ export interface StoreDeploymentInput {
    */
   licensedTerminalCount?: number;
   adminEmail?: string;
-  /** Short Coolify label (e.g. `jhb`); absent derives `<client>-<name>`. */
-  deploymentName?: string;
 }
 
 export interface HeadOfficeDeploymentInput {
@@ -92,8 +85,6 @@ export interface HeadOfficeDeploymentInput {
   baseUrl: string;
   deploymentName?: string;
   adminEmail?: string;
-  /** Short Coolify label (e.g. `super-stores-ho`). */
-  deploymentName?: string;
 }
 
 export interface ClientOrchestrationInput {
@@ -138,7 +129,6 @@ export async function orchestrateClientDeployment(
       baseUrl: input.headOffice.baseUrl,
       deploymentName: input.headOffice.deploymentName,
       adminEmail: input.headOffice.adminEmail,
-      deploymentName: input.headOffice.deploymentName,
     });
   }
 
@@ -151,7 +141,6 @@ export async function orchestrateClientDeployment(
       terminalCount: s.terminalCount,
       licensedTerminalCount: s.licensedTerminalCount,
       adminEmail: s.adminEmail,
-      deploymentName: s.deploymentName,
     });
   }
 
@@ -218,7 +207,6 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
             slug: meta.slug,
             deploymentName: meta.deploymentName ?? null,
             baseUrl: meta.baseUrl,
-            deploymentName: meta.deploymentName ?? null,
             controlPlaneToken: token,
             adminEmail: meta.adminEmail ?? null,
           });
@@ -272,6 +260,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
                   clientSlug: company.slug,
                   controlPlaneToken: panel.control_plane_token,
                 });
+            if (!release) setTenantDeployMode('panel', panel.id, 'dockerfile');
             const updatedPanel = setPanelDeployStatus(panel.id, 'provisioning', {
               coolifyUuid: result.coolifyUuid,
               volumeName: result.volumeName,
@@ -371,7 +360,6 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
               slug: meta.slug,
               deploymentName: meta.deploymentName ?? null,
               baseUrl: meta.baseUrl,
-              deploymentName: meta.deploymentName ?? null,
               kind: meta.kind ?? 'store',
               // `|| 1` would turn a warehouse's 0 into a till it must not have.
               terminalCount: meta.kind === 'warehouse' ? 0 : meta.terminalCount || 1,
@@ -450,6 +438,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
                   clientSlug: company.slug,
                   controlPlaneToken: store.control_plane_token,
                 });
+            if (!release) setTenantDeployMode('store', store.id, 'dockerfile');
             store = setStoreDeployStatus(store.id, 'provisioning', {
               coolifyUuid: result.coolifyUuid,
               volumeName: result.volumeName,

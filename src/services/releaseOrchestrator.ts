@@ -493,6 +493,20 @@ export const applyReleaseToTenant = async (
       'not_provisioned',
     );
   }
+  if (action !== 'provision' && state.deployMode === 'dockerfile') {
+    throw new HttpError(
+      409,
+      'dockerfile_requires_blue_green: this tenant was provisioned from a Dockerfile; shared-image releases require a blue/green migration to a new application and volume',
+      'dockerfile_requires_blue_green',
+    );
+  }
+  if (action !== 'provision' && state.deployMode === 'unprovisioned') {
+    throw new HttpError(
+      409,
+      'deploy_mode_unreported: the Control Plane cannot prove this application was provisioned as a shared image; refusing an image change',
+      'deploy_mode_unreported',
+    );
+  }
 
   const lock = acquireDeploymentLock(tenantType, tenantId, {
     batchId: options.batchId ?? null,
@@ -790,6 +804,21 @@ export interface RollbackEligibility {
  * and support the database schema the tenant currently runs.
  */
 export const getRollbackEligibility = (state: TenantReleaseState): RollbackEligibility => {
+  if (state.deployMode === 'dockerfile') {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason:
+        'Legacy Dockerfile deployment; shared-image releases require a blue/green migration before rollback is available',
+    };
+  }
+  if (state.deployMode === 'unprovisioned') {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: 'No shared-image deployment is recorded for this tenant',
+    };
+  }
   if (!state.lastReleaseId) {
     return {
       eligible: false,

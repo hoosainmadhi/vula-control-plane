@@ -6,6 +6,7 @@ import {
   getCompanyById,
   type PanelRecord,
   type StoreRecord,
+  type TenantDeployMode,
 } from '../config/registryDb.js';
 import { env } from '../config/env.js';
 import { HttpError } from '../utils/errors.js';
@@ -61,6 +62,8 @@ export interface TenantReleaseState {
   deployStatus: 'not_deployed' | 'provisioning' | 'deployed' | 'failed';
   coolifyUuid: string | null;
   volumeName: string | null;
+  /** Explicit provisioning mode; legacy Dockerfile apps are not image tenants. */
+  deployMode: TenantDeployMode;
   imageDigest: string | null;
   imageTag: string | null;
   releaseChannel: ReleaseChannel;
@@ -294,6 +297,17 @@ export const resolveReleaseForChannel = (
 export const resolveDefaultRelease = (kind: ReleaseKind): ImageRelease | null =>
   resolveReleaseForChannel(kind, 'stable');
 
+const deployModeOf = (row: {
+  deploy_mode?: TenantDeployMode | null;
+  image_digest?: string | null;
+  coolify_uuid?: string | null;
+}): TenantDeployMode => {
+  if (row.deploy_mode) return row.deploy_mode;
+  if (row.image_digest) return 'image';
+  if (row.coolify_uuid) return 'dockerfile';
+  return 'unprovisioned';
+};
+
 const storeState = (store: StoreRecord): TenantReleaseState => ({
   tenantType: 'store',
   id: store.id,
@@ -307,6 +321,7 @@ const storeState = (store: StoreRecord): TenantReleaseState => ({
   deployStatus: store.deploy_status,
   coolifyUuid: store.coolify_uuid,
   volumeName: store.volume_name,
+  deployMode: deployModeOf(store),
   imageDigest: store.image_digest ?? null,
   imageTag: store.image_tag ?? null,
   releaseChannel: store.release_channel ?? 'stable',
@@ -333,6 +348,7 @@ const panelState = (panel: PanelRecord): TenantReleaseState => ({
   deployStatus: panel.deploy_status,
   coolifyUuid: panel.coolify_uuid,
   volumeName: panel.volume_name,
+  deployMode: deployModeOf(panel),
   imageDigest: panel.image_digest ?? null,
   imageTag: panel.image_tag ?? null,
   releaseChannel: panel.release_channel ?? 'stable',
@@ -578,6 +594,18 @@ export const markTenantDeployStatus = (
     .run(status, tenantId);
 };
 
+/** Record how a tenant is provisioned; legacy Dockerfile apps stay explicit. */
+export const setTenantDeployMode = (
+  tenantType: TenantType,
+  tenantId: number,
+  deployMode: TenantDeployMode,
+): void => {
+  const table = tenantType === 'store' ? 'stores' : 'panels';
+  getRegistryDb()
+    .prepare(`UPDATE ${table} SET deploy_mode = ?, updated_at = datetime('now') WHERE id = ?`)
+    .run(deployMode, tenantId);
+};
+
 /**
  * Record the image a new deployment was created from. Called by the onboarding
  * path immediately after Coolify returns; the caller still owns the health
@@ -603,6 +631,7 @@ export const recordProvisionedRelease = (
     coolifyUuid,
     volumeName,
   });
+  setTenantDeployMode(tenantType, tenantId, 'image');
 };
 
 export const createReleaseBatch = (input: {

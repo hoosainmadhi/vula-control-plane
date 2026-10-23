@@ -95,7 +95,7 @@ const seedStore = (
   getRegistryDb()
     .prepare(
       `UPDATE stores SET coolify_uuid = ?, schema_version = ?, image_digest = ?, image_tag = 'old',
-         last_release_id = ?, deploy_status = 'deployed' WHERE id = ?`,
+         last_release_id = ?, deploy_mode = 'image', deploy_status = 'deployed' WHERE id = ?`,
     )
     .run(
       over.coolifyUuid === undefined ? `uuid-${over.slug ?? 'store-a'}` : over.coolifyUuid,
@@ -370,6 +370,26 @@ describe('per-tenant release application', () => {
     expect(getStoreById(store.id)!.image_digest).toBe(OLD_DIGEST);
   });
 
+  it('refuses an image release for an existing Dockerfile tenant', async () => {
+    const store = seedStore({ slug: 'legacy-dockerfile' });
+    getRegistryDb()
+      .prepare(
+        "UPDATE stores SET image_digest = NULL, image_tag = NULL, last_release_id = NULL, deploy_mode = 'dockerfile' WHERE id = ?",
+      )
+      .run(store.id);
+    const rel = release({ tag: 'v-image', digest: B });
+    calls = [];
+    await expect(
+      applyReleaseToTenant('store', store.id, rel.id, {
+        actor: 'office@test.local',
+        action: 'upgrade',
+      }),
+    ).rejects.toThrow(/dockerfile_requires_blue_green/);
+    expect(calls).toHaveLength(0);
+    expect(getStoreById(store.id)!.deploy_mode).toBe('dockerfile');
+    expect(getStoreById(store.id)!.image_digest).toBeNull();
+  });
+
   it('refuses a second provisioning of a tenant that already has an application', async () => {
     const store = seedStore({ slug: 'already-provisioned' });
     const rel = release();
@@ -406,6 +426,7 @@ describe('per-tenant release application', () => {
     expect(updated.image_digest).toBe(C);
     expect(updated.schema_version).toBe(1);
     expect(updated.deploy_status).toBe('deployed');
+    expect(updated.deploy_mode).toBe('image');
   });
 
   it('pins staging creation to the approved destination and verifies the created app', async () => {
@@ -1044,7 +1065,49 @@ describe('release API surface', () => {
       fleet.body.stores as Array<{ id: number; rollbackEligible: boolean; rollbackReason: string }>
     ).find((row) => row.id === store.id);
     expect(state?.rollbackEligible).toBe(false);
-    expect(state?.rollbackReason).toMatch(/No verified successful deployment/);
+    expect(state?.rollbackReason).toMatch(/No shared-image deployment/);
+  });
+
+  it('exposes Dockerfile mode and refuses image actions for a legacy tenant', async () => {
+    const app = createApp();
+    const token = await loginAsOffice(app);
+    const store = createStore(
+      {
+        name: 'Legacy Dockerfile Store',
+        slug: 'legacy-dockerfile-api',
+        terminalCount: 1,
+        baseUrl: 'https://legacy-dockerfile.example',
+      },
+      'cp-token',
+    );
+    getRegistryDb()
+      .prepare(
+        "UPDATE stores SET coolify_uuid = 'uuid-legacy', deploy_mode = 'dockerfile', schema_version = 1 WHERE id = ?",
+      )
+      .run(store.id);
+    const rel = release({ tag: 'legacy-image', digest: B });
+    calls = [];
+
+    const fleet = await request(app).get('/api/releases/fleet').set(authHeader(token)).expect(200);
+    const state = (
+      fleet.body.stores as Array<{
+        id: number;
+        deployMode: string;
+        rollbackEligible: boolean;
+        rollbackReason: string;
+      }>
+    ).find((row) => row.id === store.id);
+    expect(state?.deployMode).toBe('dockerfile');
+    expect(state?.rollbackEligible).toBe(false);
+    expect(state?.rollbackReason).toMatch(/Dockerfile/);
+
+    const refused = await request(app)
+      .post(`/api/releases/tenants/store/${store.id}/apply`)
+      .set(authHeader(token))
+      .send({ releaseId: rel.id, action: 'upgrade' })
+      .expect(409);
+    expect(refused.body.error).toMatch(/dockerfile_requires_blue_green/);
+    expect(calls).toHaveLength(0);
   });
 
   it('publishes the verified rollback target and refuses a different requested release', async () => {
