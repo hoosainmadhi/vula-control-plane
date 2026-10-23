@@ -30,8 +30,10 @@ import {
   createHeadOfficeDeployment,
   createStoreImageDeployment,
   createHeadOfficeImageDeployment,
+  getApplication,
   triggerDeploy,
 } from './coolify.js';
+import { assertApplicationAllowed } from './applicationGuard.js';
 import {
   recordProvisionedRelease,
   resolveDefaultRelease,
@@ -209,11 +211,17 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
           if (panel.coolify_uuid) {
             // Retry after a failed deploy: re-trigger the existing application.
             if (panel.deploy_status === 'failed') {
+              if (env.stagingMode) {
+                assertApplicationAllowed('ho', await getApplication(panel.coolify_uuid));
+              }
               await triggerDeploy(panel.coolify_uuid);
             }
           } else {
             const release = resolveDefaultRelease('ho');
-            if (!release && (env.isProduction || !env.allowLegacyDockerfileOnboarding)) {
+            if (
+              !release &&
+              (env.isProduction || env.stagingMode || !env.allowLegacyDockerfileOnboarding)
+            ) {
               throw new Error(
                 'No approved stable Head Office release is registered; refusing to create a new Head Office from a Dockerfile build',
               );
@@ -365,13 +373,18 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
         if (autoDeploy && isCoolifyConfigured()) {
           if (store.coolify_uuid) {
             if (store.deploy_status === 'failed') {
+              if (env.stagingMode) {
+                assertApplicationAllowed('store', await getApplication(store.coolify_uuid));
+              }
               await triggerDeploy(store.coolify_uuid);
             }
           } else {
             const release = resolveDefaultRelease('store');
             if (
               !release &&
-              (store.environment === 'production' || !env.allowLegacyDockerfileOnboarding)
+              (store.environment === 'production' ||
+                env.stagingMode ||
+                !env.allowLegacyDockerfileOnboarding)
             ) {
               throw new Error(
                 'No approved stable Store release is registered; refusing to create a new tenant from a Dockerfile build',

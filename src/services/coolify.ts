@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { licencePublicKey, licenceKeyId } from './licenceSigner.js';
 import {
@@ -7,6 +8,7 @@ import {
   imageTagFor,
   type ImageRelease,
 } from './releaseCatalog.js';
+import { assertCreatedApplicationScope, assertStagingCreationScope } from './applicationGuard.js';
 
 /**
  * Coolify v1 REST API client for automated store & head-office provisioning.
@@ -26,6 +28,8 @@ export interface CoolifyConfig {
   projectUuid: string;
   serverUuid: string;
   githubAppUuid: string;
+  /** Optional exact destination for staging isolation. */
+  destinationUuid: string | null;
 }
 
 export const readCoolifyConfig = (): CoolifyConfig | null => {
@@ -34,13 +38,15 @@ export const readCoolifyConfig = (): CoolifyConfig | null => {
   const projectUuid = process.env.COOLIFY_PROJECT_UUID;
   const serverUuid = process.env.COOLIFY_SERVER_UUID;
   const githubAppUuid = process.env.COOLIFY_GITHUB_APP_UUID;
+  const destinationUuid = process.env.COOLIFY_DESTINATION_UUID?.trim() || null;
   if (!apiUrl || !apiToken || !projectUuid || !serverUuid || !githubAppUuid) return null;
-  return { apiUrl, apiToken, projectUuid, serverUuid, githubAppUuid };
+  return { apiUrl, apiToken, projectUuid, serverUuid, githubAppUuid, destinationUuid };
 };
 
 export const isCoolifyConfigured = (): boolean => readCoolifyConfig() !== null;
 
-export const generateSecureSecret = (bytes = 32): string => crypto.randomBytes(bytes).toString('hex');
+export const generateSecureSecret = (bytes = 32): string =>
+  crypto.randomBytes(bytes).toString('hex');
 
 export class CoolifyError extends Error {
   status = 502;
@@ -88,9 +94,11 @@ const request = async (
     // Non-JSON error body
   }
   if (!res.ok) {
-    const body = data as
-      | { message?: string; detail?: string; errors?: Record<string, string[]> }
-      | null;
+    const body = data as {
+      message?: string;
+      detail?: string;
+      errors?: Record<string, string[]>;
+    } | null;
     const detail = body?.message ?? body?.detail ?? `HTTP ${res.status}`;
     // Laravel validation failures carry the failing fields in `errors` —
     // without them a 422 reports only "Validation failed.", naming no rule.
@@ -109,7 +117,8 @@ const request = async (
 // The tenant's real GitHub repo — its local clone is ~/apps/za-pos but the
 // repo itself is vula-app; the old default named a repo that does not exist,
 // and every store deployment died on create ("Repository not found").
-const ZA_POS_REPO_URL = process.env.COOLIFY_ZA_POS_REPO_URL || 'https://github.com/hoosainmadhi/vula-app.git';
+const ZA_POS_REPO_URL =
+  process.env.COOLIFY_ZA_POS_REPO_URL || 'https://github.com/hoosainmadhi/vula-app.git';
 const ZA_POS_REPO_BRANCH = process.env.COOLIFY_ZA_POS_BRANCH || 'main';
 const STORE_INTERNAL_PORT = '3000';
 
@@ -507,12 +516,22 @@ const deployImageFromSpec = async (spec: ImageDeploymentSpec): Promise<ImageDepl
   const cleanDomain = spec.domain.replace(/^https?:\/\//, '');
   const deployment = deploymentSlug(spec.deploymentName) || spec.slug;
   const appName = spec.kind === 'store' ? 'za-pos' : 'vula';
+  const expectedName = `${appName}-${deployment}`;
+
+  assertStagingCreationScope({
+    projectUuid: config.projectUuid,
+    serverUuid: config.serverUuid,
+    destinationUuid: config.destinationUuid,
+    expectedName,
+    domain: cleanDomain,
+  });
 
   const created = (await request(config, 'POST', `${API_VERSION_PATH}/applications/dockerimage`, {
     project_uuid: config.projectUuid,
     server_uuid: config.serverUuid,
+    ...(config.destinationUuid ? { destination_uuid: config.destinationUuid } : {}),
     environment_name: 'production',
-    name: `${appName}-${deployment}`,
+    name: expectedName,
     docker_registry_image_name: imageReferenceFor(spec.release),
     ports_exposes: STORE_INTERNAL_PORT,
     domains: `https://${cleanDomain}`,
@@ -539,6 +558,16 @@ const deployImageFromSpec = async (spec: ImageDeploymentSpec): Promise<ImageDepl
   const volumeName = `vula-${spec.kind}-${spec.slug}-sqlite-db`;
   const hostPath = vulaHostPath(spec.kind, spec.clientSlug, spec.slug);
   spec.onCreated?.({ coolifyUuid, volumeName, hostPath });
+
+  // Persist the UUID first (so a retry cannot create a duplicate), then prove
+  // that Coolify created the expected name/domain/kind in the staging project.
+  if (env.stagingMode) {
+    assertCreatedApplicationScope({
+      expectedName,
+      domain: cleanDomain,
+      application: await getApplication(coolifyUuid),
+    });
+  }
 
   const values = imageEnvVars(spec, controlPlaneToken, jwtSecret).map((item) => ({
     ...item,
@@ -617,7 +646,10 @@ export interface CoolifyApplicationSummary {
   name?: string;
   status?: string;
   build_pack: string;
+  fqdn?: string | null;
   project_uuid?: string | null;
+  environment_id?: number | null;
+  destination_id?: number | null;
   docker_registry_image_name: string | null;
   docker_registry_image_tag: string | null;
 }

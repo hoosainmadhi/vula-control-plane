@@ -93,6 +93,18 @@ export interface Env {
   /** Explicit opt-in for the legacy Dockerfile path on non-production onboarding. */
   allowLegacyDockerfileOnboarding: boolean;
   /**
+   * Staging boundary. When enabled, application creation is pinned to the
+   * approved project/server/destination and the approved name/domain pattern;
+   * every existing-application modification also requires the UUID allowlist.
+   */
+  stagingMode: boolean;
+  stagingProjectUuid: string | null;
+  stagingServerUuid: string | null;
+  stagingDestinationUuid: string | null;
+  stagingAppPrefixes: string[];
+  stagingDomainPrefix: string | null;
+  stagingDomainSuffix: string | null;
+  /**
    * Licence signing material. The private key never leaves this process; stores
    * receive only the public key and verify what the control plane signs.
    * Both are base64url-encoded DER: PKCS#8 for the private key, SPKI for the public.
@@ -150,6 +162,16 @@ export const env: Env = {
     .map((value) => value.trim())
     .filter(Boolean),
   allowLegacyDockerfileOnboarding: process.env.ALLOW_LEGACY_DOCKERFILE_ONBOARDING === 'true',
+  stagingMode: process.env.VULA_STAGING_MODE === 'true',
+  stagingProjectUuid: process.env.VULA_STAGING_PROJECT_UUID?.trim() || null,
+  stagingServerUuid: process.env.VULA_STAGING_SERVER_UUID?.trim() || null,
+  stagingDestinationUuid: process.env.VULA_STAGING_DESTINATION_UUID?.trim() || null,
+  stagingAppPrefixes: (process.env.VULA_STAGING_APP_PREFIXES ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
+  stagingDomainPrefix: process.env.VULA_STAGING_DOMAIN_PREFIX?.trim() || null,
+  stagingDomainSuffix: process.env.VULA_STAGING_DOMAIN_SUFFIX?.trim() || null,
   // Not required at boot: when unset the signer generates a dev keypair (and, in
   // production, refuses to serve licences until a real key is configured).
   licencePrivateKey: process.env.LEASE_PRIVATE_KEY?.trim() || null,

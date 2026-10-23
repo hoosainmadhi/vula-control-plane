@@ -42,6 +42,8 @@ let deployFailureStatus: number | null = null;
 let missingStorage = false;
 let storeStatusName: string | null = null;
 let activeAppDeployment = false;
+let createdAppName = 'za-pos-test';
+let createdAppFqdn = 'https://test.example';
 
 const configureCoolify = (): void => {
   process.env.COOLIFY_API_URL = COOLIFY;
@@ -64,7 +66,12 @@ const clearCoolify = (): void => {
 };
 
 const seedStore = (
-  over: { slug?: string; coolifyUuid?: string | null; schema?: number | null } = {},
+  over: {
+    slug?: string;
+    coolifyUuid?: string | null;
+    schema?: number | null;
+    baseUrl?: string;
+  } = {},
 ) => {
   const company = createCompany({
     name: `Client ${over.slug ?? 'a'}`,
@@ -75,7 +82,7 @@ const seedStore = (
       name: `Store ${over.slug ?? 'a'}`,
       slug: over.slug ?? 'store-a',
       terminalCount: 1,
-      baseUrl: `https://${over.slug ?? 'store-a'}.example`,
+      baseUrl: over.baseUrl ?? `https://${over.slug ?? 'store-a'}.example`,
     },
     'cp-token',
   );
@@ -141,6 +148,8 @@ beforeEach(() => {
   missingStorage = false;
   storeStatusName = null;
   activeAppDeployment = false;
+  createdAppName = 'za-pos-test';
+  createdAppFqdn = 'https://test.example';
   fetchMock = jest.spyOn(globalThis, 'fetch');
   fetchMock.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
     const s = String(url);
@@ -189,7 +198,8 @@ beforeEach(() => {
       if (method === 'GET' && /\/applications\/[^/]+$/.test(s)) {
         return jsonResponse(200, {
           uuid: s.split('/').pop(),
-          name: 'za-pos-test',
+          name: createdAppName,
+          fqdn: createdAppFqdn,
           status: stopped ? 'exited' : 'running:healthy',
           build_pack: 'dockerimage',
           docker_registry_image_name: 'ghcr.io/hoosainmadhi/vula-pos-store',
@@ -344,6 +354,69 @@ describe('per-tenant release application', () => {
     expect(updated.image_digest).toBe(C);
     expect(updated.schema_version).toBe(1);
     expect(updated.deploy_status).toBe('deployed');
+  });
+
+  it('pins staging creation to the approved destination and verifies the created app', async () => {
+    const oldStaging = {
+      mode: env.stagingMode,
+      project: env.stagingProjectUuid,
+      server: env.stagingServerUuid,
+      destination: env.stagingDestinationUuid,
+      prefixes: [...env.stagingAppPrefixes],
+      domainPrefix: env.stagingDomainPrefix,
+      domainSuffix: env.stagingDomainSuffix,
+    };
+    const oldDestination = process.env.COOLIFY_DESTINATION_UUID;
+    env.stagingMode = true;
+    env.stagingProjectUuid = 'proj';
+    env.stagingServerUuid = 'srv';
+    env.stagingDestinationUuid = 'dest-m4';
+    env.stagingAppPrefixes = ['za-pos-m4-', 'vula-m4-'];
+    env.stagingDomainPrefix = 'm4-';
+    env.stagingDomainSuffix = '.vula-app.co.za';
+    process.env.COOLIFY_DESTINATION_UUID = 'dest-m4';
+    createdAppName = 'za-pos-m4-store-a';
+    createdAppFqdn = 'https://m4-store-a.vula-app.co.za';
+    try {
+      const store = seedStore({
+        slug: 'm4-store-a',
+        coolifyUuid: null,
+        schema: null,
+        baseUrl: 'https://m4-store-a.vula-app.co.za',
+      });
+      getRegistryDb()
+        .prepare(
+          'UPDATE stores SET image_digest = NULL, image_tag = NULL, last_release_id = NULL WHERE id = ?',
+        )
+        .run(store.id);
+      const rel = release({ tag: 'v-stage', digest: C });
+      const result = await applyReleaseToTenant('store', store.id, rel.id, {
+        actor: 'office@test.local',
+        action: 'provision',
+        healthTimeoutMs: 100,
+        healthIntervalMs: 5,
+      });
+
+      expect(result.status).toBe('complete');
+      const create = calls.find((c) => c.url.endsWith('/applications/dockerimage'));
+      expect(create).toBeDefined();
+      const body = JSON.parse(create!.body) as Record<string, unknown>;
+      expect(body.name).toBe('za-pos-m4-store-a');
+      expect(body.destination_uuid).toBe('dest-m4');
+      expect(body.project_uuid).toBe('proj');
+      expect(body.server_uuid).toBe('srv');
+      expect(getStoreById(store.id)!.coolify_uuid).toMatch(/^new-/);
+    } finally {
+      env.stagingMode = oldStaging.mode;
+      env.stagingProjectUuid = oldStaging.project;
+      env.stagingServerUuid = oldStaging.server;
+      env.stagingDestinationUuid = oldStaging.destination;
+      env.stagingAppPrefixes = [...oldStaging.prefixes];
+      env.stagingDomainPrefix = oldStaging.domainPrefix;
+      env.stagingDomainSuffix = oldStaging.domainSuffix;
+      if (oldDestination === undefined) delete process.env.COOLIFY_DESTINATION_UUID;
+      else process.env.COOLIFY_DESTINATION_UUID = oldDestination;
+    }
   });
 
   it('rolls back to the previous release only when the target schema is compatible', async () => {

@@ -4,10 +4,12 @@ import { getStoreById, setStoreDeployStatus, type StoreRecord } from '../config/
 import {
   createStoreDeployment,
   createStoreImageDeployment,
+  getApplication,
   isCoolifyConfigured,
   triggerDeploy,
   CoolifyError,
 } from './coolify.js';
+import { assertApplicationAllowed } from './applicationGuard.js';
 import {
   recordProvisionedRelease,
   resolveDefaultRelease,
@@ -22,11 +24,11 @@ import { getCompanyById, recordLicencePush, recordConfigResult } from '../config
 
 /** The host directory a deployment belongs under: its client's slug, or its own. */
 const clientSlugFor = (companyId: number | null, fallback: string): string =>
-  (companyId ? (getCompanyById(companyId)?.slug ?? fallback) : fallback);
+  companyId ? (getCompanyById(companyId)?.slug ?? fallback) : fallback;
 import { logger } from '../utils/logger.js';
 
 const HEALTH_POLL_INTERVAL_MS = 10000; // 10s
-const HEALTH_POLL_TIMEOUT_MS = 480000;  // 8 minutes
+const HEALTH_POLL_TIMEOUT_MS = 480000; // 8 minutes
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -38,7 +40,10 @@ export function generateAdminPassword(): string {
 /**
  * Polls the store's public /health endpoint until it reports healthy.
  */
-async function waitForStoreHealth(baseUrl: string, timeoutMs = HEALTH_POLL_TIMEOUT_MS): Promise<boolean> {
+async function waitForStoreHealth(
+  baseUrl: string,
+  timeoutMs = HEALTH_POLL_TIMEOUT_MS,
+): Promise<boolean> {
   const cleanBase = baseUrl.replace(/\/+$/, '');
   const url = `${cleanBase}/health`;
   const deadline = Date.now() + timeoutMs;
@@ -47,7 +52,10 @@ async function waitForStoreHealth(baseUrl: string, timeoutMs = HEALTH_POLL_TIMEO
     try {
       const res = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(5000) });
       if (res.ok) {
-        const data = (await res.json().catch(() => null)) as { status?: string; app?: string } | null;
+        const data = (await res.json().catch(() => null)) as {
+          status?: string;
+          app?: string;
+        } | null;
         if (data?.status === 'ok' || data?.app === 'vula') {
           return true;
         }
@@ -132,7 +140,9 @@ export async function runStoreProvisioning(
       const release = resolveDefaultRelease('store');
       if (
         !release &&
-        (store.environment === 'production' || !env.allowLegacyDockerfileOnboarding)
+        (store.environment === 'production' ||
+          env.stagingMode ||
+          !env.allowLegacyDockerfileOnboarding)
       ) {
         throw new Error(
           'No approved stable Store release is registered; refusing to create a new tenant from a Dockerfile build',
@@ -176,7 +186,11 @@ export async function runStoreProvisioning(
         imageDeploymentUuid = await triggerDeploy(coolifyUuid, true);
       }
     } else {
-      // Re-trigger deploy on existing Coolify app
+      // Re-trigger deploy on existing Coolify app. In staging, the UUID
+      // allowlist is mandatory before any existing application is touched.
+      if (env.stagingMode) {
+        assertApplicationAllowed('store', await getApplication(coolifyUuid));
+      }
       await triggerDeploy(coolifyUuid);
     }
 

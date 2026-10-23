@@ -41,6 +41,7 @@ import {
   updateApplicationImage,
   type CoolifyDeploymentSummary,
 } from './coolify.js';
+import { assertApplicationAllowed } from './applicationGuard.js';
 import { ping, pingPanel } from './storeClient.js';
 import {
   getPanelById,
@@ -248,35 +249,6 @@ export const verifyImageDeployment = async (
   if (!healthy) {
     throw new Error(
       `health_timeout_or_version_mismatch: ${baseUrl}/health did not report version ${release.version}`,
-    );
-  }
-};
-
-/** The explicit allowlist/prefix check before an existing app may be modified. */
-const assertApplicationAllowed = (
-  kind: 'store' | 'ho',
-  application: { uuid: string; name?: string },
-): void => {
-  if (env.isProduction && env.allowedAppUuids.length === 0) {
-    throw new HttpError(
-      409,
-      'application_allowlist_missing: VULA_ALLOWED_APP_UUIDS is not configured; refusing to modify an existing Coolify application in production',
-      'application_allowlist_missing',
-    );
-  }
-  if (env.allowedAppUuids.length && !env.allowedAppUuids.includes(application.uuid)) {
-    throw new HttpError(
-      409,
-      `application_not_allowlisted: Coolify application ${application.uuid} is not in VULA_ALLOWED_APP_UUIDS; refusing to modify it`,
-      'application_not_allowlisted',
-    );
-  }
-  const prefix = kind === 'store' ? 'za-pos-' : 'vula-';
-  if (!application.name || !application.name.startsWith(prefix)) {
-    throw new HttpError(
-      409,
-      `application_not_vula: Coolify application ${application.uuid} is not a recognised ${kind === 'store' ? 'store' : 'Head Office'} app (${application.name ?? 'no name'}); refusing to modify it`,
-      'application_not_vula',
     );
   }
 };
