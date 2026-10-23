@@ -33,19 +33,22 @@ export function ActionButton({
   onClick,
   className = 'border-slate-200 text-slate-600 hover:bg-slate-50',
   title,
+  disabled = false,
 }: {
   icon?: React.ComponentType<{ className?: string }>;
   label: string;
   onClick: () => void;
   className?: string;
   title?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       title={title ?? label}
-      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition ${className}`}
+      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${className}`}
     >
       {Icon && <Icon className="h-3.5 w-3.5" />}
       {label}

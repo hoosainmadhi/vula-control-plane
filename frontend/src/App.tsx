@@ -16,6 +16,7 @@ import ErrorsPage from './pages/ErrorsPage';
 import DevicesPage from './pages/DevicesPage';
 import VersionsPage from './pages/VersionsPage';
 import DeploymentsPage from './pages/DeploymentsPage';
+import ReleasesPage from './pages/ReleasesPage';
 import SettingsPage from './pages/SettingsPage';
 
 function RequireOffice({ children }: { children: ReactNode }) {
@@ -153,6 +154,16 @@ export default function App() {
           <RequireOffice>
             <Layout title="Deployments">
               <DeploymentsPage />
+            </Layout>
+          </RequireOffice>
+        }
+      />
+      <Route
+        path="/releases"
+        element={
+          <RequireOffice>
+            <Layout title="Releases">
+              <ReleasesPage />
             </Layout>
           </RequireOffice>
         }

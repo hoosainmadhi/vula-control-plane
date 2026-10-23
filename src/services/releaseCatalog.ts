@@ -72,6 +72,8 @@ export interface TenantReleaseState {
     'idle' | 'queued' | 'deploying' | 'verifying' | 'healthy' | 'failed' | 'rolled_back';
   schemaVersion: number | null;
   appVersion: string | null;
+  /** Latest runtime health check, independent of release action/state. */
+  runtimeHealth: 'up' | 'down' | 'unknown';
 }
 
 export interface ReleaseBatch {
@@ -228,7 +230,16 @@ export const createImageRelease = (input: unknown): ImageRelease => {
       );
     return getImageRelease(Number(info.lastInsertRowid))!;
   } catch (err) {
-    if (err instanceof Error && /UNIQUE constraint failed/i.test(err.message)) {
+    // Native SQLite errors are not reliably `instanceof Error` across every
+    // runtime/test realm, so identify the constraint by code or message.
+    const code = (err as { code?: unknown } | null)?.code;
+    const message =
+      err instanceof Error
+        ? err.message
+        : typeof (err as { message?: unknown } | null)?.message === 'string'
+          ? String((err as { message: string }).message)
+          : String(err);
+    if (code === 'SQLITE_CONSTRAINT_UNIQUE' || /UNIQUE constraint failed/i.test(message)) {
       throw new HttpError(
         409,
         'A release with this kind and tag or digest already exists',
@@ -306,6 +317,7 @@ const storeState = (store: StoreRecord): TenantReleaseState => ({
   releaseState: store.release_state ?? 'idle',
   schemaVersion: store.schema_version ?? null,
   appVersion: store.app_version ?? null,
+  runtimeHealth: store.last_health_status ?? 'unknown',
 });
 
 const panelState = (panel: PanelRecord): TenantReleaseState => ({
@@ -331,6 +343,7 @@ const panelState = (panel: PanelRecord): TenantReleaseState => ({
   releaseState: panel.release_state ?? 'idle',
   schemaVersion: panel.schema_version ?? null,
   appVersion: panel.app_version ?? null,
+  runtimeHealth: panel.last_health_status ?? 'unknown',
 });
 
 export const getTenantReleaseState = (
@@ -832,6 +845,57 @@ export const finishReleaseDeployment = (
       id,
     );
 };
+
+/**
+ * The last successful deployment that moved this tenant forward INTO
+ * `toReleaseId`. Rollback rows are deliberately excluded: a release the tenant
+ * left by rolling back is not itself a rollback target. That distinction is
+ * what keeps A -> B -> A from offering B as a "rollback" (which would really be
+ * an upgrade).
+ */
+export const getLastSuccessfulForwardDeployment = (
+  tenantType: TenantType,
+  tenantId: number,
+  toReleaseId: number,
+): {
+  id: number;
+  action: ReleaseAction;
+  from_release_id: number | null;
+  to_release_id: number | null;
+} | null =>
+  (getRegistryDb()
+    .prepare(
+      `SELECT id, action, from_release_id, to_release_id
+         FROM release_deployments
+        WHERE tenant_type = ? AND tenant_id = ? AND status = 'complete'
+          AND action IN ('provision', 'upgrade') AND to_release_id = ?
+        ORDER BY id DESC LIMIT 1`,
+    )
+    .get(tenantType, tenantId, toReleaseId) as
+    | {
+        id: number;
+        action: ReleaseAction;
+        from_release_id: number | null;
+        to_release_id: number | null;
+      }
+    | undefined) ?? null;
+
+/** True when the tenant reached `toReleaseId` through a successful rollback. */
+export const hasSuccessfulRollbackInto = (
+  tenantType: TenantType,
+  tenantId: number,
+  toReleaseId: number,
+): boolean =>
+  Boolean(
+    getRegistryDb()
+      .prepare(
+        `SELECT 1 FROM release_deployments
+          WHERE tenant_type = ? AND tenant_id = ? AND status = 'complete'
+            AND action = 'rollback' AND to_release_id = ?
+          LIMIT 1`,
+      )
+      .get(tenantType, tenantId, toReleaseId),
+  );
 
 export const listReleaseDeployments = (tenantType: TenantType, tenantId: number, limit = 20) =>
   getRegistryDb()

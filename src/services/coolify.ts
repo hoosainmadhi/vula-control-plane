@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 import { licencePublicKey, licenceKeyId } from './licenceSigner.js';
 import {
@@ -7,6 +8,7 @@ import {
   imageTagFor,
   type ImageRelease,
 } from './releaseCatalog.js';
+import { assertCreatedApplicationScope, assertStagingCreationScope } from './applicationGuard.js';
 
 /**
  * Coolify v1 REST API client for automated store & head-office provisioning.
@@ -26,6 +28,8 @@ export interface CoolifyConfig {
   projectUuid: string;
   serverUuid: string;
   githubAppUuid: string;
+  /** Optional exact destination for staging isolation. */
+  destinationUuid: string | null;
 }
 
 export const readCoolifyConfig = (): CoolifyConfig | null => {
@@ -34,8 +38,9 @@ export const readCoolifyConfig = (): CoolifyConfig | null => {
   const projectUuid = process.env.COOLIFY_PROJECT_UUID;
   const serverUuid = process.env.COOLIFY_SERVER_UUID;
   const githubAppUuid = process.env.COOLIFY_GITHUB_APP_UUID;
+  const destinationUuid = process.env.COOLIFY_DESTINATION_UUID?.trim() || null;
   if (!apiUrl || !apiToken || !projectUuid || !serverUuid || !githubAppUuid) return null;
-  return { apiUrl, apiToken, projectUuid, serverUuid, githubAppUuid };
+  return { apiUrl, apiToken, projectUuid, serverUuid, githubAppUuid, destinationUuid };
 };
 
 export const isCoolifyConfigured = (): boolean => readCoolifyConfig() !== null;
@@ -513,12 +518,22 @@ const deployImageFromSpec = async (spec: ImageDeploymentSpec): Promise<ImageDepl
   const cleanDomain = spec.domain.replace(/^https?:\/\//, '');
   const deployment = deploymentSlug(spec.deploymentName) || spec.slug;
   const appName = spec.kind === 'store' ? 'za-pos' : 'vula';
+  const expectedName = `${appName}-${deployment}`;
+
+  assertStagingCreationScope({
+    projectUuid: config.projectUuid,
+    serverUuid: config.serverUuid,
+    destinationUuid: config.destinationUuid,
+    expectedName,
+    domain: cleanDomain,
+  });
 
   const created = (await request(config, 'POST', `${API_VERSION_PATH}/applications/dockerimage`, {
     project_uuid: config.projectUuid,
     server_uuid: config.serverUuid,
+    ...(config.destinationUuid ? { destination_uuid: config.destinationUuid } : {}),
     environment_name: 'production',
-    name: `${appName}-${deployment}`,
+    name: expectedName,
     docker_registry_image_name: imageReferenceFor(spec.release),
     ports_exposes: STORE_INTERNAL_PORT,
     domains: `https://${cleanDomain}`,
@@ -545,6 +560,16 @@ const deployImageFromSpec = async (spec: ImageDeploymentSpec): Promise<ImageDepl
   const volumeName = `vula-${spec.kind}-${spec.slug}-sqlite-db`;
   const hostPath = vulaHostPath(spec.kind, spec.clientSlug, spec.slug);
   spec.onCreated?.({ coolifyUuid, volumeName, hostPath });
+
+  // Persist the UUID first (so a retry cannot create a duplicate), then prove
+  // that Coolify created the expected name/domain/kind in the staging project.
+  if (env.stagingMode) {
+    assertCreatedApplicationScope({
+      expectedName,
+      domain: cleanDomain,
+      application: await getApplication(coolifyUuid),
+    });
+  }
 
   const values = imageEnvVars(spec, controlPlaneToken, jwtSecret).map((item) => ({
     ...item,
@@ -622,8 +647,13 @@ export interface CoolifyApplicationSummary {
   uuid: string;
   name?: string;
   status?: string;
+  /** Authoritative runtime presence, independent of the possibly stale status. */
+  container_present?: boolean | null;
   build_pack: string;
+  fqdn?: string | null;
   project_uuid?: string | null;
+  environment_id?: number | null;
+  destination_id?: number | null;
   docker_registry_image_name: string | null;
   docker_registry_image_tag: string | null;
 }
@@ -724,8 +754,12 @@ export async function updateApplicationImage(
 ): Promise<void> {
   const config = readCoolifyConfig();
   if (!config) throw new CoolifyError('Coolify is not configured');
+  // Coolify normalises a digest reference to `<name>@sha256` plus the hex tag.
+  // Sending a plain repository name makes it pull `<name>:<hex>`, which does not
+  // exist for a digest-only release.
+  const digestName = `${imageNameFor(release.kind).split('@')[0]}@sha256`;
   await request(config, 'PATCH', `${API_VERSION_PATH}/applications/${coolifyUuid}`, {
-    docker_registry_image_name: imageNameFor(release.kind),
+    docker_registry_image_name: digestName,
     docker_registry_image_tag: imageTagFor(release),
   });
 }

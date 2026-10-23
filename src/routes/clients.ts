@@ -169,7 +169,7 @@ interface NestedStore {
   name: string;
   slug: string;
   baseUrl: string;
-  /** Short Coolify label; absent derives `<client>-<name>`. */
+  /** Short Coolify label; absent derives `<client>-<store>`. */
   deploymentName?: string;
   /** 'store' (default) or 'warehouse' — a warehouse runs no tills. */
   kind: StoreRecord['kind'];
@@ -184,8 +184,8 @@ const validateNestedStore = async (
     name: string;
     slug: string;
     baseUrl: string;
-    adminEmail?: string;
     deploymentName?: string;
+    adminEmail?: string;
   },
 ): Promise<NestedStore> => {
   if (
@@ -220,6 +220,7 @@ const validateNestedStore = async (
   const slug =
     e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
   const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
+  const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
   const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
   const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
 
@@ -237,6 +238,7 @@ const validateNestedStore = async (
     name,
     slug,
     baseUrl,
+    ...(deploymentName ? { deploymentName } : {}),
     kind,
     terminalCount,
     licensedTerminalCount,
@@ -252,15 +254,15 @@ const validateNestedHeadOffice = async (
     name: string;
     slug: string;
     baseUrl: string;
-    adminEmail?: string;
     deploymentName?: string;
+    adminEmail?: string;
   },
 ): Promise<{
   name: string;
   slug: string;
   baseUrl: string;
-  adminEmail?: string;
   deploymentName?: string;
+  adminEmail?: string;
 }> => {
   if (
     entry !== undefined &&
@@ -274,6 +276,7 @@ const validateNestedHeadOffice = async (
   const slug =
     e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
   const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
+  const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
   const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
   const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
 
@@ -291,8 +294,8 @@ const validateNestedHeadOffice = async (
     name,
     slug,
     baseUrl,
-    ...(adminEmail ? { adminEmail } : {}),
     ...(deploymentName ? { deploymentName } : {}),
+    ...(adminEmail ? { adminEmail } : {}),
   };
 };
 

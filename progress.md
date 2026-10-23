@@ -1,47 +1,36 @@
 # Progress
 
-## 2026-10-22 — M4 repository-side shared-image release controller
+## 2026-10-23 — M4 Releases UI accepted; staging session security closed; M4 frozen
 
-Implemented in the Control Plane only; **no deployment, no Coolify call and no
-existing-tenant migration**.
+The Releases UI was accepted for staging after three rounds of fixes: the header
+environment is server-derived (`Staging` under `VULA_STAGING_MODE`), summary
+health comes from the runtime probe independently of release history, and
+rollback eligibility is derived from verified successful forward deployment
+history. After `A → B → rollback A`, B is no longer offered as a rollback
+target; it is reachable through Upgrade. The server enforces the same target
+and refuses a caller-supplied mismatch with `409 rollback_not_eligible`.
 
-- New `image_releases` catalog keyed by kind + immutable tag/digest, with
-  version, channel and schema range; tenant image/previous-release state added
-  to `stores` and `panels`.
-- New Coolify Docker Image path for Store/HO creation and digest upgrades; no
-  Git, Dockerfile or build args; per-tenant persistent volume and existing
-  control-plane token; `health_check_host=127.0.0.1`.
-- New per-tenant `deployment_locks` with expiry, `release_batches`/items and
-  `release_deployments` audit history.
-- New release service/API: catalog, fleet state, per-tenant apply/rollback,
-  channel tracking, dry-run and sequential wave rollouts; schema checks fail
-  closed before Coolify.
-- Onboarding uses the latest active stable release when registered. Production
-  refuses a Dockerfile build; non-production legacy fallback requires the
-  explicit `ALLOW_LEGACY_DOCKERFILE_ONBOARDING=true` opt-in.
-- Reliability pass: Coolify deployment status/version/revision verification,
-  stop-first SQLite protection, `/data` + tenant-identity preflight, explicit
-  app allowlist, trigger/app persistence, in-flight reconciliation,
-  `release_state`/phase tracking and stop-on-failure waves.
-- `docs/m4-shared-image-control-plane.md` records the architecture/API;
-  `docs/m4-architecture-review.md` records P0/P1/P2 findings and the M4.1 plan.
-- Tests: `releases.test.ts` 29/29; full backend **506/506** across 37 suites;
-  typecheck and production build clean. No live acceptance yet.
-- **Isolated M4 branch prepared:** `m4/shared-image-release`, commits
-  `14c9133` (implementation), `1092f69`, `9c9a654` and `dcb1311` (M4.1
-  plan/read-only evidence/recovery/authorization), from clean HEAD; unrelated
-  pre-existing
-  working-tree changes were preserved on `dev`. The branch contains only the
-  release implementation, required naming dependencies and M4 docs; its suite is
-  **502/502**, typecheck and build clean.
-- **Read-only Coolify contract check (4.4.7):** application `status`, `/data`
-  persistent storage, deployment records/status/timestamps and deployment-by-
-  UUID confirmed with GETs; image fields were nullable on Dockerfile apps and
-  the stop path is an async queued job that removes containers and writes
-  `exited`. No live Docker Image app/stop was exercised.
-- **M4.1 plan prepared:** `docs/m4.1-live-integration-plan.md` records isolated
-  staging targets, credential boundaries, the two-digest test-release strategy,
-  abort conditions and cleanup. Not executed.
+**Verification:** focused releases suite 38/38; full backend **539/539 across
+42 suites**; frontend **33/33**; typecheck and production builds clean. Live
+staging: header Staging, Tenants 2 / Runtime healthy 2 / Needs attention 0 /
+Active releases 3; Store A (A→B→A) and Store B both show Rollback disabled with
+specific explanations, Upgrade enabled.
+
+**Deployed:** `vula-cp-m4-staging` only, commit `a04a8d8` (deployment
+`lcthfauu2ylbag1wgbqd6xxe`). Production CP, OptiMed, demos and tenant databases
+were untouched. Docs follow-up `8f6dde7`.
+
+**Session security:** the staging admin password and `JWT_SECRET` were rotated
+in the staging app's environment only. A token issued before the JWT rotation
+now returns 401 on `/api/auth/me` and `/api/releases/fleet`; the new admin login
+returns 200 and `/api/auth/me` reports `staging`. The browser was cleared of the
+stale token and returned to the office sign-in page. Replacement values were
+not printed; the password remains in the mode-600 local credential file.
+
+**M4 is frozen.** No further feature changes or deployment rehearsals for this
+milestone. Next focus: hands-on Control Plane UI testing, one successful
+two-store rollout before fleet-wide production upgrades, and a production
+readiness review of backups, tenant migration and operational recovery.
 
 ## 2026-10-11 — launch hardening: both review P0s and the code-level P1s, all verified
 
@@ -3468,51 +3457,3 @@ vocabulary and pricing had the add-on; three surfaces did not expose it:
 
 Tests: frontend **33/33** (new: the bundle price → allowance mapping); backend **473/473**,
 typecheck and build clean.
-
-## 2026-10-21 — local Coolify project corrected; two stray test tenants removed
-
-The dev `.env` still carried the five `COOLIFY_*` settings copied from
-`optimed-control-plane` at setup, including `COOLIFY_PROJECT_UUID` → `optimed-tenants`.
-The two WhatsApp-wizard test clients created the previous night (WA Wizard Test / WA
-Wizard Two) therefore provisioned into the optometry tenants project. Repointed the local
-env at `vula-tenants` (`n2xudvsuyesucqvsjjzbywq3`) and deleted the two orphaned Coolify
-apps — `za-pos-wa-wizard-1792528970180` and `za-pos-wa-wizard2-1792529019332` — with
-`delete_volumes=true`; both public domains now answer 503. Staging and production were
-already configured for `vula-tenants`.
-
-## 2026-10-21 — Super Stores production onboarding diagnosed
-
-The two new stores and their Head Office deployed, but the operator received no credentials
-email. Diagnosed from the production CP container logs and databases: the deployment steps
-ran before the containers accepted traffic, so no admin users were created in either store
-(and none in the Head Office); the one credential email that was attempted (Head Office) was
-refused by Zoho with `535 5.7.8 Authentication Failed`. `RESEND_API_KEY` is valid and the
-`vula-app.co.za` domain is verified, so clearing the SMTP host falls back to Resend
-immediately. Recovery: reset-admin on each store and the panel (both bootstrap when missing),
-then retry the failed deployment job for topology and licences. Recorded in `findings.md`.
-
-## 2026-10-21 — onboarding follow-ups landed
-
-Four fixes from the Super Stores onboarding:
-- **Coolify names follow a per-store deployment label.** A new `deployment_name` column on
-  `stores` and `panels` carries the full label after `za-pos-`/`vula-`; blank derives
-  `<client-slug>-<store-name>`. `deployFromSpec` uses it, so `super-stores-jhb` produces
-  `za-pos-super-stores-jhb` and the client slug keeps two Johannesburg stores apart. The store
-  form and the onboarding wizard expose the label. The live Super Stores rows are
-  `super-stores-jhb` / `super-stores-sandton` / `super-stores-ho`, and the apps were renamed to
-  `za-pos-super-stores-jhb`, `za-pos-super-stores-sandton` and `vula-super-stores-ho`.
-- **Credentials are retried until the container accepts the bootstrap.** A new
-  `services/adminProvisioning.ts` probes the deployment's internal status for up to 15 minutes
-  (every 15 seconds; both configurable), then bootstraps the first admin and emails the password. The store and
-  Head Office steps schedule it when their immediate attempt is refused; the Head Office no
-  longer emails a password before its admin exists.
-- **Head Office has a reset button.** `PanelsPage` now exposes "Reset admin login", calling
-  `POST /api/panels/:id/reset-admin` and showing the one-time password in the shared
-  `AdminPasswordModal` (copy adjusted for a Head Office).
-- **WhatsApp is on the marketing price list.** A WhatsApp messaging card and quote-builder
-  toggle (R50/month for 250 messages, per company, larger bundles stated) now sit with the
-  other add-ons; the page hydrates the price from `GET /api/public/pricing`, which already
-  publishes `whatsapp_cloud` at 5000.
-
-Checks: control-plane backend **476/476**, frontend **33/33**, both typechecks and builds clean;
-marketing build clean and the built page carries the new card and `whatsapp_cloud` mapping.

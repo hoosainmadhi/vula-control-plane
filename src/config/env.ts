@@ -90,8 +90,22 @@ export interface Env {
   releaseLockMinutes: number;
   /** Explicit Coolify application UUID allowlist for image changes. */
   allowedAppUuids: string[];
+  /** Office users allowed to publish/apply/rollback releases. */
+  releaseManagerEmails: string[];
   /** Explicit opt-in for the legacy Dockerfile path on non-production onboarding. */
   allowLegacyDockerfileOnboarding: boolean;
+  /**
+   * Staging boundary. When enabled, application creation is pinned to the
+   * approved project/server/destination and the approved name/domain pattern;
+   * every existing-application modification also requires the UUID allowlist.
+   */
+  stagingMode: boolean;
+  stagingProjectUuid: string | null;
+  stagingServerUuid: string | null;
+  stagingDestinationUuid: string | null;
+  stagingAppPrefixes: string[];
+  stagingDomainPrefix: string | null;
+  stagingDomainSuffix: string | null;
   /**
    * Licence signing material. The private key never leaves this process; stores
    * receive only the public key and verify what the control plane signs.
@@ -149,7 +163,21 @@ export const env: Env = {
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean),
+  releaseManagerEmails: (process.env.RELEASE_MANAGER_EMAILS ?? '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean),
   allowLegacyDockerfileOnboarding: process.env.ALLOW_LEGACY_DOCKERFILE_ONBOARDING === 'true',
+  stagingMode: process.env.VULA_STAGING_MODE === 'true',
+  stagingProjectUuid: process.env.VULA_STAGING_PROJECT_UUID?.trim() || null,
+  stagingServerUuid: process.env.VULA_STAGING_SERVER_UUID?.trim() || null,
+  stagingDestinationUuid: process.env.VULA_STAGING_DESTINATION_UUID?.trim() || null,
+  stagingAppPrefixes: (process.env.VULA_STAGING_APP_PREFIXES ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean),
+  stagingDomainPrefix: process.env.VULA_STAGING_DOMAIN_PREFIX?.trim() || null,
+  stagingDomainSuffix: process.env.VULA_STAGING_DOMAIN_SUFFIX?.trim() || null,
   // Not required at boot: when unset the signer generates a dev keypair (and, in
   // production, refuses to serve licences until a real key is configured).
   licencePrivateKey: process.env.LEASE_PRIVATE_KEY?.trim() || null,
@@ -163,6 +191,15 @@ export const env: Env = {
   healthSweepMinutes: Number(process.env.HEALTH_SWEEP_INTERVAL_MINUTES || 10),
   billingTickMinutes: Number(process.env.BILLING_TICK_INTERVAL_MINUTES || 1440),
   trustProxyHops: Math.max(0, Number(process.env.CP_TRUST_PROXY_HOPS || 0)),
+};
+
+export type ControlPlaneEnvironment = 'production' | 'staging' | 'development';
+
+/** The environment the Control Plane itself is running as, not the browser host. */
+export const controlPlaneEnvironment = (): ControlPlaneEnvironment => {
+  if (env.stagingMode) return 'staging';
+  if (env.isProduction) return 'production';
+  return 'development';
 };
 
 export { logger };

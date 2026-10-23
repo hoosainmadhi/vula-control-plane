@@ -764,3 +764,127 @@ export interface Quote {
   createdAt: string;
   updatedAt: string;
 }
+
+// --- Shared-image releases (M4) ---------------------------------------------
+export type ReleaseKind = 'store' | 'ho';
+export type ReleaseChannel = 'stable' | 'beta' | 'canary';
+export type ReleaseAction = 'provision' | 'upgrade' | 'rollback';
+export type TenantType = 'store' | 'panel';
+export type ReleaseRuntimeState =
+  'idle' | 'queued' | 'deploying' | 'verifying' | 'healthy' | 'failed' | 'rolled_back';
+
+export interface ImageRelease {
+  id: number;
+  kind: ReleaseKind;
+  tag: string;
+  digest: string;
+  version: string;
+  revision: string | null;
+  channel: ReleaseChannel;
+  schemaVersion: number;
+  schemaMin: number;
+  schemaMax: number;
+  notes: string | null;
+  isActive: boolean;
+  publishedAt: string;
+  createdAt: string;
+}
+
+export interface TenantReleaseState {
+  tenantType: TenantType;
+  id: number;
+  name: string;
+  slug: string;
+  baseUrl: string;
+  environment: StoreEnvironment | null;
+  companyId: number | null;
+  companySlug: string | null;
+  status: string;
+  deployStatus: 'not_deployed' | 'provisioning' | 'deployed' | 'failed';
+  coolifyUuid: string | null;
+  volumeName: string | null;
+  imageDigest: string | null;
+  imageTag: string | null;
+  releaseChannel: ReleaseChannel;
+  desiredReleaseId: number | null;
+  lastReleaseId: number | null;
+  previousReleaseId: number | null;
+  lastReleaseAt: string | null;
+  releaseState: ReleaseRuntimeState;
+  schemaVersion: number | null;
+  appVersion: string | null;
+  runtimeHealth: 'up' | 'down' | 'unknown';
+  rollbackEligible: boolean;
+  rollbackReleaseId: number | null;
+  rollbackReason: string | null;
+}
+
+export interface ReleaseFleet {
+  stores: TenantReleaseState[];
+  panels: TenantReleaseState[];
+}
+
+export interface ReleaseCapabilities {
+  email: string;
+  releaseManager: boolean;
+  configured: boolean;
+}
+
+export interface ReleaseBatchSummary {
+  id: number;
+  releaseId: number;
+  kind: ReleaseKind;
+  channel: string;
+  status: 'planned' | 'running' | 'complete' | 'partial' | 'failed' | 'dry_run';
+  waveSize: number;
+  requestedBy: string;
+  dryRun: boolean;
+  stopOnFailure: boolean;
+  total: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  error: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface ReleaseBatchItem {
+  id: number;
+  tenantType: TenantType;
+  tenantId: number;
+  wave: number;
+  action: ReleaseAction;
+  status: 'pending' | 'running' | 'complete' | 'failed' | 'skipped';
+  fromDigest: string | null;
+  toDigest: string | null;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface ReleaseBatchDetail {
+  batch: ReleaseBatchSummary;
+  items: ReleaseBatchItem[];
+}
+
+export interface ReleaseDeploymentHistory {
+  id: number;
+  tenant_type: TenantType;
+  tenant_id: number;
+  release_id: number;
+  batch_id: number | null;
+  action: ReleaseAction;
+  from_release_id: number | null;
+  to_release_id: number | null;
+  from_digest: string | null;
+  to_digest: string | null;
+  status: 'running' | 'complete' | 'failed' | 'skipped';
+  phase: string;
+  error: string | null;
+  coolify_uuid: string | null;
+  coolify_deployment_uuid: string | null;
+  created_at: string;
+  completed_at: string | null;
+}

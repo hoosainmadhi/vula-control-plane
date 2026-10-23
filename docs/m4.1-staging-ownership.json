@@ -1,0 +1,189 @@
+{
+  "schema": 1,
+  "owner": "m4-staging",
+  "stage": "M4.1-A",
+  "status": "verified",
+  "purpose": "Disposable M4.1 Stage A live-integration resources. No production, demo or super-stores resource belongs in this manifest.",
+  "createdAt": "2026-10-23T03:17:45Z",
+  "verifiedAt": "2026-10-23T07:28:42.540Z",
+  "security": {
+    "existingRootTeamCoolifyTokenExposedLocally": true,
+    "rotationCompleted": true,
+    "oldTokenRecordId": 2,
+    "oldTokenRevoked": true,
+    "oldTokenVersionStatus": 401,
+    "stagingUsesOwnToken": true
+  },
+  "stagingBoundary": {
+    "mode": true,
+    "projectUuid": null,
+    "serverUuid": "fmt7mqgjmpswlmtgsu65g1w5",
+    "destinationUuid": "yrsscsx3cerbxnf4iv3ujvm8",
+    "appPrefixes": [
+      "za-pos-m4-",
+      "vula-m4-"
+    ],
+    "domainPrefix": "m4-",
+    "domainSuffix": ".vula-app.co.za",
+    "existingModificationRequiresExactAllowlist": true
+  },
+  "coolify": {
+    "project": {
+      "name": "vula-m4-staging",
+      "uuid": "rvwcat5q2rdaref7i2msawkt",
+      "mustContainOnly": [
+        "vula-cp-m4-staging",
+        "za-pos-m4-staging-client-m4-store-a",
+        "za-pos-m4-store-b"
+      ]
+    },
+    "serverUuid": "fmt7mqgjmpswlmtgsu65g1w5",
+    "destinationUuid": "yrsscsx3cerbxnf4iv3ujvm8",
+    "credential": {
+      "kind": "dedicated-coolify-api-token",
+      "name": "coolify-vula-m4-staging-cp",
+      "forApplication": "vula-cp-m4-staging",
+      "tokenId": 11,
+      "userId": 2,
+      "abilities": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "forbiddenAbilities": [
+        "root",
+        "read:sensitive",
+        "write:sensitive"
+      ],
+      "expiresAt": "2027-01-21T03:12:54Z",
+      "teamId": 0,
+      "residualScope": "Coolify 4.4.7 tokens are team-bound only; this token remains able to modify other Root Team resources. Not equivalent to VULA_ALLOWED_APP_UUIDS.",
+      "otherApplicationTokens": [
+        "coolify-optimed-cp",
+        "coolify-vula-prod-cp",
+        "coolify-vula-staging-cp"
+      ],
+      "noSharedLegacyToken": true
+    },
+    "resources": [
+      {
+        "kind": "control-plane",
+        "owner": "m4-staging",
+        "name": "vula-cp-m4-staging",
+        "uuid": "pkr5cdk2pnlh3nqrqhwvf7qf",
+        "domain": "https://m4-cp.vula-app.co.za",
+        "source": "m4/shared-image-release",
+        "sourceCommit": "9ae7fc540b6196ef05010aa1d3f1dfb4fed7de04",
+        "buildPack": "dockerfile",
+        "autoDeploy": false,
+        "volumeName": "vula-cp-m4-staging-data",
+        "mountPath": "/data",
+        "dbPath": "/data/control-plane.db",
+        "cleanup": "delete app then its exact volume",
+        "actualVolumeName": "pkr5cdk2pnlh3nqrqhwvf7qf-vula-cp-m4-staging-data"
+      },
+      {
+        "kind": "store",
+        "owner": "m4-staging",
+        "name": "za-pos-m4-staging-client-m4-store-a",
+        "uuid": "hme58ok1x4jvqi3cvdeapqzq",
+        "domain": "https://m4-store-a.vula-app.co.za",
+        "cpStoreSlug": "m4-store-a",
+        "cpClientSlug": "m4-staging-client",
+        "cpStoreEnvironment": "staging",
+        "volumeName": "vula-store-m4-store-a-sqlite-db",
+        "mountPath": "/data",
+        "hostPath": "/data/apps/vula-m4-staging/clients/m4-staging-client/stores/m4-store-a",
+        "hostPathIsIntendedOnly": true,
+        "imageDigest": "sha256:6db6b974b78c663a42796db9b738cc4ee21bc097bd1f9ba29ea836ef8ef5cb14",
+        "imageTag": "v2026.10.21-5781c2c",
+        "architecture": "linux/arm64",
+        "cleanup": "stop, delete app, then delete its exact volume",
+        "expectedName": "za-pos-m4-store-a",
+        "actualVolumeName": "hme58ok1x4jvqi3cvdeapqzq-vula-store-m4-store-a-sqlite-db",
+        "actualHostPath": null,
+        "approvedName": "za-pos-m4-staging-client-m4-store-a",
+        "originalPredictedName": "za-pos-m4-store-a",
+        "amendment": {
+          "approved": true,
+          "approvedAt": "2026-10-23",
+          "reason": "Exact Store name differed from prediction; existing app accepted after UUID/project/domain/digest/storage/registry verification. No rename or recreation.",
+          "evidence": "docs/m4.1-stage-a-execution.md"
+        }
+      }
+    ]
+  },
+  "controlPlaneRegistry": {
+    "database": "/data/control-plane.db",
+    "mustBeEmptyBeforeOnboarding": true,
+    "clientSlug": "m4-staging-client",
+    "storeSlug": "m4-store-a",
+    "clientId": 1,
+    "storeId": 1,
+    "releaseId": 1,
+    "allowedAppUuids": [
+      "hme58ok1x4jvqi3cvdeapqzq",
+      "o3xwk2sox9nyn1e6cg5hjoph"
+    ],
+    "additionalStores": [
+      {
+        "storeSlug": "m4-store-b",
+        "clientSlug": "m4-stage-b-client",
+        "storeId": 2,
+        "appName": "za-pos-m4-store-b",
+        "appUuid": "o3xwk2sox9nyn1e6cg5hjoph",
+        "volumeName": "vula-store-m4-store-b-sqlite-db",
+        "actualVolumeName": "o3xwk2sox9nyn1e6cg5hjoph-vula-store-m4-store-b-sqlite-db",
+        "domain": "https://m4-store-b.vula-app.co.za",
+        "imageDigest": "sha256:6db6b974b78c663a42796db9b738cc4ee21bc097bd1f9ba29ea836ef8ef5cb14",
+        "imageTag": "v2026.10.21-5781c2c",
+        "environment": "staging"
+      }
+    ]
+  },
+  "cleanup": {
+    "requiresStatus": "verified",
+    "exactUuidsOnly": true,
+    "forbidPrefixOrWildcardDeletion": true,
+    "forbidDeleting": [
+      "production/demo/super-stores apps",
+      "any app not listed in this manifest",
+      "acme.json",
+      "shared Traefik/proxy configuration",
+      "DNS records",
+      "firewall rules",
+      "production CP database",
+      "/data/apps/vula-app"
+    ],
+    "order": [
+      "stop and delete za-pos-m4-store-a",
+      "delete vula-store-m4-store-a-sqlite-db",
+      "delete vula-cp-m4-staging",
+      "delete vula-cp-m4-staging-data",
+      "delete vula-m4-staging project only after contents match this manifest",
+      "revoke staging Coolify token/user",
+      "remove /data/apps/vula-m4-staging only after app and volume are gone"
+    ]
+  },
+  "execution": {
+    "gate": "exact-store-app-name",
+    "resolution": "approved naming amendment",
+    "expectedOriginalName": "za-pos-m4-store-a",
+    "acceptedActualName": "za-pos-m4-staging-client-m4-store-a",
+    "stoppedBeforeAllowlist": false,
+    "allowlistApplied": true,
+    "rootCause": "clientOrchestrator step metadata and createStore omitted deploymentName; provisioning fell back to company.slug-store.name",
+    "defectDoc": "docs/onboarding-deployment-name-defect.md",
+    "evidence": "docs/m4.1-stage-a-execution.md"
+  },
+  "stageB": {
+    "status": "complete",
+    "waveBatchId": 1,
+    "waveStatus": "partial",
+    "waveFailedStore": "m4-store-b",
+    "waveSkippedStore": "m4-store-a",
+    "releaseBDigest": "sha256:72a9aeb896d4aa6bdb570e696f9b51b6954acd981a6fe304c3bd18ee6a585cb5",
+    "notes": "A→B→A verified; persistence probe survived; post-deploy app-status race reconciled via audited endpoint",
+    "evidence": "docs/m4.1-stage-b-results.md"
+  }
+}

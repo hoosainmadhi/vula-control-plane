@@ -30,8 +30,16 @@ import {
   createHeadOfficeDeployment,
   createStoreImageDeployment,
   createHeadOfficeImageDeployment,
+  getApplication,
   triggerDeploy,
 } from './coolify.js';
+import { assertApplicationAllowed } from './applicationGuard.js';
+import {
+  recordProvisionedRelease,
+  resolveDefaultRelease,
+  setTenantReleaseState,
+} from './releaseCatalog.js';
+import { verifyImageDeployment } from './releaseOrchestrator.js';
 import {
   recordProvisionedRelease,
   resolveDefaultRelease,
@@ -58,6 +66,8 @@ export interface StoreDeploymentInput {
   name: string;
   slug: string;
   baseUrl: string;
+  /** Short Coolify label; absent derives `<client>-<store>`. */
+  deploymentName?: string;
   /**
    * 'store' (default) or 'warehouse'. A warehouse runs no tills and draws no
    * terminal licences (owner decisions, 2026-10-09), so it is deployed with a
@@ -80,6 +90,7 @@ export interface HeadOfficeDeploymentInput {
   name: string;
   slug: string;
   baseUrl: string;
+  deploymentName?: string;
   adminEmail?: string;
   /** Short Coolify label (e.g. `super-stores-ho`). */
   deploymentName?: string;
@@ -125,6 +136,7 @@ export async function orchestrateClientDeployment(
       name: input.headOffice.name,
       slug: input.headOffice.slug,
       baseUrl: input.headOffice.baseUrl,
+      deploymentName: input.headOffice.deploymentName,
       adminEmail: input.headOffice.adminEmail,
       deploymentName: input.headOffice.deploymentName,
     });
@@ -135,6 +147,7 @@ export async function orchestrateClientDeployment(
       name: s.name,
       slug: s.slug,
       baseUrl: s.baseUrl,
+      deploymentName: s.deploymentName,
       terminalCount: s.terminalCount,
       licensedTerminalCount: s.licensedTerminalCount,
       adminEmail: s.adminEmail,
@@ -205,6 +218,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
             slug: meta.slug,
             deploymentName: meta.deploymentName ?? null,
             baseUrl: meta.baseUrl,
+            deploymentName: meta.deploymentName ?? null,
             controlPlaneToken: token,
             adminEmail: meta.adminEmail ?? null,
           });
@@ -217,11 +231,17 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
           if (panel.coolify_uuid) {
             // Retry after a failed deploy: re-trigger the existing application.
             if (panel.deploy_status === 'failed') {
+              if (env.stagingMode) {
+                assertApplicationAllowed('ho', await getApplication(panel.coolify_uuid));
+              }
               await triggerDeploy(panel.coolify_uuid);
             }
           } else {
             const release = resolveDefaultRelease('ho');
-            if (!release && (env.isProduction || !env.allowLegacyDockerfileOnboarding)) {
+            if (
+              !release &&
+              (env.isProduction || env.stagingMode || !env.allowLegacyDockerfileOnboarding)
+            ) {
               throw new Error(
                 'No approved stable Head Office release is registered; refusing to create a new Head Office from a Dockerfile build',
               );
@@ -351,6 +371,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
               slug: meta.slug,
               deploymentName: meta.deploymentName ?? null,
               baseUrl: meta.baseUrl,
+              deploymentName: meta.deploymentName ?? null,
               kind: meta.kind ?? 'store',
               // `|| 1` would turn a warehouse's 0 into a till it must not have.
               terminalCount: meta.kind === 'warehouse' ? 0 : meta.terminalCount || 1,
@@ -386,13 +407,18 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
         if (autoDeploy && isCoolifyConfigured()) {
           if (store.coolify_uuid) {
             if (store.deploy_status === 'failed') {
+              if (env.stagingMode) {
+                assertApplicationAllowed('store', await getApplication(store.coolify_uuid));
+              }
               await triggerDeploy(store.coolify_uuid);
             }
           } else {
             const release = resolveDefaultRelease('store');
             if (
               !release &&
-              (store.environment === 'production' || !env.allowLegacyDockerfileOnboarding)
+              (store.environment === 'production' ||
+                env.stagingMode ||
+                !env.allowLegacyDockerfileOnboarding)
             ) {
               throw new Error(
                 'No approved stable Store release is registered; refusing to create a new tenant from a Dockerfile build',

@@ -12,16 +12,19 @@ import {
 import {
   acquireDeploymentLock,
   createImageRelease,
+  getTenantReleaseState,
   listReleaseDeployments,
 } from '../services/releaseCatalog.js';
 import {
   applyReleaseToTenant,
+  getRollbackEligibility,
   rollbackTenant,
   startReleaseBatch,
 } from '../services/releaseOrchestrator.js';
 import { runStoreProvisioning } from '../services/storeProvisioning.js';
 import { env } from '../config/env.js';
 import { jsonResponse, loginAsOffice, authHeader } from './helpers.js';
+import { signOfficeToken } from '../middleware/auth.js';
 
 const COOLIFY = 'http://coolify.test';
 const OLD_DIGEST = `sha256:${'0'.repeat(64)}`;
@@ -42,6 +45,10 @@ let deployFailureStatus: number | null = null;
 let missingStorage = false;
 let storeStatusName: string | null = null;
 let activeAppDeployment = false;
+let createdAppName = 'za-pos-test';
+let createdAppFqdn = 'https://test.example';
+let appImageName = 'ghcr.io/hoosainmadhi/vula-pos-store@sha256';
+let appImageTag = 'old';
 
 const configureCoolify = (): void => {
   process.env.COOLIFY_API_URL = COOLIFY;
@@ -64,7 +71,12 @@ const clearCoolify = (): void => {
 };
 
 const seedStore = (
-  over: { slug?: string; coolifyUuid?: string | null; schema?: number | null } = {},
+  over: {
+    slug?: string;
+    coolifyUuid?: string | null;
+    schema?: number | null;
+    baseUrl?: string;
+  } = {},
 ) => {
   const company = createCompany({
     name: `Client ${over.slug ?? 'a'}`,
@@ -75,7 +87,7 @@ const seedStore = (
       name: `Store ${over.slug ?? 'a'}`,
       slug: over.slug ?? 'store-a',
       terminalCount: 1,
-      baseUrl: `https://${over.slug ?? 'store-a'}.example`,
+      baseUrl: over.baseUrl ?? `https://${over.slug ?? 'store-a'}.example`,
     },
     'cp-token',
   );
@@ -119,12 +131,33 @@ const release = (
     ...over,
   });
 
+/** Record a terminal-success deployment row, as the orchestrator does on success. */
+const recordCompleteDeployment = (
+  storeId: number,
+  action: 'provision' | 'upgrade' | 'rollback',
+  releaseId: number,
+  fromReleaseId: number | null,
+  toDigest: string,
+): void => {
+  getRegistryDb()
+    .prepare(
+      `INSERT INTO release_deployments
+         (tenant_type, tenant_id, release_id, action, from_release_id, to_release_id,
+          to_digest, status, phase, completed_at)
+       VALUES ('store', ?, ?, ?, ?, ?, ?, 'complete', 'healthy', datetime('now'))`,
+    )
+    .run(storeId, releaseId, action, fromReleaseId, releaseId, toDigest);
+};
+
 beforeEach(() => {
   resetRegistryDb();
   // Keep the release suite deterministic even when a previous suite left the
   // singleton open with a file-backed registry in this worker.
   getRegistryDb().exec(
     'DELETE FROM release_batch_items; DELETE FROM release_deployments; DELETE FROM release_batches; DELETE FROM deployment_locks; DELETE FROM image_releases;',
+  );
+  getRegistryDb().exec(
+    'CREATE UNIQUE INDEX IF NOT EXISTS test_image_releases_kind_tag ON image_releases(kind, tag); CREATE UNIQUE INDEX IF NOT EXISTS test_image_releases_kind_digest ON image_releases(kind, digest);',
   );
   configureCoolify();
   calls = [];
@@ -138,6 +171,10 @@ beforeEach(() => {
   missingStorage = false;
   storeStatusName = null;
   activeAppDeployment = false;
+  createdAppName = 'za-pos-test';
+  createdAppFqdn = 'https://test.example';
+  appImageName = 'ghcr.io/hoosainmadhi/vula-pos-store@sha256';
+  appImageTag = 'old';
   fetchMock = jest.spyOn(globalThis, 'fetch');
   fetchMock.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
     const s = String(url);
@@ -147,6 +184,15 @@ beforeEach(() => {
       if (s.endsWith('/applications/dockerimage')) {
         if (createFailureStatus) {
           return jsonResponse(createFailureStatus, { message: 'image not found or unauthorized' });
+        }
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          docker_registry_image_name?: string;
+        };
+        const ref = String(body.docker_registry_image_name ?? '');
+        const parsed = /^(.*)@sha256:([a-f0-9]{64})$/.exec(ref);
+        if (parsed) {
+          appImageName = `${parsed[1]}@sha256`;
+          appImageTag = parsed[2];
         }
         return jsonResponse(201, { uuid: `new-${calls.length}` });
       }
@@ -186,15 +232,26 @@ beforeEach(() => {
       if (method === 'GET' && /\/applications\/[^/]+$/.test(s)) {
         return jsonResponse(200, {
           uuid: s.split('/').pop(),
-          name: 'za-pos-test',
+          name: createdAppName,
+          fqdn: createdAppFqdn,
           status: stopped ? 'exited' : 'running:healthy',
+          container_present: !stopped,
           build_pack: 'dockerimage',
-          docker_registry_image_name: 'ghcr.io/hoosainmadhi/vula-pos-store',
-          docker_registry_image_tag: 'old',
+          docker_registry_image_name: appImageName,
+          docker_registry_image_tag: appImageTag,
         });
       }
       if (method === 'PATCH' && /\/applications\/[^/]+$/.test(s) && patchFailureStatus) {
         return jsonResponse(patchFailureStatus, { message: 'Unauthenticated.' });
+      }
+      if (method === 'PATCH' && /\/applications\/[^/]+$/.test(s)) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          docker_registry_image_name?: string;
+          docker_registry_image_tag?: string;
+        };
+        if (body.docker_registry_image_name) appImageName = body.docker_registry_image_name;
+        if (body.docker_registry_image_tag) appImageTag = body.docker_registry_image_tag;
+        return jsonResponse(200, { ok: true });
       }
       return jsonResponse(200, { ok: true });
     }
@@ -209,6 +266,7 @@ beforeEach(() => {
         status: 'ok',
         app: 'vula',
         version: healthVersion,
+        database: 'connected',
       });
     }
     return jsonResponse(200, {});
@@ -252,6 +310,13 @@ describe('per-tenant release application', () => {
     expect(calls.some((c) => c.method === 'PATCH' && c.url.includes(store.coolify_uuid!))).toBe(
       true,
     );
+    const imagePatch = calls.find(
+      (c) => c.method === 'PATCH' && c.url.includes(store.coolify_uuid!),
+    )!;
+    expect(JSON.parse(imagePatch.body)).toMatchObject({
+      docker_registry_image_name: 'ghcr.io/hoosainmadhi/vula-pos-store@sha256',
+      docker_registry_image_tag: A.replace(/^sha256:/, ''),
+    });
     expect(calls.some((c) => c.method === 'POST' && c.url.includes('/deploy'))).toBe(true);
 
     const updated = getStoreById(store.id)!;
@@ -343,7 +408,74 @@ describe('per-tenant release application', () => {
     expect(updated.deploy_status).toBe('deployed');
   });
 
-  it('rolls back to the previous release only when the target schema is compatible', async () => {
+  it('pins staging creation to the approved destination and verifies the created app', async () => {
+    const oldStaging = {
+      mode: env.stagingMode,
+      project: env.stagingProjectUuid,
+      server: env.stagingServerUuid,
+      destination: env.stagingDestinationUuid,
+      prefixes: [...env.stagingAppPrefixes],
+      domainPrefix: env.stagingDomainPrefix,
+      domainSuffix: env.stagingDomainSuffix,
+    };
+    const oldDestination = process.env.COOLIFY_DESTINATION_UUID;
+    const oldAllowed = [...env.allowedAppUuids];
+    env.stagingMode = true;
+    env.stagingProjectUuid = 'proj';
+    env.stagingServerUuid = 'srv';
+    env.stagingDestinationUuid = 'dest-m4';
+    env.stagingAppPrefixes = ['za-pos-m4-', 'vula-m4-'];
+    env.stagingDomainPrefix = 'm4-';
+    env.stagingDomainSuffix = '.vula-app.co.za';
+    env.allowedAppUuids = [];
+    process.env.COOLIFY_DESTINATION_UUID = 'dest-m4';
+    createdAppName = 'za-pos-m4-store-a';
+    createdAppFqdn = 'https://m4-store-a.vula-app.co.za';
+    try {
+      const store = seedStore({
+        slug: 'm4-store-a',
+        coolifyUuid: null,
+        schema: null,
+        baseUrl: 'https://m4-store-a.vula-app.co.za',
+      });
+      getRegistryDb()
+        .prepare(
+          'UPDATE stores SET image_digest = NULL, image_tag = NULL, last_release_id = NULL WHERE id = ?',
+        )
+        .run(store.id);
+      const rel = release({ tag: 'v-stage', digest: C });
+      expect(env.allowedAppUuids).toEqual([]);
+      const result = await applyReleaseToTenant('store', store.id, rel.id, {
+        actor: 'office@test.local',
+        action: 'provision',
+        healthTimeoutMs: 100,
+        healthIntervalMs: 5,
+      });
+
+      expect(result.status).toBe('complete');
+      const create = calls.find((c) => c.url.endsWith('/applications/dockerimage'));
+      expect(create).toBeDefined();
+      const body = JSON.parse(create!.body) as Record<string, unknown>;
+      expect(body.name).toBe('za-pos-m4-store-a');
+      expect(body.destination_uuid).toBe('dest-m4');
+      expect(body.project_uuid).toBe('proj');
+      expect(body.server_uuid).toBe('srv');
+      expect(getStoreById(store.id)!.coolify_uuid).toMatch(/^new-/);
+    } finally {
+      env.stagingMode = oldStaging.mode;
+      env.stagingProjectUuid = oldStaging.project;
+      env.stagingServerUuid = oldStaging.server;
+      env.stagingDestinationUuid = oldStaging.destination;
+      env.stagingAppPrefixes = [...oldStaging.prefixes];
+      env.stagingDomainPrefix = oldStaging.domainPrefix;
+      env.stagingDomainSuffix = oldStaging.domainSuffix;
+      env.allowedAppUuids = [...oldAllowed];
+      if (oldDestination === undefined) delete process.env.COOLIFY_DESTINATION_UUID;
+      else process.env.COOLIFY_DESTINATION_UUID = oldDestination;
+    }
+  });
+
+  it('rolls back to the previous release when verified forward history proves the target', async () => {
     const store = seedStore({ slug: 'rollback' });
     const first = release({ tag: 'v1', digest: A });
     const second = release({ tag: 'v2', digest: B });
@@ -352,6 +484,7 @@ describe('per-tenant release application', () => {
         "UPDATE stores SET image_digest = ?, image_tag = 'v2', last_release_id = ?, previous_release_id = ?, schema_version = 1 WHERE id = ?",
       )
       .run(B, second.id, first.id, store.id);
+    recordCompleteDeployment(store.id, 'upgrade', second.id, first.id, B);
     calls = [];
     const result = await rollbackTenant('store', store.id, 'office@test.local');
     expect(result.status).toBe('complete');
@@ -362,18 +495,106 @@ describe('per-tenant release application', () => {
     expect(updated.previous_release_id).toBe(second.id);
   });
 
+  it('does not offer the release it just rolled back from as another rollback target', async () => {
+    const store = seedStore({ slug: 'abab' });
+    const a = release({ tag: 'v1', digest: A, version: '1.0.0' });
+    const b = release({ tag: 'v2', digest: B, version: '2.0.0' });
+    getRegistryDb()
+      .prepare(
+        "UPDATE stores SET image_digest = ?, image_tag = 'v1', last_release_id = ? WHERE id = ?",
+      )
+      .run(A, a.id, store.id);
+
+    healthVersion = '2.0.0';
+    const up = await applyReleaseToTenant('store', store.id, b.id, {
+      actor: 'office@test.local',
+      healthTimeoutMs: 100,
+      healthIntervalMs: 5,
+    });
+    expect(up.status).toBe('complete');
+    expect(getRollbackEligibility(getTenantReleaseState('store', store.id)!)).toMatchObject({
+      eligible: true,
+      targetReleaseId: a.id,
+    });
+
+    healthVersion = '1.0.0';
+    const down = await rollbackTenant('store', store.id, 'office@test.local');
+    expect(down.status).toBe('complete');
+    expect(down.toDigest).toBe(A);
+
+    const after = getTenantReleaseState('store', store.id)!;
+    expect(after.lastReleaseId).toBe(a.id);
+    // The rolled-back-from release is still recorded, but recorded history now
+    // says the only forward move into A was the original baseline: no target.
+    expect(after.previousReleaseId).toBe(b.id);
+    const eligibility = getRollbackEligibility(after);
+    expect(eligibility.eligible).toBe(false);
+    expect(eligibility.targetReleaseId).toBeNull();
+    expect(eligibility.reason).toMatch(/restored by a rollback/);
+
+    await expect(rollbackTenant('store', store.id, 'office@test.local')).rejects.toThrow(
+      /rollback_not_eligible/,
+    );
+
+    // B remains reachable through the normal Upgrade workflow.
+    healthVersion = '2.0.0';
+    const forwardAgain = await applyReleaseToTenant('store', store.id, b.id, {
+      actor: 'office@test.local',
+      action: 'upgrade',
+      healthTimeoutMs: 100,
+      healthIntervalMs: 5,
+    });
+    expect(forwardAgain.status).toBe('complete');
+    expect(getStoreById(store.id)!.image_digest).toBe(B);
+  });
+
+  it('after A -> B -> C -> rollback B, offers A rather than the release just left', () => {
+    const store = seedStore({ slug: 'abc' });
+    const a = release({ tag: 'v1', digest: A, version: '1.0.0' });
+    const b = release({ tag: 'v2', digest: B, version: '2.0.0' });
+    const c = release({ tag: 'v3', digest: C, version: '3.0.0' });
+    getRegistryDb()
+      .prepare(
+        'UPDATE stores SET image_digest = ?, last_release_id = ?, previous_release_id = ?, schema_version = 1 WHERE id = ?',
+      )
+      .run(B, b.id, c.id, store.id);
+    recordCompleteDeployment(store.id, 'upgrade', b.id, a.id, B);
+    recordCompleteDeployment(store.id, 'upgrade', c.id, b.id, C);
+    recordCompleteDeployment(store.id, 'rollback', b.id, c.id, B);
+
+    const eligibility = getRollbackEligibility(getTenantReleaseState('store', store.id)!);
+    expect(eligibility).toMatchObject({ eligible: true, targetReleaseId: a.id });
+  });
+
+  it('refuses a requested rollback target that is not the verified one', async () => {
+    const store = seedStore({ slug: 'rollback-mismatch' });
+    const a = release({ tag: 'v1', digest: A });
+    const b = release({ tag: 'v2', digest: B });
+    getRegistryDb()
+      .prepare('UPDATE stores SET image_digest = ?, last_release_id = ? WHERE id = ?')
+      .run(B, b.id, store.id);
+    recordCompleteDeployment(store.id, 'upgrade', b.id, a.id, B);
+
+    await expect(rollbackTenant('store', store.id, 'office@test.local', b.id)).rejects.toThrow(
+      /not the verified rollback target/,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
   it('refuses a rollback whose target cannot open the current schema', async () => {
     const store = seedStore({ slug: 'rollback-schema' });
     const older = release({ tag: 'v0', digest: A, schemaVersion: 0, schemaMin: 0, schemaMax: 0 });
+    const current = release({ tag: 'v2', digest: B });
     getRegistryDb()
       .prepare(
-        'UPDATE stores SET schema_version = 1, last_release_id = ?, previous_release_id = ? WHERE id = ?',
+        'UPDATE stores SET image_digest = ?, schema_version = 1, last_release_id = ?, previous_release_id = ? WHERE id = ?',
       )
-      .run(older.id + 1, older.id, store.id);
+      .run(B, current.id, older.id, store.id);
+    recordCompleteDeployment(store.id, 'upgrade', current.id, older.id, B);
     calls = [];
-    const result = await rollbackTenant('store', store.id, 'office@test.local');
-    expect(result.status).toBe('failed');
-    expect(result.error).toMatch(/schema_incompatible/);
+    await expect(rollbackTenant('store', store.id, 'office@test.local')).rejects.toThrow(
+      /rollback_not_eligible/,
+    );
     expect(calls).toHaveLength(0);
   });
 
@@ -783,5 +1004,150 @@ describe('release API surface', () => {
     expect(rollout.body.batch.status).toBe('dry_run');
     expect(rollout.body.items).toHaveLength(1);
     expect(rollout.body.items[0].tenantId).toBe(store.id);
+  });
+
+  it('reports the Control Plane environment from server configuration', async () => {
+    const app = createApp();
+    const token = await loginAsOffice(app);
+    const oldStaging = env.stagingMode;
+    try {
+      env.stagingMode = false;
+      const dev = await request(app).get('/api/auth/me').set(authHeader(token)).expect(200);
+      expect(dev.body.environment).toBe('development');
+      env.stagingMode = true;
+      const staging = await request(app).get('/api/auth/me').set(authHeader(token)).expect(200);
+      expect(staging.body.environment).toBe('staging');
+    } finally {
+      env.stagingMode = oldStaging;
+    }
+  });
+
+  it('refuses rollback when no server-validated target exists', async () => {
+    const app = createApp();
+    const token = await loginAsOffice(app);
+    const store = createStore(
+      {
+        name: 'No Rollback Store',
+        slug: 'no-rollback-store',
+        terminalCount: 1,
+        baseUrl: 'https://no-rollback.example',
+      },
+      'cp-token',
+    );
+    await request(app)
+      .post(`/api/releases/tenants/store/${store.id}/rollback`)
+      .set(authHeader(token))
+      .send({})
+      .expect(409);
+    const fleet = await request(app).get('/api/releases/fleet').set(authHeader(token)).expect(200);
+    const state = (
+      fleet.body.stores as Array<{ id: number; rollbackEligible: boolean; rollbackReason: string }>
+    ).find((row) => row.id === store.id);
+    expect(state?.rollbackEligible).toBe(false);
+    expect(state?.rollbackReason).toMatch(/No verified successful deployment/);
+  });
+
+  it('publishes the verified rollback target and refuses a different requested release', async () => {
+    const app = createApp();
+    const token = await loginAsOffice(app);
+    const store = seedStore({ slug: 'api-rollback-target' });
+    const a = release({ tag: 'api-a', digest: A });
+    const b = release({ tag: 'api-b', digest: B });
+    const c = release({ tag: 'api-c', digest: C });
+    getRegistryDb()
+      .prepare('UPDATE stores SET image_digest = ?, last_release_id = ? WHERE id = ?')
+      .run(B, b.id, store.id);
+    recordCompleteDeployment(store.id, 'upgrade', b.id, a.id, B);
+    calls = [];
+
+    const fleet = await request(app).get('/api/releases/fleet').set(authHeader(token)).expect(200);
+    const state = (
+      fleet.body.stores as Array<{
+        id: number;
+        rollbackEligible: boolean;
+        rollbackReleaseId: number | null;
+        rollbackReason: string | null;
+      }>
+    ).find((row) => row.id === store.id);
+    expect(state?.rollbackEligible).toBe(true);
+    expect(state?.rollbackReleaseId).toBe(a.id);
+    expect(state?.rollbackReason).toBeNull();
+
+    const refused = await request(app)
+      .post(`/api/releases/tenants/store/${store.id}/rollback`)
+      .set(authHeader(token))
+      .send({ toReleaseId: c.id })
+      .expect(409);
+    expect(refused.body.error).toMatch(/not the verified rollback target/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('disables the rollback button after A -> B -> A although previousReleaseId is B', async () => {
+    const app = createApp();
+    const token = await loginAsOffice(app);
+    const store = seedStore({ slug: 'api-abab' });
+    const a = release({ tag: 'api-abab-a', digest: A });
+    const b = release({ tag: 'api-abab-b', digest: B });
+    getRegistryDb()
+      .prepare(
+        'UPDATE stores SET image_digest = ?, last_release_id = ?, previous_release_id = ? WHERE id = ?',
+      )
+      .run(A, a.id, b.id, store.id);
+    recordCompleteDeployment(store.id, 'upgrade', b.id, a.id, B);
+    recordCompleteDeployment(store.id, 'rollback', a.id, b.id, A);
+
+    const fleet = await request(app).get('/api/releases/fleet').set(authHeader(token)).expect(200);
+    const state = (
+      fleet.body.stores as Array<{
+        id: number;
+        lastReleaseId: number | null;
+        previousReleaseId: number | null;
+        rollbackEligible: boolean;
+        rollbackReleaseId: number | null;
+        rollbackReason: string | null;
+      }>
+    ).find((row) => row.id === store.id);
+    expect(state?.lastReleaseId).toBe(a.id);
+    expect(state?.previousReleaseId).toBe(b.id);
+    expect(state?.rollbackEligible).toBe(false);
+    expect(state?.rollbackReleaseId).toBeNull();
+    expect(state?.rollbackReason).toMatch(/restored by a rollback/);
+
+    await request(app)
+      .post(`/api/releases/tenants/store/${store.id}/rollback`)
+      .set(authHeader(token))
+      .send({})
+      .expect(409);
+  });
+
+  it('exposes release-manager capability and denies non-manager mutations', async () => {
+    const app = createApp();
+    const manager = await loginAsOffice(app);
+    const caps = await request(app)
+      .get('/api/releases/capabilities')
+      .set(authHeader(manager))
+      .expect(200);
+    expect(caps.body.releaseManager).toBe(true);
+
+    const outsider = signOfficeToken('viewer@test.local');
+    const outsiderCaps = await request(app)
+      .get('/api/releases/capabilities')
+      .set(authHeader(outsider))
+      .expect(200);
+    expect(outsiderCaps.body.releaseManager).toBe(false);
+
+    await request(app)
+      .post('/api/releases')
+      .set(authHeader(outsider))
+      .send({
+        kind: 'store',
+        tag: 'forbidden',
+        digest: D,
+        version: '1.0.0',
+        schemaVersion: 1,
+        schemaMin: 1,
+        schemaMax: 1,
+      })
+      .expect(403);
   });
 });

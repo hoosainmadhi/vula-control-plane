@@ -4,10 +4,12 @@ import { getStoreById, setStoreDeployStatus, type StoreRecord } from '../config/
 import {
   createStoreDeployment,
   createStoreImageDeployment,
+  getApplication,
   isCoolifyConfigured,
   triggerDeploy,
   CoolifyError,
 } from './coolify.js';
+import { assertApplicationAllowed } from './applicationGuard.js';
 import {
   recordProvisionedRelease,
   resolveDefaultRelease,
@@ -141,7 +143,9 @@ export async function runStoreProvisioning(
       const release = resolveDefaultRelease('store');
       if (
         !release &&
-        (store.environment === 'production' || !env.allowLegacyDockerfileOnboarding)
+        (store.environment === 'production' ||
+          env.stagingMode ||
+          !env.allowLegacyDockerfileOnboarding)
       ) {
         throw new Error(
           'No approved stable Store release is registered; refusing to create a new tenant from a Dockerfile build',
@@ -185,7 +189,11 @@ export async function runStoreProvisioning(
         imageDeploymentUuid = await triggerDeploy(coolifyUuid, true);
       }
     } else {
-      // Re-trigger deploy on existing Coolify app
+      // Re-trigger deploy on existing Coolify app. In staging, the UUID
+      // allowlist is mandatory before any existing application is touched.
+      if (env.stagingMode) {
+        assertApplicationAllowed('store', await getApplication(coolifyUuid));
+      }
       await triggerDeploy(coolifyUuid);
     }
 

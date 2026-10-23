@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireOffice } from '../middleware/auth.js';
+import { requireOffice, requireReleaseManager, isReleaseManagerEmail } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HttpError } from '../utils/errors.js';
 import {
@@ -28,12 +28,25 @@ import {
 import {
   applyReleaseToTenant,
   getBatch,
+  getRollbackEligibility,
+  reconcileTenantRuntime,
   rollbackTenant,
   startReleaseBatch,
 } from '../services/releaseOrchestrator.js';
 
 export const releasesRouter = Router();
 releasesRouter.use(requireOffice);
+
+releasesRouter.get(
+  '/capabilities',
+  asyncHandler(async (req, res) => {
+    res.json({
+      email: req.auth!.email,
+      releaseManager: isReleaseManagerEmail(req.auth!.email),
+      configured: true,
+    });
+  }),
+);
 
 const releaseOut = (release: ReturnType<typeof getImageRelease> & object) => ({
   id: release.id,
@@ -52,30 +65,37 @@ const releaseOut = (release: ReturnType<typeof getImageRelease> & object) => ({
   createdAt: release.created_at,
 });
 
-const stateOut = (state: ReturnType<typeof getTenantReleaseState> & object) => ({
-  tenantType: state.tenantType,
-  id: state.id,
-  name: state.name,
-  slug: state.slug,
-  baseUrl: state.baseUrl,
-  environment: state.environment,
-  companyId: state.companyId,
-  companySlug: state.companySlug,
-  status: state.status,
-  deployStatus: state.deployStatus,
-  coolifyUuid: state.coolifyUuid,
-  volumeName: state.volumeName,
-  imageDigest: state.imageDigest,
-  imageTag: state.imageTag,
-  releaseChannel: state.releaseChannel,
-  desiredReleaseId: state.desiredReleaseId,
-  lastReleaseId: state.lastReleaseId,
-  previousReleaseId: state.previousReleaseId,
-  lastReleaseAt: state.lastReleaseAt,
-  releaseState: state.releaseState,
-  schemaVersion: state.schemaVersion,
-  appVersion: state.appVersion,
-});
+const stateOut = (state: ReturnType<typeof getTenantReleaseState> & object) => {
+  const rollback = getRollbackEligibility(state as never);
+  return {
+    tenantType: state.tenantType,
+    id: state.id,
+    name: state.name,
+    slug: state.slug,
+    baseUrl: state.baseUrl,
+    environment: state.environment,
+    companyId: state.companyId,
+    companySlug: state.companySlug,
+    status: state.status,
+    deployStatus: state.deployStatus,
+    coolifyUuid: state.coolifyUuid,
+    volumeName: state.volumeName,
+    imageDigest: state.imageDigest,
+    imageTag: state.imageTag,
+    releaseChannel: state.releaseChannel,
+    desiredReleaseId: state.desiredReleaseId,
+    lastReleaseId: state.lastReleaseId,
+    previousReleaseId: state.previousReleaseId,
+    lastReleaseAt: state.lastReleaseAt,
+    releaseState: state.releaseState,
+    schemaVersion: state.schemaVersion,
+    appVersion: state.appVersion,
+    runtimeHealth: state.runtimeHealth,
+    rollbackEligible: rollback.eligible,
+    rollbackReleaseId: rollback.targetReleaseId,
+    rollbackReason: rollback.reason,
+  };
+};
 
 const batchOut = (batch: NonNullable<ReturnType<typeof getBatch>>) => ({
   batch: {
@@ -130,6 +150,7 @@ releasesRouter.get(
 
 releasesRouter.post(
   '/',
+  requireReleaseManager,
   asyncHandler(async (req, res) => {
     const release = createImageRelease(req.body);
     recordAuditLog(req.auth!.email, 'release_published', 'release', release.id, {
@@ -209,6 +230,7 @@ releasesRouter.get(
 
 releasesRouter.patch(
   '/tenants/:tenantType/:tenantId/channel',
+  requireReleaseManager,
   asyncHandler(async (req, res) => {
     const tenantType = tenantTypeOf(req.params.tenantType);
     const tenantId = parseIdParam(req.params.tenantId);
@@ -229,7 +251,25 @@ releasesRouter.patch(
 );
 
 releasesRouter.post(
+  '/tenants/:tenantType/:tenantId/reconcile',
+  requireReleaseManager,
+  asyncHandler(async (req, res) => {
+    const tenantType = tenantTypeOf(req.params.tenantType);
+    const tenantId = parseIdParam(req.params.tenantId);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await reconcileTenantRuntime(
+      tenantType,
+      tenantId,
+      req.auth!.email,
+      optionalString(body, 'reason', 500) ?? undefined,
+    );
+    res.json({ result });
+  }),
+);
+
+releasesRouter.post(
   '/tenants/:tenantType/:tenantId/apply',
+  requireReleaseManager,
   asyncHandler(async (req, res) => {
     const tenantType = tenantTypeOf(req.params.tenantType);
     const tenantId = parseIdParam(req.params.tenantId);
@@ -253,6 +293,7 @@ releasesRouter.post(
 
 releasesRouter.post(
   '/tenants/:tenantType/:tenantId/rollback',
+  requireReleaseManager,
   asyncHandler(async (req, res) => {
     const tenantType = tenantTypeOf(req.params.tenantType);
     const tenantId = parseIdParam(req.params.tenantId);
@@ -269,6 +310,7 @@ releasesRouter.post(
 
 releasesRouter.post(
   '/:id/rollout',
+  requireReleaseManager,
   asyncHandler(async (req, res) => {
     const releaseId = parseIdParam(req.params.id);
     const release = getImageRelease(releaseId);

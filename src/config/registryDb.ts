@@ -1905,6 +1905,8 @@ export const getStoreBySlug = (slug: string): StoreRecord | null => {
 export interface CreateStoreInput {
   name: string;
   slug: string;
+  /** Short Coolify label; absent derives `<client>-<store>`. */
+  deploymentName?: string | null;
   vertical?: StoreVertical;
   /** Defaults to 'store' — a warehouse is a deliberate choice. */
   kind?: StoreKind;
@@ -2944,6 +2946,7 @@ export interface PanelInput {
   /** Short Coolify label; absent derives `<client>-ho`. */
   deploymentName?: string | null;
   baseUrl: string;
+  deploymentName?: string | null;
   controlPlaneToken: string;
   adminEmail?: string | null;
 }

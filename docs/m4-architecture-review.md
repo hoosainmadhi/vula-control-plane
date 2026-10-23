@@ -195,77 +195,132 @@ New:
 
 - `src/services/releaseCatalog.ts`
 - `src/services/releaseOrchestrator.ts`
+- `src/services/applicationGuard.ts`
 - `src/routes/releases.ts`
 - `src/__tests__/releases.test.ts`
+- `src/__tests__/stagingBoundary.test.ts`
 - `docs/m4-shared-image-control-plane.md`
 - `docs/m4-architecture-review.md`
 - `docs/m4.1-live-integration-plan.md`
+- `docs/m4.1-staging-ownership.json`
+- `docs/m4.1-token-rotation-plan.md`
+- `docs/m4.1-stage-a-execution.md`
+- `docs/onboarding-deployment-name-defect.md`
 
 Modified:
 
 - `src/config/registryDb.ts` / `schema.sql` — release tables, tenant image
   state, release state, phases, deployment tracking.
 - `src/config/env.ts` / `.env.sample` — image names, health/lock timing,
-  allowlist, legacy-onboarding opt-in.
+  allowlist, legacy-onboarding opt-in and the optional staging boundary.
 - `src/__tests__/env-setup.ts` — pins the explicit legacy-onboarding opt-in for
   tests that exercise the old path.
 - `src/services/coolify.ts` — dockerimage creation, digest patch, deployment
-  status/storages clients, trigger id.
+  status/storages clients, trigger id, exact staging creation checks.
 - `src/services/storeProvisioning.ts` — image-first onboarding, verification,
-  production/opt-in fallback policy.
-- `src/services/clientOrchestrator.ts` — image-first onboarding and verification.
+  production/opt-in fallback policy and staging redeploy guard.
+- `src/services/clientOrchestrator.ts` — image-first onboarding, verification
+  and staging retry guard.
+- `scripts/release-apps.sh` — reads only the Vula application's own credential;
+  no OptiMed `.env` fallback.
 - `src/routes/index.ts` — release routes.
 - `CONTEXT.md`, `progress.md`, `findings.md`, `task_plan.md` — doctrine and
   review record.
 
-## 7. M4.1 live-integration plan (approval required before execution)
+## 7. M4.1 Stage A (complete under approved naming amendment 1)
 
-**Objective:** validate the controller against the real Coolify API and one
-isolated test tenant, without migrating an existing demo. The exact staging
-targets, credential boundaries, test-release strategy, read-only contract
-evidence, abort conditions and cleanup are in
-[`docs/m4.1-live-integration-plan.md`](./m4.1-live-integration-plan.md).
+**Execution result:** the CP and one Store are running and healthy. The Store app
+is `za-pos-m4-staging-client-m4-store-a`, accepted by explicit amendment after
+ownership verification; the exact UUID is allowlisted. No rename or recreation
+was performed. Details:
+[`docs/m4.1-stage-a-execution.md`](./m4.1-stage-a-execution.md). The separate
+`deploymentName` onboarding defect is recorded in
+[`docs/onboarding-deployment-name-defect.md`](./onboarding-deployment-name-defect.md).
 
-1. **Preconditions**
-   - CP deployed to staging from the reviewed `dev` commit (separate approval).
-   - `VULA_ALLOWED_APP_UUIDS` populated with only the test app UUID(s); any app
-     UUID created during the pilot must be added before its first upgrade.
-   - One stable Store release and one stable HO release registered by digest,
-     with version/revision/schema metadata.
-   - A new test tenant/app with its own copied DB and volume; no existing demo
-     is used or modified.
-   - Backups/rollback source understood; no live credential rotation.
-2. **Read-only/live preflight**
-   - Confirm `/health`, app kind, storage `/data`, tenant identity and schema.
-   - Confirm the app is `dockerimage` and its UUID is allowlisted.
-3. **Provisioning**
-   - Create a new test Store from the stable digest; verify exact digest,
-     runtime env independence, volume, health version/revision and no build.
-4. **Upgrade**
-   - Apply the next test release; confirm stop-first, Coolify `queued` →
-     `deploying` → `verifying` → `healthy`, no two writers, image/version change.
-5. **Safety negatives**
-   - Repeat the same release (already-current no-op).
-   - Concurrent apply (one lock, no second deploy).
-   - Force a deployment failure and confirm no tenant image update; roll back to
-     the previous release and verify schema/health.
-   - Remove `/data` from a copy and confirm the preflight refuses before stop.
-   - Point at a non-allowlisted app and confirm refusal.
-   - Register a schema-incompatible release and confirm refusal.
-6. **Waves**
-   - Two test tenants in two waves with `stopOnFailure=true`; fail wave 1 and
-     confirm wave 2 is skipped. Repeat with `stopOnFailure=false` only in an
-     isolated test if approved.
-7. **Audit and evidence**
-   - Export `release_batches`, items, deployments, audit rows and deployment
-     logs; record timings, Coolify status transitions, image digests and
-     health/revision. No secrets in evidence.
-8. **Rollback plan**
-   - Stop/delete the test apps and volumes; never touch existing demos. If an
-     existing app were ever used, rollback requires the previous image plus the
-     schema-compatibility check and a verified DB copy; that is not part of
-     M4.1.
+**Objective:** validate one CP-provisioned Store from the approved arm64 image
+on isolated staging infrastructure, without upgrading, rolling back, migrating a
+demo or touching the production Control Plane. Exact targets, credentials,
+release payload, abort conditions, stop-first recovery and cleanup are in
+[`docs/m4.1-live-integration-plan.md`](./m4.1-live-integration-plan.md) and the
+exact-resource manifest is
+[`docs/m4.1-staging-ownership.json`](./m4.1-staging-ownership.json).
 
-**Explicitly excluded:** fleet migration, existing demo modification, CP
-production deployment, credential rotation, registry publication, shared proxy/
-`acme.json`/DNS/firewall changes.
+### 7.1 Read-only findings that change the approval
+
+- **Coolify tokens are team-scoped, not project/app-scoped.** The installed
+  Coolify 4.4.7 token belongs to Root Team (`id: 0`) and can see 28 applications,
+  13 projects and one server. It supports `read`, `write`, `deploy`, `root` and
+  sensitive abilities, but no per-project restriction. A new team cannot use the
+  existing Root Team server; true isolation needs a separate Coolify instance or
+  team-owned server.
+- **The CP UUID allowlist is not token scoping.** `VULA_ALLOWED_APP_UUIDS` is a
+  Control Plane guard for release operations. It does not reduce what a leaked
+  Coolify token can modify. Stage A must explicitly accept the residual Root
+  Team access or remain blocked. During preparation, shell-sourcing the CP
+  `.env` emitted part of the existing token into a local tool log; treat that
+  token as exposed. Its replacement is coordinated per application
+  (`coolify-optimed-cp`, `coolify-vula-prod-cp`,
+  `coolify-vula-staging-cp`, `coolify-vula-m4-staging-cp`) and is independent of
+  Stage A. The Vula release script no longer falls back to OptiMed's `.env`.
+- **The isolated branch is unpushed.** Stage A must deploy the exact reviewed
+  `m4/shared-image-release` commit, not dirty `dev`; until that commit is on the
+  CP remote (or packaged as an approved image), Stage A cannot start.
+- **Staging URLs and TLS are available without DNS changes.** Wildcard DNS
+  already resolves the proposed hosts. Existing subdomains have per-host Let's
+  Encrypt certificates; the new hosts currently return the Traefik default
+  certificate until their routers exist. No Cloudflare Tunnel, DNS edit, proxy
+  edit or `acme.json` action is permitted.
+- **The CP database must sit directly in the mounted volume.** The image defaults
+  to `CP_DB_PATH=/data/control-plane.db` and `VOLUME /data`; Stage A uses a new
+  `vula-cp-m4-staging-data` volume at `/data`, not the withdrawn
+  `/data/m4-staging/...` path.
+
+### 7.2 Stage A scope
+
+1. Deploy `vula-cp-m4-staging` from the exact branch commit with a new empty
+   registry, staging-only keys/credentials and auto-deploy off.
+2. Register only the approved Store A digest
+   (`sha256:6db6b974...`, `v2026.10.21-5781c2c`, revision `5781c2c0...`,
+   schema 1/1/1).
+3. Provision **one** Store through the CP client-onboarding API, with no manual
+   Coolify app pre-creation: `za-pos-m4-store-a` at
+   `https://m4-store-a.vula-app.co.za`, volume
+   `vula-store-m4-store-a-sqlite-db`; then set the registry row to
+   `environment: "staging"`.
+4. Verify exact digest, arm64 registry manifest, per-host TLS, `/health`, tenant
+   DB/schema, runtime env independence and one `/data` volume.
+5. Enable the exact Store app UUID in `VULA_ALLOWED_APP_UUIDS`, restart the
+   staging CP and verify no other tenant exists.
+6. Record redacted Coolify API responses, CP job/steps and deployment lifecycle;
+   fill the ownership manifest.
+
+### 7.3 Not in Stage A
+
+Release B publication, upgrade/rollback, wave tests, Store B, Head Office, demo
+migration, production CP deployment, image publication, credential rotation,
+DNS/proxy/`acme.json` changes and any unrelated app modification.
+
+### 7.4 Repository-side staging boundary
+
+`src/services/applicationGuard.ts` makes the isolation enforceable rather than
+procedural:
+
+- staging creation requires the effective Coolify project, server and
+  destination to match `VULA_STAGING_*`;
+- the expected app name must match `VULA_STAGING_APP_PREFIXES` and the FQDN must
+  match the staging domain prefix/suffix;
+- after Coolify creates the app, the CP persists the UUID and reads the app back
+  to verify its exact name, Docker Image build pack, project (when reported) and
+  FQDN; a mismatch fails the deployment;
+- staging requires a non-empty exact UUID allowlist for every existing-app
+  modification, including the redeploy/retry paths that previously bypassed the
+  release controller;
+- production behavior is unchanged unless `VULA_STAGING_MODE=true`.
+
+Tests: `src/__tests__/stagingBoundary.test.ts` covers project/server/destination
+mismatch, name/domain refusal, missing scope, created-app mismatch and the exact
+allowlist. Full branch suite: **532/532** after this guard.
+
+Residual: the staging CP still holds a Root Team Coolify token. The guard
+prevents the CP's normal code paths from selecting another project/app, but a
+server-side compromise could still use the token outside those paths.

@@ -12,9 +12,13 @@ import {
   createReleaseDeployment,
   finishReleaseDeployment,
   getImageRelease,
+  getLastSuccessfulForwardDeployment,
   getReleaseBatch,
   getRunningReleaseDeployment,
   getTenantReleaseState,
+  hasSuccessfulRollbackInto,
+  imageNameFor,
+  listImageReleases,
   listReleaseBatchItems,
   listTenantReleaseStates,
   markTenantDeployStatus,
@@ -41,7 +45,8 @@ import {
   updateApplicationImage,
   type CoolifyDeploymentSummary,
 } from './coolify.js';
-import { ping, pingPanel } from './storeClient.js';
+import { assertApplicationAllowed } from './applicationGuard.js';
+import { fetchTelemetry, ping, pingPanel } from './storeClient.js';
 import {
   getPanelById,
   getStoreById,
@@ -110,6 +115,84 @@ export const waitForTenantHealth = async (
     await delay(intervalMs);
   } while (Date.now() < deadline);
   return false;
+};
+
+/**
+ * Post-deploy readiness. Coolify can report `running:unhealthy` while a new
+ * container is warming up, then become healthy. Poll for the exact image and
+ * health rather than treating the first transient status as a terminal failure.
+ * A definitively failed/exited/stopped app or a wrong image fails immediately;
+ * time out only when the app never reaches the expected state.
+ */
+export const waitForApplicationReady = async (
+  coolifyUuid: string,
+  release: ImageRelease,
+  baseUrl: string,
+  timeoutMs = env.releaseHealthTimeoutMs,
+  intervalMs = env.releaseHealthIntervalMs,
+): Promise<{ ok: boolean; error?: string }> => {
+  const expectedTag = release.digest.replace(/^sha256:/, '');
+  const expectedName = `${imageNameFor(release.kind)}@sha256`;
+  const cleanBase = baseUrl.replace(/\/+$/, '');
+  const deadline = Date.now() + timeoutMs;
+  do {
+    let application;
+    try {
+      application = await getApplication(coolifyUuid);
+    } catch {
+      if (Date.now() >= deadline) break;
+      await delay(intervalMs);
+      continue;
+    }
+
+    const status = String(application.status ?? '').toLowerCase();
+    // Coolify's human-readable status is unreliable in both directions after a
+    // restart: it can say running:healthy while absent, or exited while the new
+    // container is already serving. Only a definitive `failed` status is
+    // terminal; readiness itself is proven by the image fields and /health.
+    if (/failed/.test(status)) {
+      return { ok: false, error: `application_status_${status}` };
+    }
+    const imageName = String(application.docker_registry_image_name ?? '');
+    const imageTag = String(application.docker_registry_image_tag ?? '');
+    if (imageName !== expectedName || imageTag !== expectedTag) {
+      return {
+        ok: false,
+        error: `application_image_mismatch: expected ${expectedName}:${expectedTag}, running ${imageName || '(none)'}:${imageTag || '(none)'}`,
+      };
+    }
+
+    try {
+      const res = await fetch(`${cleanBase}/health`, {
+        redirect: 'error',
+        signal: AbortSignal.timeout(5000),
+      });
+      const body = (await res.json().catch(() => null)) as {
+        status?: unknown;
+        app?: unknown;
+        service?: unknown;
+        version?: unknown;
+        revision?: unknown;
+        database?: unknown;
+      } | null;
+      const identified = body?.app === 'vula' || body?.service === 'vula-head-office';
+      const versionMatches = body?.version === release.version;
+      const revisionMatches = !release.revision || body?.revision === release.revision;
+      const databaseMatches = release.kind !== 'store' || body?.database === 'connected';
+      if (res.ok && identified && versionMatches && revisionMatches && databaseMatches) {
+        return { ok: true };
+      }
+    } catch {
+      // Container is still warming up or the route is not ready.
+    }
+
+    if (Date.now() >= deadline) break;
+    await delay(intervalMs);
+  } while (Date.now() < deadline);
+  return {
+    ok: false,
+    error: `health_timeout_or_version_mismatch: ${cleanBase}/health did not report version ${release.version}`,
+  };
 };
 
 const assertReleaseKind = (release: ImageRelease, tenantType: TenantType): void => {
@@ -195,7 +278,7 @@ export const waitForCoolifyDeployment = async (
  * do not start the new image until Coolify reports the old one is no longer
  * running.
  */
-const waitForApplicationStopped = async (
+export const waitForApplicationStopped = async (
   coolifyUuid: string,
   timeoutMs = 30_000,
   intervalMs = 500,
@@ -203,8 +286,10 @@ const waitForApplicationStopped = async (
   const deadline = Date.now() + timeoutMs;
   do {
     const application = await getApplication(coolifyUuid);
-    const status = String(application.status ?? '').toLowerCase();
-    if (status && !/running|starting|restarting|deploying/.test(status)) return true;
+    // `container_present === false` is authoritative evidence that the app's
+    // container is gone. The human-readable status can remain running:healthy
+    // after Coolify has removed it, so status alone is not sufficient.
+    if (application.container_present === false) return true;
     if (Date.now() >= deadline) break;
     await delay(intervalMs);
   } while (Date.now() < deadline);
@@ -236,49 +321,14 @@ export const verifyImageDeployment = async (
   if (!deployment.ok) {
     throw new Error(deployment.error ?? `coolify_deployment_${deployment.status}`);
   }
-  const application = await getApplication(coolifyUuid);
-  const appStatus = String(application.status ?? '').toLowerCase();
-  if (appStatus && /failed|exited|stopped|unhealthy/.test(appStatus)) {
-    throw new Error(`application_status_${appStatus}`);
-  }
-  const healthy = await waitForTenantHealth(baseUrl, options.timeoutMs, options.intervalMs, {
-    version: release.version,
-    revision: release.revision,
-  });
-  if (!healthy) {
-    throw new Error(
-      `health_timeout_or_version_mismatch: ${baseUrl}/health did not report version ${release.version}`,
-    );
-  }
-};
-
-/** The explicit allowlist/prefix check before an existing app may be modified. */
-const assertApplicationAllowed = (
-  kind: 'store' | 'ho',
-  application: { uuid: string; name?: string },
-): void => {
-  if (env.isProduction && env.allowedAppUuids.length === 0) {
-    throw new HttpError(
-      409,
-      'application_allowlist_missing: VULA_ALLOWED_APP_UUIDS is not configured; refusing to modify an existing Coolify application in production',
-      'application_allowlist_missing',
-    );
-  }
-  if (env.allowedAppUuids.length && !env.allowedAppUuids.includes(application.uuid)) {
-    throw new HttpError(
-      409,
-      `application_not_allowlisted: Coolify application ${application.uuid} is not in VULA_ALLOWED_APP_UUIDS; refusing to modify it`,
-      'application_not_allowlisted',
-    );
-  }
-  const prefix = kind === 'store' ? 'za-pos-' : 'vula-';
-  if (!application.name || !application.name.startsWith(prefix)) {
-    throw new HttpError(
-      409,
-      `application_not_vula: Coolify application ${application.uuid} is not a recognised ${kind === 'store' ? 'store' : 'Head Office'} app (${application.name ?? 'no name'}); refusing to modify it`,
-      'application_not_vula',
-    );
-  }
+  const readiness = await waitForApplicationReady(
+    coolifyUuid,
+    release,
+    baseUrl,
+    options.timeoutMs,
+    options.intervalMs,
+  );
+  if (!readiness.ok) throw new Error(readiness.error ?? 'application_not_ready');
 };
 
 /**
@@ -598,7 +648,7 @@ export const applyReleaseToTenant = async (
       await stopApplication(coolifyUuid);
       if (!(await waitForApplicationStopped(coolifyUuid))) {
         throw new Error(
-          `application_stop_timeout: ${coolifyUuid} still reports a running state; refusing to start a second SQLite writer`,
+          `application_stop_timeout: ${coolifyUuid} container absence was not confirmed by Coolify; refusing to start a second SQLite writer`,
         );
       }
       await updateApplicationImage(coolifyUuid, release);
@@ -626,24 +676,17 @@ export const applyReleaseToTenant = async (
       throw new Error(deployment.error ?? `coolify_deployment_${deployment.status}`);
     }
 
-    const application = await getApplication(coolifyUuid);
-    const appStatus = String(application.status ?? '').toLowerCase();
-    if (appStatus && /failed|exited|stopped|unhealthy/.test(appStatus)) {
-      throw new Error(`application_status_${appStatus}`);
-    }
-
     updateReleaseDeploymentTracking(deploymentId, { phase: 'verifying' });
     markTenantDeployStatus(tenantType, tenantId, 'provisioning', 'verifying');
-    const healthy = await waitForTenantHealth(
+    const readiness = await waitForApplicationReady(
+      coolifyUuid,
+      release,
       state.baseUrl,
       options.healthTimeoutMs,
       options.healthIntervalMs,
-      { version: release.version, revision: release.revision },
     );
-    if (!healthy) {
-      throw new Error(
-        `health_timeout_or_version_mismatch: ${state.baseUrl}/health did not report version ${release.version}`,
-      );
+    if (!readiness.ok) {
+      throw new Error(readiness.error ?? 'application_not_ready');
     }
 
     const schemaVersion =
@@ -728,6 +771,101 @@ export const applyReleaseToTenant = async (
   }
 };
 
+export interface RollbackEligibility {
+  eligible: boolean;
+  targetReleaseId: number | null;
+  reason: string | null;
+}
+
+/**
+ * Server-owned rollback eligibility. A rollback returns to the release the
+ * tenant ran before the current release was applied, so the target comes from
+ * verified successful forward history (provision/upgrade INTO the current
+ * release), never from `previous_release_id` alone:
+ *
+ *   A -> B -> rollback A      no target (B is a forward Upgrade, not a rollback)
+ *   A -> B -> C -> rollback B target A (not C, the release just left)
+ *
+ * The target must still be in the catalog, be active, match the tenant kind,
+ * and support the database schema the tenant currently runs.
+ */
+export const getRollbackEligibility = (state: TenantReleaseState): RollbackEligibility => {
+  if (!state.lastReleaseId) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: 'No verified successful deployment is recorded for this tenant',
+    };
+  }
+  const forward = getLastSuccessfulForwardDeployment(
+    state.tenantType,
+    state.id,
+    state.lastReleaseId,
+  );
+  if (!forward) {
+    if (hasSuccessfulRollbackInto(state.tenantType, state.id, state.lastReleaseId)) {
+      return {
+        eligible: false,
+        targetReleaseId: null,
+        reason:
+          'The current release was restored by a rollback; there is no earlier verified release to roll back to. Use Upgrade to move forward',
+      };
+    }
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason:
+        'No verified successful forward deployment into the current release is recorded; use Upgrade to change releases',
+    };
+  }
+  const targetId = forward.from_release_id;
+  if (!targetId) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason:
+        'The current release is the first verified deployment for this tenant; there is no earlier release to roll back to',
+    };
+  }
+  const target = getImageRelease(targetId);
+  if (!target) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: `Rollback target release ${targetId} is not in the catalog`,
+    };
+  }
+  if (target.kind !== (state.tenantType === 'store' ? 'store' : 'ho')) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: 'Rollback target release is for a different application kind',
+    };
+  }
+  if (!target.is_active) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: 'Rollback target release is inactive',
+    };
+  }
+  if (state.schemaVersion === null || state.schemaVersion === undefined) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: 'Current database schema is not reported',
+    };
+  }
+  if (!releaseSupportsSchema(target, state.schemaVersion)) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: `Rollback target supports schema ${target.schema_min}..${target.schema_max}, current schema is ${state.schemaVersion}`,
+    };
+  }
+  return { eligible: true, targetReleaseId: target.id, reason: null };
+};
+
 export const rollbackTenant = async (
   tenantType: TenantType,
   tenantId: number,
@@ -737,11 +875,22 @@ export const rollbackTenant = async (
   const state = getTenantReleaseState(tenantType, tenantId);
   if (!state)
     throw new HttpError(404, tenantType === 'store' ? 'Store not found' : 'Head Office not found');
-  const targetId = toReleaseId ?? state.previousReleaseId;
-  if (!targetId) {
-    throw new ValidationError('No previous release is recorded for this deployment');
+  const eligibility = getRollbackEligibility(state);
+  if (!eligibility.eligible || !eligibility.targetReleaseId) {
+    throw new HttpError(
+      409,
+      `rollback_not_eligible: ${eligibility.reason ?? 'no valid rollback target'}`,
+      'rollback_not_eligible',
+    );
   }
-  const target = getImageRelease(targetId);
+  if (toReleaseId !== undefined && toReleaseId !== eligibility.targetReleaseId) {
+    throw new HttpError(
+      409,
+      `rollback_not_eligible: release ${toReleaseId} is not the verified rollback target; use Upgrade to move to another release`,
+      'rollback_not_eligible',
+    );
+  }
+  const target = getImageRelease(eligibility.targetReleaseId);
   if (!target) throw new HttpError(404, 'Rollback target release not found');
   return applyReleaseToTenant(tenantType, tenantId, target.id, {
     actor,
@@ -943,4 +1092,231 @@ export const getBatch = (id: number): BatchResult | null => {
   const batch = getReleaseBatch(id);
   if (!batch) return null;
   return { batch, items: listReleaseBatchItems(id) };
+};
+
+export interface RuntimeReconcileResult {
+  status: 'complete';
+  tenantType: TenantType;
+  tenantId: number;
+  releaseId: number;
+  digest: string;
+  version: string;
+  schemaVersion: number;
+  deployStatus: 'deployed';
+  releaseState: 'healthy';
+}
+
+/**
+ * Read-only verification of a tenant's actual running state, followed by an
+ * audited correction of the registry when the running app conclusively matches
+ * a registered release. Failed release/rollback history is preserved; this
+ * never creates a successful deployment or rollback record.
+ */
+export const reconcileTenantRuntime = async (
+  tenantType: TenantType,
+  tenantId: number,
+  actor: string,
+  reason?: string,
+): Promise<RuntimeReconcileResult> => {
+  if (tenantType !== 'store') {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_store_only: runtime reconciliation is currently supported for Stores only',
+      'runtime_reconciliation_store_only',
+    );
+  }
+  const state = getTenantReleaseState(tenantType, tenantId);
+  if (!state) throw new HttpError(404, 'Store not found');
+  if (!state.coolifyUuid) {
+    throw new HttpError(409, 'runtime_reconciliation_no_app: Store has no Coolify application');
+  }
+
+  const application = await getApplication(state.coolifyUuid);
+  if (application.uuid !== state.coolifyUuid) {
+    throw new HttpError(409, 'runtime_reconciliation_uuid_mismatch: Coolify returned another app');
+  }
+  if (application.container_present !== true) {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_no_container: the application container is not present',
+      'runtime_reconciliation_no_container',
+    );
+  }
+  if (application.build_pack !== 'dockerimage') {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_not_image: application is not a Docker Image app',
+    );
+  }
+  assertApplicationAllowed('store', application);
+
+  const imageName = String(application.docker_registry_image_name ?? '');
+  const imageTag = String(application.docker_registry_image_tag ?? '');
+  const digest = imageName.endsWith('@sha256')
+    ? /^[a-f0-9]{64}$/i.test(imageTag)
+      ? `sha256:${imageTag.toLowerCase()}`
+      : null
+    : (/@sha256:[a-f0-9]{64}$/i.exec(imageName)?.[0].slice(1)?.toLowerCase() ?? null);
+  if (!digest) {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_image_unverified: the running image is not pinned by an immutable digest',
+      'runtime_reconciliation_image_unverified',
+    );
+  }
+
+  const release = listImageReleases({ kind: 'store' }).find(
+    (candidate) => candidate.digest === digest,
+  );
+  if (!release) {
+    throw new HttpError(
+      409,
+      `runtime_reconciliation_release_unknown: no registered Store release matches ${digest}`,
+      'runtime_reconciliation_release_unknown',
+    );
+  }
+
+  const storages = await getApplicationStorages(state.coolifyUuid);
+  const dataStorages = storages.filter(
+    (storage) => storage.type === 'persistent' && storage.mount_path === '/data',
+  );
+  if (dataStorages.length !== 1) {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_storage_unverified: expected exactly one persistent /data storage',
+      'runtime_reconciliation_storage_unverified',
+    );
+  }
+  if (
+    state.volumeName &&
+    dataStorages[0].name &&
+    !dataStorages[0].name.endsWith(state.volumeName)
+  ) {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_volume_mismatch: the /data storage is not the registered tenant volume',
+      'runtime_reconciliation_volume_mismatch',
+    );
+  }
+
+  const coolifyDeployments = await getApplicationDeployments(state.coolifyUuid);
+  const activeDeployment = coolifyDeployments.find((deployment) =>
+    isActive(String(deployment.status ?? '').toLowerCase()),
+  );
+  const runningRelease = getRunningReleaseDeployment(tenantType, tenantId);
+  if (activeDeployment || runningRelease) {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_deployment_active: a Coolify or Control Plane deployment is still active',
+      'runtime_reconciliation_deployment_active',
+    );
+  }
+
+  const store = getStoreById(tenantId)!;
+  const status = (await ping(store)) as { ok?: unknown; storeName?: unknown } | null;
+  if (status?.ok !== true) {
+    throw new HttpError(409, 'runtime_reconciliation_identity_failed: tenant status is not ok');
+  }
+  if (typeof status.storeName === 'string' && status.storeName !== store.name) {
+    throw new HttpError(
+      409,
+      `runtime_reconciliation_identity_mismatch: deployment reports "${status.storeName}", registry expects "${store.name}"`,
+      'runtime_reconciliation_identity_mismatch',
+    );
+  }
+
+  const telemetry = await fetchTelemetry(store);
+  if (telemetry.version !== release.version) {
+    throw new HttpError(
+      409,
+      `runtime_reconciliation_version_mismatch: running ${telemetry.version}, release ${release.version}`,
+      'runtime_reconciliation_version_mismatch',
+    );
+  }
+  if (typeof telemetry.schemaVersion !== 'number') {
+    throw new HttpError(409, 'runtime_reconciliation_schema_unknown: tenant schema is unavailable');
+  }
+  if (!releaseSupportsSchema(release, telemetry.schemaVersion)) {
+    throw new HttpError(
+      409,
+      `runtime_reconciliation_schema_mismatch: schema ${telemetry.schemaVersion} is outside release ${release.id}`,
+      'runtime_reconciliation_schema_mismatch',
+    );
+  }
+
+  const cleanBase = store.base_url.replace(/\/+$/, '');
+  const healthRes = await fetch(`${cleanBase}/health`, {
+    redirect: 'error',
+    signal: AbortSignal.timeout(10000),
+  });
+  const health = (await healthRes.json().catch(() => null)) as {
+    status?: unknown;
+    app?: unknown;
+    version?: unknown;
+    revision?: unknown;
+    database?: unknown;
+  } | null;
+  if (
+    !healthRes.ok ||
+    health?.status !== 'ok' ||
+    health.app !== 'vula' ||
+    health.version !== release.version ||
+    (release.revision && health.revision !== release.revision) ||
+    health.database !== 'connected'
+  ) {
+    throw new HttpError(
+      409,
+      'runtime_reconciliation_health_mismatch: running health does not match the registered release',
+      'runtime_reconciliation_health_mismatch',
+    );
+  }
+
+  const before = {
+    imageDigest: state.imageDigest,
+    imageTag: state.imageTag,
+    desiredReleaseId: state.desiredReleaseId,
+    lastReleaseId: state.lastReleaseId,
+    deployStatus: state.deployStatus,
+    releaseState: state.releaseState,
+    schemaVersion: state.schemaVersion,
+  };
+  updateTenantReleaseState(tenantType, tenantId, {
+    imageDigest: release.digest,
+    imageTag: release.tag,
+    releaseId: release.id,
+    channel: release.channel,
+    previousReleaseId:
+      state.lastReleaseId === release.id ? state.previousReleaseId : state.lastReleaseId,
+    schemaVersion: telemetry.schemaVersion,
+    appVersion: release.version,
+    deployStatus: 'deployed',
+    releaseState: 'healthy',
+    coolifyUuid: state.coolifyUuid,
+    volumeName: state.volumeName,
+  });
+  recordAuditLog(actor, 'tenant_runtime_reconciled', tenantType, tenantId, {
+    before,
+    after: {
+      releaseId: release.id,
+      digest: release.digest,
+      tag: release.tag,
+      version: release.version,
+      schemaVersion: telemetry.schemaVersion,
+      deployStatus: 'deployed',
+      releaseState: 'healthy',
+    },
+    reason: reason ?? 'read-only runtime reconciliation',
+  });
+
+  return {
+    status: 'complete',
+    tenantType,
+    tenantId,
+    releaseId: release.id,
+    digest: release.digest,
+    version: release.version,
+    schemaVersion: telemetry.schemaVersion,
+    deployStatus: 'deployed',
+    releaseState: 'healthy',
+  };
 };
