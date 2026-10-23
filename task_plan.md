@@ -1151,105 +1151,122 @@ version tracking, locking/dedup, schema-safe rollback and release waves. Develop
 and test locally; do not deploy the CP or migrate tenants.
 
 - [x] `image_releases` catalog: kind, immutable tag + `sha256` digest, version,
-  channel, schema range, active flag; duplicate kind/tag/digest refused.
+      channel, schema range, active flag; duplicate kind/tag/digest refused.
 - [x] Tenant image state on `stores`/`panels`: digest, tag, channel, desired,
-  last and previous release, last release time; panel schema version.
+      last and previous release, last release time; panel schema version.
 - [x] Coolify `dockerimage` provisioning from the digest, per-tenant volume,
-  existing control token, runtime-only env, `health_check_host=127.0.0.1`.
+      existing control token, runtime-only env, `health_check_host=127.0.0.1`.
 - [x] Onboarding uses the latest active stable release when present. Production
-  refuses a Dockerfile build; non-production fallback requires the explicit
-  `ALLOW_LEGACY_DOCKERFILE_ONBOARDING=true` opt-in.
+      refuses a Dockerfile build; non-production fallback requires the explicit
+      `ALLOW_LEGACY_DOCKERFILE_ONBOARDING=true` opt-in.
 - [x] Per-tenant deployment locks with expiry and no-op dedup for
-  already-current/already-deploying tenants; stale running deployments are
-  reconciled against Coolify before a retry.
+      already-current/already-deploying tenants; stale running deployments are
+      reconciled against Coolify before a retry.
 - [x] Schema compatibility gate before Coolify; rollback target checked against
-  the current schema and refused when incompatible.
+      the current schema and refused when incompatible.
 - [x] Release batches/waves with `dryRun`, sequential execution, paused-tenant
-  skips, `stopOnFailure` and per-item audit.
+      skips, `stopOnFailure` and per-item audit.
 - [x] Release API: catalog, fleet state, apply, rollback, channel, history,
-  batches/rollout.
+      batches/rollout.
 - [x] Reliability review: Coolify deployment status + app state + version/
-  revision health proof, stop-first SQLite protection, `/data`/identity
-  preflight, app allowlist, trigger/app persistence, in-flight reconciliation,
-  `release_state`/phase tracking.
+      revision health proof, stop-first SQLite protection, `/data`/identity
+      preflight, app allowlist, trigger/app persistence, in-flight reconciliation,
+      `release_state`/phase tracking.
 - [x] Tests: `releases.test.ts` 29/29; main `dev` full backend **506/506**;
-  isolated branch **532/532** (42 suites); typecheck and production build clean
-  on both.
+      isolated branch **532/532** (42 suites); typecheck and production build clean
+      on both.
 - [x] Isolated M4 branch `m4/shared-image-release` (implementation `14c9133`;
-  M4.1 docs `1092f69`, `9c9a654`, `dcb1311`) prepared from clean HEAD;
-  unrelated working-tree changes preserved on `dev`. Branch suite 532/532
-  (42 suites), typecheck and build clean.
+      M4.1 docs `1092f69`, `9c9a654`, `dcb1311`) prepared from clean HEAD;
+      unrelated working-tree changes preserved on `dev`. Branch suite 532/532
+      (42 suites), typecheck and build clean.
 - [x] Read-only Coolify 4.4.7 contract check: application status, `/data`
-  storage, deployment records/status and deployment-by-UUID confirmed; stop is
-  an async queued job (exited state, containers removed). No live image app or
-  stop exercised.
+      storage, deployment records/status and deployment-by-UUID confirmed; stop is
+      an async queued job (exited state, containers removed). No live image app or
+      stop exercised.
 - [x] Stage A preparation: CP-driven single-Store plan, exact URLs/TLS
-  arrangement, `/data/control-plane.db` volume contract, exact ownership
-  manifest and stop-first recovery documented. `docs/m4.1-live-integration-plan.md`
-  and `docs/m4.1-staging-ownership.json`.
+      arrangement, `/data/control-plane.db` volume contract, exact ownership
+      manifest and stop-first recovery documented. `docs/m4.1-live-integration-plan.md`
+      and `docs/m4.1-staging-ownership.json`.
 - [x] Token consumer audit: exact exposed value in Vula and OptiMed
-  `.env`; both deployed CPs expose `COOLIFY_API_TOKEN` env keys (values masked);
-  no local process/container/cron/systemd consumer found. Four per-application
-  credentials and an independent rotation/rollback plan are in
-  `docs/m4.1-token-rotation-plan.md`.
+      `.env`; both deployed CPs expose `COOLIFY_API_TOKEN` env keys (values masked);
+      no local process/container/cron/systemd consumer found. Four per-application
+      credentials and an independent rotation/rollback plan are in
+      `docs/m4.1-token-rotation-plan.md`.
 - [x] Cross-application credential dependency removed: `release-apps.sh` reads
-  only this application's environment or its own repository-root `.env`; missing
-  credentials fail closed, with no OptiMed fallback.
+      only this application's environment or its own repository-root `.env`; missing
+      credentials fail closed, with no OptiMed fallback.
 - [x] Staging boundary guard: exact project/server/destination, staging
-  name/domain, post-create read-back and mandatory allowlist on existing-app
-  retry/redeploy paths. First Store creation is intentionally allowed before its
-  UUID is added to the existing-app allowlist. Tests in
-  `src/__tests__/stagingBoundary.test.ts`; branch suite 532/532.
+      name/domain, post-create read-back and mandatory allowlist on existing-app
+      retry/redeploy paths. First Store creation is intentionally allowed before its
+      UUID is added to the existing-app allowlist. Tests in
+      `src/__tests__/stagingBoundary.test.ts`; branch suite 532/532.
 - [x] Branch secret scan over `origin/dev..HEAD`: no private key, GitHub token,
-  JWT, Coolify assignment or exposed token value. No `.github` workflow and no
-  auto-deploy app references the branch. Branch pushed at `9ae7fc5`.
+      JWT, Coolify assignment or exposed token value. No `.github` workflow and no
+      auto-deploy app references the branch. Branch pushed at `9ae7fc5`.
 - [x] Stage A approval gates: Root Team residual accepted for the disposable
-  staging test; `coolify-vula-m4-staging-cp` created and verified; exact branch
-  commit pushed; isolated project created.
+      staging test; `coolify-vula-m4-staging-cp` created and verified; exact branch
+      commit pushed; isolated project created.
 - [x] Independent legacy rotation: four per-app tokens created; OptiMed, Vula
-  production and existing Vula staging CPs updated/restarted and verified; old
-  token id 2 revoked and confirmed 401; new tokens all 200; OptiMed health
-  unchanged.
+      production and existing Vula staging CPs updated/restarted and verified; old
+      token id 2 revoked and confirmed 401; new tokens all 200; OptiMed health
+      unchanged.
 - [x] M4.1 Stage A live execution: `vula-cp-m4-staging` deployed from
-  `9ae7fc5` with independent DB/volume and valid TLS; Store A release registered
-  and one Store provisioned through the CP. Verified exact arm64 digest, storage,
-  DB identity, health and deployment records.
+      `9ae7fc5` with independent DB/volume and valid TLS; Store A release registered
+      and one Store provisioned through the CP. Verified exact arm64 digest, storage,
+      DB identity, health and deployment records.
 - [x] Stage A exact-name gate resolved by approved naming amendment 1: the
-  existing Store `za-pos-m4-staging-client-m4-store-a`
-  (`hme58ok1x4jvqi3cvdeapqzq`) is accepted after read-only UUID/project/domain/
-  digest/storage/registry verification. Only that UUID is allowlisted; only the
-  staging CP was restarted.
+      existing Store `za-pos-m4-staging-client-m4-store-a`
+      (`hme58ok1x4jvqi3cvdeapqzq`) is accepted after read-only UUID/project/domain/
+      digest/storage/registry verification. Only that UUID is allowlisted; only the
+      staging CP was restarted.
 - [x] Stage A final acceptance: CP and Store health 200, exact arm64 digest,
-  `/data` volume and DB, single container, release tracking healthy, project
-  ownership exactly CP + Store, existing Vula/OptiMed health unchanged.
+      `/data` volume and DB, single container, release tracking healthy, project
+      ownership exactly CP + Store, existing Vula/OptiMed health unchanged.
 - [x] Onboarding API defect fixed and deployed: nested input, step metadata,
-  `createStore`/`createPanel` and inserts preserve `deploymentName`.
-  Regression tests in `clients.test.ts` and `onboardingNaming.test.ts`; full
-  suite 532/532, typecheck/build clean. CP commit `619f936` deployed to staging.
+      `createStore`/`createPanel` and inserts preserve `deploymentName`.
+      Regression tests in `clients.test.ts` and `onboardingNaming.test.ts`; full
+      suite 532/532, typecheck/build clean. CP commit `619f936` deployed to staging.
 - [x] M4.1 Stage B: Release B published privately at exact digest
-  `sha256:72a9aeb8...`, version `v2026.10.23-86ed3e1-m4b`, arm64. Approval packet
-  in `docs/m4.1-release-b-approval.md`.
+      `sha256:72a9aeb8...`, version `v2026.10.23-86ed3e1-m4b`, arm64. Approval packet
+      in `docs/m4.1-release-b-approval.md`.
 
 - [x] CP naming and image-update fixes deployed to `vula-cp-m4-staging`
-  (commit `619f936`); registry intact.
+      (commit `619f936`); registry intact.
 - [x] Store A backup created and verified (`53180ac2...`).
 - [x] Stage B **complete**: A→B→A through the CP verified with exact digests,
-  one container throughout, SQLite integrity and a persistence probe surviving
-  both transitions. Final report: `docs/m4.1-stage-b-results.md`.
+      one container throughout, SQLite integrity and a persistence probe surviving
+      both transitions. Final report: `docs/m4.1-stage-b-results.md`.
 - [x] Stop confirmation now uses Coolify `container_present=false`; stale status
-  and unknown state fail closed. Regression tests added.
+      and unknown state fail closed. Regression tests added.
 - [x] Runtime reconciliation endpoint verifies UUID/digest/version/revision/DB/
-  volume/schema/no-active-job, audits the correction and preserves failed history.
+      volume/schema/no-active-job, audits the correction and preserves failed history.
 - [x] Two-store wave test: wave 1 Store B failed schema gate, wave 2 Store A
-  skipped, no Coolify deployment, `stopOnFailure=true`.
+      skipped, no Coolify deployment, `stopOnFailure=true`.
 - [x] Post-deploy readiness fixed: poll exact image, `/health` version/revision
-  and database connectivity; stale Coolify status no longer causes a false
-  failure. Clean A→B→A verified on staging.
+      and database connectivity; stale Coolify status no longer causes a false
+      failure. Clean A→B→A verified on staging.
 - [x] Releases UI: fleet/catalog/rollouts/history, actions, confirmations,
-  dry-run and release-manager gating. `docs/releases-ui.md`.
+      dry-run and release-manager gating. `docs/releases-ui.md`.
+- [x] Releases UI accepted for staging: server-derived environment, runtime
+      health separate from release history, rollback targets derived from verified
+      forward history. Final suite 539/539 (42 suites), frontend 33/33; deployed
+      commit `a04a8d8` to `vula-cp-m4-staging` only. `docs/releases-ui.md`.
+- [x] M4 staging session security: admin password and `JWT_SECRET` rotated in
+      the staging app only; a pre-rotation token returns 401 on `/api/auth/me` and
+      `/api/releases/fleet`; the browser returned to the office sign-in page.
+- [x] **M4 frozen:** no further M4 feature changes or deployment rehearsals for
+      this milestone. Production CP, OptiMed and tenant databases untouched.
 - [ ] Existing Dockerfile→dockerimage blue/green migration (separate approval).
 - [ ] Image signature/attestation verification (supply-chain follow-up).
 - [ ] Panel schema reporting from live telemetry (currently only set by this
-  controller).
+      controller).
 - [ ] Background release worker/queue + resume endpoint for large waves.
 - [ ] Release-manager role/approval boundary.
+
+## Next focus (not M4)
+
+1. Hands-on UI testing of the Control Plane, not automated deployment rehearsals.
+2. One successful two-store rollout before approving fleet-wide production
+   upgrades.
+3. Production-readiness review: backups, tenant migration and operational
+   recovery.

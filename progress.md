@@ -1,5 +1,37 @@
 # Progress
 
+## 2026-10-23 — M4 Releases UI accepted; staging session security closed; M4 frozen
+
+The Releases UI was accepted for staging after three rounds of fixes: the header
+environment is server-derived (`Staging` under `VULA_STAGING_MODE`), summary
+health comes from the runtime probe independently of release history, and
+rollback eligibility is derived from verified successful forward deployment
+history. After `A → B → rollback A`, B is no longer offered as a rollback
+target; it is reachable through Upgrade. The server enforces the same target
+and refuses a caller-supplied mismatch with `409 rollback_not_eligible`.
+
+**Verification:** focused releases suite 38/38; full backend **539/539 across
+42 suites**; frontend **33/33**; typecheck and production builds clean. Live
+staging: header Staging, Tenants 2 / Runtime healthy 2 / Needs attention 0 /
+Active releases 3; Store A (A→B→A) and Store B both show Rollback disabled with
+specific explanations, Upgrade enabled.
+
+**Deployed:** `vula-cp-m4-staging` only, commit `a04a8d8` (deployment
+`lcthfauu2ylbag1wgbqd6xxe`). Production CP, OptiMed, demos and tenant databases
+were untouched. Docs follow-up `8f6dde7`.
+
+**Session security:** the staging admin password and `JWT_SECRET` were rotated
+in the staging app's environment only. A token issued before the JWT rotation
+now returns 401 on `/api/auth/me` and `/api/releases/fleet`; the new admin login
+returns 200 and `/api/auth/me` reports `staging`. The browser was cleared of the
+stale token and returned to the office sign-in page. Replacement values were
+not printed; the password remains in the mode-600 local credential file.
+
+**M4 is frozen.** No further feature changes or deployment rehearsals for this
+milestone. Next focus: hands-on Control Plane UI testing, one successful
+two-store rollout before fleet-wide production upgrades, and a production
+readiness review of backups, tenant migration and operational recovery.
+
 ## 2026-10-11 — launch hardening: both review P0s and the code-level P1s, all verified
 
 `review-10October2026.md` (conditional NO-GO for paid launch) verified claim by claim,
