@@ -483,9 +483,9 @@ describe('per-tenant release application', () => {
       )
       .run(older.id + 1, older.id, store.id);
     calls = [];
-    const result = await rollbackTenant('store', store.id, 'office@test.local');
-    expect(result.status).toBe('failed');
-    expect(result.error).toMatch(/schema_incompatible/);
+    await expect(rollbackTenant('store', store.id, 'office@test.local')).rejects.toThrow(
+      /rollback_not_eligible/,
+    );
     expect(calls).toHaveLength(0);
   });
 
@@ -895,6 +895,47 @@ describe('release API surface', () => {
     expect(rollout.body.batch.status).toBe('dry_run');
     expect(rollout.body.items).toHaveLength(1);
     expect(rollout.body.items[0].tenantId).toBe(store.id);
+  });
+
+  it('reports the Control Plane environment from server configuration', async () => {
+    const app = createApp();
+    const token = await loginAsOffice(app);
+    const oldStaging = env.stagingMode;
+    try {
+      env.stagingMode = false;
+      const dev = await request(app).get('/api/auth/me').set(authHeader(token)).expect(200);
+      expect(dev.body.environment).toBe('development');
+      env.stagingMode = true;
+      const staging = await request(app).get('/api/auth/me').set(authHeader(token)).expect(200);
+      expect(staging.body.environment).toBe('staging');
+    } finally {
+      env.stagingMode = oldStaging;
+    }
+  });
+
+  it('refuses rollback when no server-validated target exists', async () => {
+    const app = createApp();
+    const token = await loginAsOffice(app);
+    const store = createStore(
+      {
+        name: 'No Rollback Store',
+        slug: 'no-rollback-store',
+        terminalCount: 1,
+        baseUrl: 'https://no-rollback.example',
+      },
+      'cp-token',
+    );
+    await request(app)
+      .post(`/api/releases/tenants/store/${store.id}/rollback`)
+      .set(authHeader(token))
+      .send({})
+      .expect(409);
+    const fleet = await request(app).get('/api/releases/fleet').set(authHeader(token)).expect(200);
+    const state = (
+      fleet.body.stores as Array<{ id: number; rollbackEligible: boolean; rollbackReason: string }>
+    ).find((row) => row.id === store.id);
+    expect(state?.rollbackEligible).toBe(false);
+    expect(state?.rollbackReason).toMatch(/No previous release/);
   });
 
   it('exposes release-manager capability and denies non-manager mutations', async () => {

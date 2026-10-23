@@ -15,11 +15,7 @@ import ErrorBox from '../components/ErrorBox';
 import Modal from '../components/Modal';
 import Spinner from '../components/Spinner';
 import StatusBadge from '../components/StatusBadge';
-import {
-  ActionButton,
-  NoticeBanner,
-  SummaryTile,
-} from '../components/storeUi';
+import { ActionButton, NoticeBanner, SummaryTile } from '../components/storeUi';
 import { ENVIRONMENT_COLORS, ENVIRONMENT_LABELS, fmtAgo, fmtTime } from '../lib/storeVocab';
 import type {
   ImageRelease,
@@ -58,8 +54,7 @@ const BATCH_COLORS: Record<string, string> = {
   dry_run: 'bg-indigo-100 text-indigo-700',
 };
 
-const shortDigest = (digest: string | null): string =>
-  digest ? `${digest.slice(0, 19)}…` : '—';
+const shortDigest = (digest: string | null): string => (digest ? `${digest.slice(0, 19)}…` : '—');
 
 const kindLabel = (kind: ReleaseKind): string => (kind === 'store' ? 'Store' : 'Head Office');
 const tenantTypeFor = (kind: ReleaseKind): 'store' | 'panel' =>
@@ -167,8 +162,7 @@ export default function ReleasesPage() {
     const all = [...fleet.stores, ...fleet.panels];
     return {
       total: all.length,
-      healthy: all.filter((t) => t.releaseState === 'healthy' && t.deployStatus === 'deployed')
-        .length,
+      healthy: all.filter((t) => t.runtimeHealth === 'up').length,
       attention: all.filter(
         (t) =>
           t.releaseState === 'failed' ||
@@ -279,7 +273,7 @@ export default function ReleasesPage() {
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <SummaryTile label="Tenants" value={summary.total} />
             <SummaryTile
-              label="Healthy"
+              label="Runtime healthy"
               value={summary.healthy}
               tone={summary.healthy === summary.total ? 'green' : 'amber'}
             />
@@ -319,14 +313,15 @@ export default function ReleasesPage() {
                   <th className="px-4 py-2.5 text-left">Current</th>
                   <th className="px-4 py-2.5 text-left">Desired</th>
                   <th className="px-4 py-2.5 text-left">Channel</th>
-                  <th className="px-4 py-2.5 text-left">State</th>
+                  <th className="px-4 py-2.5 text-left">Runtime</th>
+                  <th className="px-4 py-2.5 text-left">Last release</th>
                   <th className="px-4 py-2.5 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {tenants.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                    <td colSpan={8} className="px-4 py-10 text-center text-slate-500">
                       No tenants match this view.
                     </td>
                   </tr>
@@ -336,7 +331,10 @@ export default function ReleasesPage() {
                     ? releaseById.get(tenant.desiredReleaseId)
                     : null;
                   return (
-                    <tr key={`${tenant.tenantType}-${tenant.id}`} className="border-t border-slate-100">
+                    <tr
+                      key={`${tenant.tenantType}-${tenant.id}`}
+                      className="border-t border-slate-100"
+                    >
                       <td className="px-4 py-3">
                         <div className="font-bold text-slate-800">{tenant.name}</div>
                         <div className="text-[11px] text-slate-400">
@@ -359,7 +357,9 @@ export default function ReleasesPage() {
                         <div className="font-mono font-semibold text-slate-700">
                           {tenant.appVersion ?? '—'}
                         </div>
-                        <div className="text-[10px] text-slate-400">{shortDigest(tenant.imageDigest)}</div>
+                        <div className="text-[10px] text-slate-400">
+                          {shortDigest(tenant.imageDigest)}
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <div className="font-mono font-semibold text-slate-700">
@@ -373,10 +373,27 @@ export default function ReleasesPage() {
                         <Badge value={tenant.releaseChannel} colors={CHANNEL_COLORS} />
                       </td>
                       <td className="px-4 py-3">
-                        <Badge value={tenant.releaseState} colors={RELEASE_STATE_COLORS} />
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                            tenant.runtimeHealth === 'up'
+                              ? 'bg-green-100 text-green-700'
+                              : tenant.runtimeHealth === 'down'
+                                ? 'bg-rose-100 text-rose-700'
+                                : 'bg-slate-100 text-slate-500'
+                          }`}
+                        >
+                          {tenant.runtimeHealth === 'up'
+                            ? 'healthy'
+                            : tenant.runtimeHealth === 'down'
+                              ? 'down'
+                              : 'unknown'}
+                        </span>
                         <div className="mt-1 text-[10px] text-slate-400">
                           deploy: {tenant.deployStatus}
                         </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge value={tenant.releaseState} colors={RELEASE_STATE_COLORS} />
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-1.5">
@@ -388,16 +405,31 @@ export default function ReleasesPage() {
                           <ActionButton
                             icon={Rocket}
                             label="Upgrade"
-                            title={canManage ? 'Apply a release' : 'Release-manager permission required'}
+                            title={
+                              canManage ? 'Apply a release' : 'Release-manager permission required'
+                            }
                             className="border-brand-200 text-brand-700 hover:bg-brand-50 disabled:opacity-40"
-                            onClick={() => canManage && setActionTarget({ tenant, action: 'upgrade' })}
+                            onClick={() =>
+                              canManage && setActionTarget({ tenant, action: 'upgrade' })
+                            }
                           />
                           <ActionButton
                             icon={RotateCcw}
                             label="Rollback"
-                            title={canManage ? 'Roll back to previous release' : 'Release-manager permission required'}
-                            className="border-amber-200 text-amber-700 hover:bg-amber-50 disabled:opacity-40"
-                            onClick={() => canManage && setActionTarget({ tenant, action: 'rollback' })}
+                            disabled={!canManage || !tenant.rollbackEligible}
+                            title={
+                              !canManage
+                                ? 'Release-manager permission required'
+                                : tenant.rollbackEligible
+                                  ? `Roll back to release ${tenant.rollbackReleaseId}`
+                                  : (tenant.rollbackReason ?? 'No valid rollback target')
+                            }
+                            className="border-amber-200 text-amber-700 hover:bg-amber-50"
+                            onClick={() =>
+                              canManage &&
+                              tenant.rollbackEligible &&
+                              setActionTarget({ tenant, action: 'rollback' })
+                            }
                           />
                         </div>
                       </td>
@@ -434,10 +466,14 @@ export default function ReleasesPage() {
               )}
               {releases.map((release) => (
                 <tr key={release.id} className="border-t border-slate-100">
-                  <td className="px-4 py-3 font-semibold text-slate-700">{kindLabel(release.kind)}</td>
+                  <td className="px-4 py-3 font-semibold text-slate-700">
+                    {kindLabel(release.kind)}
+                  </td>
                   <td className="px-4 py-3">
                     <div className="font-mono font-semibold text-slate-700">{release.version}</div>
-                    <div className="text-[10px] text-slate-400">{release.revision ?? 'no revision'}</div>
+                    <div className="text-[10px] text-slate-400">
+                      {release.revision ?? 'no revision'}
+                    </div>
                   </td>
                   <td className="px-4 py-3 font-mono text-slate-600">{release.tag}</td>
                   <td className="px-4 py-3">
@@ -446,13 +482,18 @@ export default function ReleasesPage() {
                   <td className="px-4 py-3 text-slate-600">
                     {release.schemaVersion} · {release.schemaMin}–{release.schemaMax}
                   </td>
-                  <td className="px-4 py-3 font-mono text-[10px] text-slate-500" title={release.digest}>
+                  <td
+                    className="px-4 py-3 font-mono text-[10px] text-slate-500"
+                    title={release.digest}
+                  >
                     {shortDigest(release.digest)}
                   </td>
                   <td className="px-4 py-3">
                     <span
                       className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
-                        release.isActive ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'
+                        release.isActive
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-slate-100 text-slate-500'
                       }`}
                     >
                       {release.isActive ? 'active' : 'inactive'}
@@ -506,7 +547,9 @@ export default function ReleasesPage() {
                   const release = releaseById.get(batch.releaseId);
                   return (
                     <tr key={batch.id} className="border-t border-slate-100">
-                      <td className="px-4 py-3 font-mono font-semibold text-slate-700">#{batch.id}</td>
+                      <td className="px-4 py-3 font-mono font-semibold text-slate-700">
+                        #{batch.id}
+                      </td>
                       <td className="px-4 py-3">
                         <div className="font-semibold text-slate-700">
                           {release?.version ?? `release ${batch.releaseId}`}
@@ -517,7 +560,9 @@ export default function ReleasesPage() {
                       </td>
                       <td className="px-4 py-3">
                         <Badge value={batch.status} colors={BATCH_COLORS} />
-                        {batch.error && <div className="mt-1 text-[10px] text-rose-600">{batch.error}</div>}
+                        {batch.error && (
+                          <div className="mt-1 text-[10px] text-rose-600">{batch.error}</div>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right tabular-nums text-slate-600">
                         {batch.waveSize}
@@ -525,7 +570,10 @@ export default function ReleasesPage() {
                       <td className="px-4 py-3 text-right tabular-nums text-slate-600">
                         {batch.succeeded} ok · {batch.failed} failed · {batch.skipped} skipped
                       </td>
-                      <td className="px-4 py-3 text-slate-500" title={fmtTime(batch.startedAt ?? batch.createdAt)}>
+                      <td
+                        className="px-4 py-3 text-slate-500"
+                        title={fmtTime(batch.startedAt ?? batch.createdAt)}
+                      >
                         {fmtAgo(batch.startedAt ?? batch.createdAt)}
                       </td>
                       <td className="px-4 py-3 text-right">
@@ -634,11 +682,7 @@ export default function ReleasesPage() {
       )}
 
       {batchTarget && (
-        <Modal
-          title={`Rollout #${batchTarget.id}`}
-          onClose={() => setBatchTarget(null)}
-          size="2xl"
-        >
+        <Modal title={`Rollout #${batchTarget.id}`} onClose={() => setBatchTarget(null)} size="2xl">
           {batchError ? (
             <ErrorBox message={batchError} />
           ) : !batchDetail ? (
@@ -747,7 +791,10 @@ function PublishReleaseModal({
       size="lg"
       footer={
         <div className="flex items-center justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600"
+          >
             Cancel
           </button>
           <button
@@ -764,45 +811,94 @@ function PublishReleaseModal({
         {error && <ErrorBox message={error} />}
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Kind">
-            <select value={kind} onChange={(e) => setKind(e.target.value as ReleaseKind)} className="input">
+            <select
+              value={kind}
+              onChange={(e) => setKind(e.target.value as ReleaseKind)}
+              className="input"
+            >
               <option value="store">Store</option>
               <option value="ho">Head Office</option>
             </select>
           </Field>
           <Field label="Channel">
-            <select value={channel} onChange={(e) => setChannel(e.target.value as typeof channel)} className="input">
+            <select
+              value={channel}
+              onChange={(e) => setChannel(e.target.value as typeof channel)}
+              className="input"
+            >
               <option value="stable">Stable</option>
               <option value="beta">Beta</option>
               <option value="canary">Canary</option>
             </select>
           </Field>
           <Field label="Version">
-            <input value={version} onChange={(e) => setVersion(e.target.value)} placeholder="v2026.10.23-…" className="input font-mono" />
+            <input
+              value={version}
+              onChange={(e) => setVersion(e.target.value)}
+              placeholder="v2026.10.23-…"
+              className="input font-mono"
+            />
           </Field>
           <Field label="Tag">
-            <input value={tag} onChange={(e) => setTag(e.target.value)} placeholder="v2026.10.23-…" className="input font-mono" />
+            <input
+              value={tag}
+              onChange={(e) => setTag(e.target.value)}
+              placeholder="v2026.10.23-…"
+              className="input font-mono"
+            />
           </Field>
           <Field label="Revision (optional)">
-            <input value={revision} onChange={(e) => setRevision(e.target.value)} placeholder="full git SHA" className="input font-mono" />
+            <input
+              value={revision}
+              onChange={(e) => setRevision(e.target.value)}
+              placeholder="full git SHA"
+              className="input font-mono"
+            />
           </Field>
           <Field label="Schema version">
-            <input value={schemaVersion} onChange={(e) => setSchemaVersion(e.target.value)} className="input font-mono" />
+            <input
+              value={schemaVersion}
+              onChange={(e) => setSchemaVersion(e.target.value)}
+              className="input font-mono"
+            />
           </Field>
           <Field label="Schema min">
-            <input value={schemaMin} onChange={(e) => setSchemaMin(e.target.value)} className="input font-mono" />
+            <input
+              value={schemaMin}
+              onChange={(e) => setSchemaMin(e.target.value)}
+              className="input font-mono"
+            />
           </Field>
           <Field label="Schema max">
-            <input value={schemaMax} onChange={(e) => setSchemaMax(e.target.value)} className="input font-mono" />
+            <input
+              value={schemaMax}
+              onChange={(e) => setSchemaMax(e.target.value)}
+              className="input font-mono"
+            />
           </Field>
         </div>
         <Field label="Digest">
-          <input value={digest} onChange={(e) => setDigest(e.target.value)} placeholder="sha256:…" className="input font-mono" />
+          <input
+            value={digest}
+            onChange={(e) => setDigest(e.target.value)}
+            placeholder="sha256:…"
+            className="input font-mono"
+          />
         </Field>
         <Field label="Notes (optional)">
-          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="input" />
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            rows={2}
+            className="input"
+          />
         </Field>
         <Field label={`Type "${tag || 'the tag'}" to confirm publication`}>
-          <input value={confirm} onChange={(e) => setConfirm(e.target.value)} className="input font-mono" />
+          <input
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            className="input font-mono"
+          />
         </Field>
       </div>
     </Modal>
@@ -873,12 +969,17 @@ function ReleaseActionModal({
       size="lg"
       footer={
         <div className="flex items-center justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600"
+          >
             Cancel
           </button>
           <button
             onClick={() => void submit()}
-            disabled={!canManage || busy || confirm !== confirmationPhrase || (!destructive && !releaseId)}
+            disabled={
+              !canManage || busy || confirm !== confirmationPhrase || (!destructive && !releaseId)
+            }
             className={`rounded-lg px-3 py-2 text-xs font-bold text-white disabled:opacity-40 ${
               destructive ? 'bg-amber-600 hover:bg-amber-700' : 'bg-brand-600 hover:bg-brand-700'
             }`}
@@ -891,8 +992,12 @@ function ReleaseActionModal({
       <div className="space-y-3 text-sm">
         {error && <ErrorBox message={error} />}
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
-          <div>Current: <strong>{target.tenant.appVersion ?? 'unknown'}</strong></div>
-          <div className="text-slate-500">State: {target.tenant.releaseState} · {target.tenant.deployStatus}</div>
+          <div>
+            Current: <strong>{target.tenant.appVersion ?? 'unknown'}</strong>
+          </div>
+          <div className="text-slate-500">
+            State: {target.tenant.releaseState} · {target.tenant.deployStatus}
+          </div>
         </div>
         {destructive ? (
           <p className="text-xs text-slate-600">
@@ -901,11 +1006,16 @@ function ReleaseActionModal({
           </p>
         ) : (
           <Field label="Target release">
-            <select value={releaseId ?? ''} onChange={(e) => setReleaseId(Number(e.target.value) || null)} className="input">
+            <select
+              value={releaseId ?? ''}
+              onChange={(e) => setReleaseId(Number(e.target.value) || null)}
+              className="input"
+            >
               <option value="">Choose a release…</option>
               {compatible.map((release) => (
                 <option key={release.id} value={release.id}>
-                  {release.version} · {release.channel} · schema {release.schemaMin}–{release.schemaMax}
+                  {release.version} · {release.channel} · schema {release.schemaMin}–
+                  {release.schemaMax}
                 </option>
               ))}
             </select>
@@ -921,7 +1031,11 @@ function ReleaseActionModal({
           </div>
         )}
         <Field label={`Type "${confirmationPhrase}" to confirm`}>
-          <input value={confirm} onChange={(e) => setConfirm(e.target.value)} className="input font-mono" />
+          <input
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            className="input font-mono"
+          />
         </Field>
       </div>
     </Modal>
@@ -943,7 +1057,9 @@ function RolloutModal({
   onDone: (message: string) => void;
   onError: (message: string) => void;
 }) {
-  const [releaseId, setReleaseId] = useState<number | null>(releases.find((r) => r.isActive)?.id ?? null);
+  const [releaseId, setReleaseId] = useState<number | null>(
+    releases.find((r) => r.isActive)?.id ?? null,
+  );
   const selectedRelease = releases.find((r) => r.id === releaseId) ?? null;
   const releaseTenantType = selectedRelease ? tenantTypeFor(selectedRelease.kind) : null;
   const eligible = tenants.filter((t) => t.tenantType === releaseTenantType);
@@ -1000,12 +1116,17 @@ function RolloutModal({
       size="xl"
       footer={
         <div className="flex items-center justify-end gap-2">
-          <button onClick={onClose} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600"
+          >
             Cancel
           </button>
           <button
             onClick={() => void submit()}
-            disabled={!canManage || busy || confirm !== 'ROLLOUT' || !releaseId || selectedIds.length === 0}
+            disabled={
+              !canManage || busy || confirm !== 'ROLLOUT' || !releaseId || selectedIds.length === 0
+            }
             className="rounded-lg bg-brand-600 px-3 py-2 text-xs font-bold text-white hover:bg-brand-700 disabled:opacity-40"
           >
             {busy ? 'Starting…' : dryRun ? 'Plan dry run' : 'Start rollout'}
@@ -1017,25 +1138,43 @@ function RolloutModal({
         {error && <ErrorBox message={error} />}
         <div className="grid gap-3 sm:grid-cols-3">
           <Field label="Release">
-            <select value={releaseId ?? ''} onChange={(e) => setReleaseId(Number(e.target.value) || null)} className="input">
+            <select
+              value={releaseId ?? ''}
+              onChange={(e) => setReleaseId(Number(e.target.value) || null)}
+              className="input"
+            >
               <option value="">Choose…</option>
-              {releases.filter((r) => r.isActive).map((release) => (
-                <option key={release.id} value={release.id}>
-                  {kindLabel(release.kind)} · {release.version} · {release.channel}
-                </option>
-              ))}
+              {releases
+                .filter((r) => r.isActive)
+                .map((release) => (
+                  <option key={release.id} value={release.id}>
+                    {kindLabel(release.kind)} · {release.version} · {release.channel}
+                  </option>
+                ))}
             </select>
           </Field>
           <Field label="Wave size">
-            <input value={waveSize} onChange={(e) => setWaveSize(e.target.value)} className="input" />
+            <input
+              value={waveSize}
+              onChange={(e) => setWaveSize(e.target.value)}
+              className="input"
+            />
           </Field>
           <Field label="Mode">
             <label className="flex items-center gap-2 text-xs text-slate-600">
-              <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={dryRun}
+                onChange={(e) => setDryRun(e.target.checked)}
+              />
               Dry run only
             </label>
             <label className="mt-1 flex items-center gap-2 text-xs text-slate-600">
-              <input type="checkbox" checked={stopOnFailure} onChange={(e) => setStopOnFailure(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={stopOnFailure}
+                onChange={(e) => setStopOnFailure(e.target.checked)}
+              />
               Stop after failed wave
             </label>
           </Field>
@@ -1046,18 +1185,33 @@ function RolloutModal({
           </div>
           <div className="max-h-56 overflow-y-auto rounded-lg border border-slate-200">
             {eligible.map((tenant) => (
-              <label key={tenant.id} className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-xs last:border-0">
-                <input type="checkbox" checked={selectedIds.includes(tenant.id)} onChange={() => toggle(tenant.id)} />
+              <label
+                key={tenant.id}
+                className="flex items-center gap-2 border-b border-slate-100 px-3 py-2 text-xs last:border-0"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedIds.includes(tenant.id)}
+                  onChange={() => toggle(tenant.id)}
+                />
                 <span className="font-semibold text-slate-700">{tenant.name}</span>
                 <span className="text-slate-400">{tenant.slug}</span>
                 <span className="ml-auto text-slate-500">{tenant.appVersion ?? '—'}</span>
               </label>
             ))}
-            {eligible.length === 0 && <div className="px-3 py-6 text-center text-xs text-slate-500">No tenants for this release kind.</div>}
+            {eligible.length === 0 && (
+              <div className="px-3 py-6 text-center text-xs text-slate-500">
+                No tenants for this release kind.
+              </div>
+            )}
           </div>
         </div>
         <Field label='Type "ROLLOUT" to confirm'>
-          <input value={confirm} onChange={(e) => setConfirm(e.target.value)} className="input font-mono" />
+          <input
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            className="input font-mono"
+          />
         </Field>
       </div>
     </Modal>

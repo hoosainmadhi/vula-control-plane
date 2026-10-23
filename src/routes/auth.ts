@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcrypt';
-import { env } from '../config/env.js';
-import { signOfficeToken } from '../middleware/auth.js';
+import { controlPlaneEnvironment, env } from '../config/env.js';
+import { requireOffice, signOfficeToken } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { rateLimiter } from '../utils/rateLimiter.js';
 import { requireEmail, requirePassword } from '../utils/validate.js';
@@ -36,6 +36,17 @@ authRouter.post(
     res.json({
       token: signOfficeToken(email),
       user: { email, role: 'office' },
+    });
+  }),
+);
+
+authRouter.get(
+  '/me',
+  requireOffice,
+  asyncHandler(async (req, res) => {
+    res.json({
+      user: { email: req.auth!.email, role: req.auth!.role },
+      environment: controlPlaneEnvironment(),
     });
   }),
 );

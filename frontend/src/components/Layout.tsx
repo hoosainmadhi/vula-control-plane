@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { setToken } from '../api';
+import { api, setToken } from '../api';
 import StatusBadge from './StatusBadge';
 import { ENVIRONMENT_COLORS, ENVIRONMENT_LABELS } from '../lib/storeVocab';
 import type { StoreEnvironment } from '../types';
@@ -35,7 +36,7 @@ const NAV: NavItem[] = [
  * badge used to be a hardcoded "Development" — the right intent (§44) wired to
  * nothing, so staging and production both claimed to be a dev box.
  */
-const environment: StoreEnvironment = import.meta.env.DEV
+const hostEnvironment: StoreEnvironment = import.meta.env.DEV
   ? 'development'
   : window.location.hostname.includes('staging')
     ? 'staging'
@@ -43,6 +44,14 @@ const environment: StoreEnvironment = import.meta.env.DEV
 
 export default function Layout({ title, children }: LayoutProps) {
   const navigate = useNavigate();
+  const [environment, setEnvironment] = useState<StoreEnvironment>(hostEnvironment);
+  useEffect(() => {
+    void api<{ environment: StoreEnvironment }>('/auth/me')
+      .then((me) => setEnvironment(me.environment))
+      .catch(() => {
+        // Keep the host-derived fallback if the session cannot answer.
+      });
+  }, []);
   const signOut = (): void => {
     setToken(null);
     navigate('/login', { replace: true });

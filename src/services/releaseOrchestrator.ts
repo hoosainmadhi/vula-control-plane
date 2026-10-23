@@ -769,6 +769,61 @@ export const applyReleaseToTenant = async (
   }
 };
 
+export interface RollbackEligibility {
+  eligible: boolean;
+  targetReleaseId: number | null;
+  reason: string | null;
+}
+
+/** Server-owned rollback eligibility: an active prior release that can open the current schema. */
+export const getRollbackEligibility = (state: TenantReleaseState): RollbackEligibility => {
+  const targetId = state.previousReleaseId;
+  if (!targetId) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: 'No previous release is recorded for this deployment',
+    };
+  }
+  const target = getImageRelease(targetId);
+  if (!target) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: `Previous release ${targetId} is not in the catalog`,
+    };
+  }
+  if (target.kind !== (state.tenantType === 'store' ? 'store' : 'ho')) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: 'Previous release is for a different application kind',
+    };
+  }
+  if (!target.is_active) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: 'Previous release is inactive',
+    };
+  }
+  if (state.schemaVersion === null || state.schemaVersion === undefined) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: 'Current database schema is not reported',
+    };
+  }
+  if (!releaseSupportsSchema(target, state.schemaVersion)) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: `Previous release supports schema ${target.schema_min}..${target.schema_max}, current schema is ${state.schemaVersion}`,
+    };
+  }
+  return { eligible: true, targetReleaseId: target.id, reason: null };
+};
+
 export const rollbackTenant = async (
   tenantType: TenantType,
   tenantId: number,
@@ -778,11 +833,18 @@ export const rollbackTenant = async (
   const state = getTenantReleaseState(tenantType, tenantId);
   if (!state)
     throw new HttpError(404, tenantType === 'store' ? 'Store not found' : 'Head Office not found');
-  const targetId = toReleaseId ?? state.previousReleaseId;
-  if (!targetId) {
-    throw new ValidationError('No previous release is recorded for this deployment');
+  const eligibility = getRollbackEligibility({
+    ...state,
+    previousReleaseId: toReleaseId ?? state.previousReleaseId,
+  });
+  if (!eligibility.eligible || !eligibility.targetReleaseId) {
+    throw new HttpError(
+      409,
+      `rollback_not_eligible: ${eligibility.reason ?? 'no valid rollback target'}`,
+      'rollback_not_eligible',
+    );
   }
-  const target = getImageRelease(targetId);
+  const target = getImageRelease(eligibility.targetReleaseId);
   if (!target) throw new HttpError(404, 'Rollback target release not found');
   return applyReleaseToTenant(tenantType, tenantId, target.id, {
     actor,

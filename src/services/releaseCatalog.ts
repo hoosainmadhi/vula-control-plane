@@ -72,6 +72,8 @@ export interface TenantReleaseState {
     'idle' | 'queued' | 'deploying' | 'verifying' | 'healthy' | 'failed' | 'rolled_back';
   schemaVersion: number | null;
   appVersion: string | null;
+  /** Latest runtime health check, independent of release action/state. */
+  runtimeHealth: 'up' | 'down' | 'unknown';
 }
 
 export interface ReleaseBatch {
@@ -315,6 +317,7 @@ const storeState = (store: StoreRecord): TenantReleaseState => ({
   releaseState: store.release_state ?? 'idle',
   schemaVersion: store.schema_version ?? null,
   appVersion: store.app_version ?? null,
+  runtimeHealth: store.last_health_status ?? 'unknown',
 });
 
 const panelState = (panel: PanelRecord): TenantReleaseState => ({
@@ -340,6 +343,7 @@ const panelState = (panel: PanelRecord): TenantReleaseState => ({
   releaseState: panel.release_state ?? 'idle',
   schemaVersion: panel.schema_version ?? null,
   appVersion: panel.app_version ?? null,
+  runtimeHealth: panel.last_health_status ?? 'unknown',
 });
 
 export const getTenantReleaseState = (

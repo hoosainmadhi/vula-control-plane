@@ -767,13 +767,7 @@ export type ReleaseChannel = 'stable' | 'beta' | 'canary';
 export type ReleaseAction = 'provision' | 'upgrade' | 'rollback';
 export type TenantType = 'store' | 'panel';
 export type ReleaseRuntimeState =
-  | 'idle'
-  | 'queued'
-  | 'deploying'
-  | 'verifying'
-  | 'healthy'
-  | 'failed'
-  | 'rolled_back';
+  'idle' | 'queued' | 'deploying' | 'verifying' | 'healthy' | 'failed' | 'rolled_back';
 
 export interface ImageRelease {
   id: number;
@@ -815,6 +809,10 @@ export interface TenantReleaseState {
   releaseState: ReleaseRuntimeState;
   schemaVersion: number | null;
   appVersion: string | null;
+  runtimeHealth: 'up' | 'down' | 'unknown';
+  rollbackEligible: boolean;
+  rollbackReleaseId: number | null;
+  rollbackReason: string | null;
 }
 
 export interface ReleaseFleet {

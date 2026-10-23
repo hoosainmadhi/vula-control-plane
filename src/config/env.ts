@@ -193,4 +193,13 @@ export const env: Env = {
   trustProxyHops: Math.max(0, Number(process.env.CP_TRUST_PROXY_HOPS || 0)),
 };
 
+export type ControlPlaneEnvironment = 'production' | 'staging' | 'development';
+
+/** The environment the Control Plane itself is running as, not the browser host. */
+export const controlPlaneEnvironment = (): ControlPlaneEnvironment => {
+  if (env.stagingMode) return 'staging';
+  if (env.isProduction) return 'production';
+  return 'development';
+};
+
 export { logger };

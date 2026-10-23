@@ -28,6 +28,7 @@ import {
 import {
   applyReleaseToTenant,
   getBatch,
+  getRollbackEligibility,
   reconcileTenantRuntime,
   rollbackTenant,
   startReleaseBatch,
@@ -64,30 +65,37 @@ const releaseOut = (release: ReturnType<typeof getImageRelease> & object) => ({
   createdAt: release.created_at,
 });
 
-const stateOut = (state: ReturnType<typeof getTenantReleaseState> & object) => ({
-  tenantType: state.tenantType,
-  id: state.id,
-  name: state.name,
-  slug: state.slug,
-  baseUrl: state.baseUrl,
-  environment: state.environment,
-  companyId: state.companyId,
-  companySlug: state.companySlug,
-  status: state.status,
-  deployStatus: state.deployStatus,
-  coolifyUuid: state.coolifyUuid,
-  volumeName: state.volumeName,
-  imageDigest: state.imageDigest,
-  imageTag: state.imageTag,
-  releaseChannel: state.releaseChannel,
-  desiredReleaseId: state.desiredReleaseId,
-  lastReleaseId: state.lastReleaseId,
-  previousReleaseId: state.previousReleaseId,
-  lastReleaseAt: state.lastReleaseAt,
-  releaseState: state.releaseState,
-  schemaVersion: state.schemaVersion,
-  appVersion: state.appVersion,
-});
+const stateOut = (state: ReturnType<typeof getTenantReleaseState> & object) => {
+  const rollback = getRollbackEligibility(state as never);
+  return {
+    tenantType: state.tenantType,
+    id: state.id,
+    name: state.name,
+    slug: state.slug,
+    baseUrl: state.baseUrl,
+    environment: state.environment,
+    companyId: state.companyId,
+    companySlug: state.companySlug,
+    status: state.status,
+    deployStatus: state.deployStatus,
+    coolifyUuid: state.coolifyUuid,
+    volumeName: state.volumeName,
+    imageDigest: state.imageDigest,
+    imageTag: state.imageTag,
+    releaseChannel: state.releaseChannel,
+    desiredReleaseId: state.desiredReleaseId,
+    lastReleaseId: state.lastReleaseId,
+    previousReleaseId: state.previousReleaseId,
+    lastReleaseAt: state.lastReleaseAt,
+    releaseState: state.releaseState,
+    schemaVersion: state.schemaVersion,
+    appVersion: state.appVersion,
+    runtimeHealth: state.runtimeHealth,
+    rollbackEligible: rollback.eligible,
+    rollbackReleaseId: rollback.targetReleaseId,
+    rollbackReason: rollback.reason,
+  };
+};
 
 const batchOut = (batch: NonNullable<ReturnType<typeof getBatch>>) => ({
   batch: {
