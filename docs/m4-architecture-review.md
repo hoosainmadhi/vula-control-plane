@@ -195,26 +195,30 @@ New:
 
 - `src/services/releaseCatalog.ts`
 - `src/services/releaseOrchestrator.ts`
+- `src/services/applicationGuard.ts`
 - `src/routes/releases.ts`
 - `src/__tests__/releases.test.ts`
+- `src/__tests__/stagingBoundary.test.ts`
 - `docs/m4-shared-image-control-plane.md`
 - `docs/m4-architecture-review.md`
 - `docs/m4.1-live-integration-plan.md`
 - `docs/m4.1-staging-ownership.json`
+- `docs/m4.1-token-rotation-plan.md`
 
 Modified:
 
 - `src/config/registryDb.ts` / `schema.sql` — release tables, tenant image
   state, release state, phases, deployment tracking.
 - `src/config/env.ts` / `.env.sample` — image names, health/lock timing,
-  allowlist, legacy-onboarding opt-in.
+  allowlist, legacy-onboarding opt-in and the optional staging boundary.
 - `src/__tests__/env-setup.ts` — pins the explicit legacy-onboarding opt-in for
   tests that exercise the old path.
 - `src/services/coolify.ts` — dockerimage creation, digest patch, deployment
-  status/storages clients, trigger id.
+  status/storages clients, trigger id, exact staging creation checks.
 - `src/services/storeProvisioning.ts` — image-first onboarding, verification,
-  production/opt-in fallback policy.
-- `src/services/clientOrchestrator.ts` — image-first onboarding and verification.
+  production/opt-in fallback policy and staging redeploy guard.
+- `src/services/clientOrchestrator.ts` — image-first onboarding, verification
+  and staging retry guard.
 - `src/routes/index.ts` — release routes.
 - `CONTEXT.md`, `progress.md`, `findings.md`, `task_plan.md` — doctrine and
   review record.
@@ -280,3 +284,28 @@ exact-resource manifest is
 Release B publication, upgrade/rollback, wave tests, Store B, Head Office, demo
 migration, production CP deployment, image publication, credential rotation,
 DNS/proxy/`acme.json` changes and any unrelated app modification.
+
+### 7.4 Repository-side staging boundary
+
+`src/services/applicationGuard.ts` makes the isolation enforceable rather than
+procedural:
+
+- staging creation requires the effective Coolify project, server and
+  destination to match `VULA_STAGING_*`;
+- the expected app name must match `VULA_STAGING_APP_PREFIXES` and the FQDN must
+  match the staging domain prefix/suffix;
+- after Coolify creates the app, the CP persists the UUID and reads the app back
+  to verify its exact name, Docker Image build pack, project (when reported) and
+  FQDN; a mismatch fails the deployment;
+- staging requires a non-empty exact UUID allowlist for every existing-app
+  modification, including the redeploy/retry paths that previously bypassed the
+  release controller;
+- production behavior is unchanged unless `VULA_STAGING_MODE=true`.
+
+Tests: `src/__tests__/stagingBoundary.test.ts` covers project/server/destination
+mismatch, name/domain refusal, missing scope, created-app mismatch and the exact
+allowlist. Full branch suite: **518/518** after this guard.
+
+Residual: the staging CP still holds a Root Team Coolify token. The guard
+prevents the CP's normal code paths from selecting another project/app, but a
+server-side compromise could still use the token outside those paths.

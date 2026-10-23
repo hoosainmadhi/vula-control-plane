@@ -11,6 +11,19 @@
     "rotateOrRevokeBeforeStageA": true,
     "stagingMustUseNewToken": true
   },
+  "stagingBoundary": {
+    "mode": true,
+    "projectUuid": null,
+    "serverUuid": "fmt7mqgjmpswlmtgsu65g1w5",
+    "destinationUuid": "yrsscsx3cerbxnf4iv3ujvm8",
+    "appPrefixes": [
+      "za-pos-m4-",
+      "vula-m4-"
+    ],
+    "domainPrefix": "m4-",
+    "domainSuffix": ".vula-app.co.za",
+    "existingModificationRequiresExactAllowlist": true
+  },
   "coolify": {
     "project": {
       "name": "vula-m4-staging",

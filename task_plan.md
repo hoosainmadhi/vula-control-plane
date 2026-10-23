@@ -1173,11 +1173,12 @@ and test locally; do not deploy the CP or migrate tenants.
   preflight, app allowlist, trigger/app persistence, in-flight reconciliation,
   `release_state`/phase tracking.
 - [x] Tests: `releases.test.ts` 29/29; main `dev` full backend **506/506**;
-  isolated branch **502/502**; typecheck and production build clean on both.
+  isolated branch **518/518** (38 suites); typecheck and production build clean
+  on both.
 - [x] Isolated M4 branch `m4/shared-image-release` (implementation `14c9133`;
   M4.1 docs `1092f69`, `9c9a654`, `dcb1311`) prepared from clean HEAD;
-  unrelated working-tree changes preserved on `dev`. Branch suite 502/502,
-  typecheck and build clean.
+  unrelated working-tree changes preserved on `dev`. Branch suite 518/518
+  (38 suites), typecheck and build clean.
 - [x] Read-only Coolify 4.4.7 contract check: application status, `/data`
   storage, deployment records/status and deployment-by-UUID confirmed; stop is
   an async queued job (exited state, containers removed). No live image app or
@@ -1186,10 +1187,22 @@ and test locally; do not deploy the CP or migrate tenants.
   arrangement, `/data/control-plane.db` volume contract, exact ownership
   manifest and stop-first recovery documented. `docs/m4.1-live-integration-plan.md`
   and `docs/m4.1-staging-ownership.json`.
+- [x] Token consumer audit: exact exposed value in Vula and OptiMed
+  `.env`; both deployed CPs expose `COOLIFY_API_TOKEN` env keys (values masked);
+  no local process/container/cron/systemd consumer found. Rotation sequence,
+  failure impact and rollback in `docs/m4.1-token-rotation-plan.md`.
+- [x] Staging boundary guard: exact project/server/destination, staging
+  name/domain, post-create read-back and mandatory allowlist on existing-app
+  retry/redeploy paths. Tests in `src/__tests__/stagingBoundary.test.ts`;
+  branch suite 518/518.
+- [x] Branch secret scan over `origin/dev..HEAD`: no private key, GitHub token,
+  JWT, Coolify assignment or exposed token value. No `.github` workflow and no
+  auto-deploy app references the branch. Branch remains unpushed.
 - [ ] Stage A approval gates: explicit acceptance of Root Team token residual
   (Coolify has no project/app-scoped token), revoke/rotate the existing token
-  exposed in a local tool log during preparation, push the exact isolated branch
-  commit (currently unpushed), and create the isolated Coolify project/token.
+  exposed in a local tool log after coordinated Vula/OptiMed replacement, push
+  the exact isolated branch commit (currently unpushed), and create the isolated
+  Coolify project/token.
 - [ ] M4.1 Stage A live execution: deploy `vula-cp-m4-staging`, register only
   Store release A, provision `za-pos-m4-store-a` through the CP, verify digest/
   arm64/TLS/DB/single writer, then stop. Separate approval required.
