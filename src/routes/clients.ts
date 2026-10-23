@@ -169,6 +169,8 @@ interface NestedStore {
   name: string;
   slug: string;
   baseUrl: string;
+  /** Short Coolify label; absent derives `<client>-<store>`. */
+  deploymentName?: string;
   /** 'store' (default) or 'warehouse' — a warehouse runs no tills. */
   kind: StoreRecord['kind'];
   terminalCount: number;
@@ -178,7 +180,13 @@ interface NestedStore {
 
 const validateNestedStore = async (
   entry: unknown,
-  fallback: { name: string; slug: string; baseUrl: string; adminEmail?: string },
+  fallback: {
+    name: string;
+    slug: string;
+    baseUrl: string;
+    deploymentName?: string;
+    adminEmail?: string;
+  },
 ): Promise<NestedStore> => {
   if (
     entry !== undefined &&
@@ -212,6 +220,7 @@ const validateNestedStore = async (
   const slug =
     e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
   const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
+  const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
   const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
 
   if (suppliedUrl) {
@@ -228,6 +237,7 @@ const validateNestedStore = async (
     name,
     slug,
     baseUrl,
+    ...(deploymentName ? { deploymentName } : {}),
     kind,
     terminalCount,
     licensedTerminalCount,
@@ -238,8 +248,20 @@ const validateNestedStore = async (
 /** A Head Office entry inside onboarding or the single→multi upgrade. */
 const validateNestedHeadOffice = async (
   entry: unknown,
-  fallback: { name: string; slug: string; baseUrl: string; adminEmail?: string },
-): Promise<{ name: string; slug: string; baseUrl: string; adminEmail?: string }> => {
+  fallback: {
+    name: string;
+    slug: string;
+    baseUrl: string;
+    deploymentName?: string;
+    adminEmail?: string;
+  },
+): Promise<{
+  name: string;
+  slug: string;
+  baseUrl: string;
+  deploymentName?: string;
+  adminEmail?: string;
+}> => {
   if (
     entry !== undefined &&
     (typeof entry !== 'object' || entry === null || Array.isArray(entry))
@@ -252,6 +274,7 @@ const validateNestedHeadOffice = async (
   const slug =
     e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
   const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
+  const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
   const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
 
   if (suppliedUrl) {
@@ -264,7 +287,13 @@ const validateNestedHeadOffice = async (
       );
     }
   }
-  return { name, slug, baseUrl, ...(adminEmail ? { adminEmail } : {}) };
+  return {
+    name,
+    slug,
+    baseUrl,
+    ...(deploymentName ? { deploymentName } : {}),
+    ...(adminEmail ? { adminEmail } : {}),
+  };
 };
 
 // --- Wire Types ---

@@ -1893,6 +1893,8 @@ export const getStoreBySlug = (slug: string): StoreRecord | null => {
 export interface CreateStoreInput {
   name: string;
   slug: string;
+  /** Short Coolify label; absent derives `<client>-<store>`. */
+  deploymentName?: string | null;
   vertical?: StoreVertical;
   /** Defaults to 'store' — a warehouse is a deliberate choice. */
   kind?: StoreKind;
@@ -1908,12 +1910,13 @@ export const createStore = (input: CreateStoreInput, controlPlaneToken: string):
   const insert = db.transaction(() => {
     const info = db
       .prepare(
-        `INSERT INTO stores (name, slug, vertical, kind, terminal_count, base_url, control_plane_token, environment, admin_email)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO stores (name, slug, deployment_name, vertical, kind, terminal_count, base_url, control_plane_token, environment, admin_email)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.name,
         input.slug,
+        input.deploymentName?.trim() || null,
         input.vertical ?? 'general',
         input.kind ?? 'store',
         input.terminalCount,
@@ -2921,6 +2924,7 @@ export interface PanelInput {
   slug: string;
   name: string;
   baseUrl: string;
+  deploymentName?: string | null;
   controlPlaneToken: string;
   adminEmail?: string | null;
 }
@@ -2928,13 +2932,14 @@ export interface PanelInput {
 export const createPanel = (input: PanelInput): PanelRecord => {
   const info = getRegistryDb()
     .prepare(
-      `INSERT INTO panels (company_id, slug, name, base_url, control_plane_token, admin_email)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO panels (company_id, slug, name, deployment_name, base_url, control_plane_token, admin_email)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.companyId,
       input.slug,
       input.name,
+      input.deploymentName?.trim() || null,
       input.baseUrl,
       input.controlPlaneToken,
       input.adminEmail?.trim().toLowerCase() || null,

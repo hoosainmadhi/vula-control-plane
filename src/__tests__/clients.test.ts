@@ -3,6 +3,7 @@ import { createApp } from '../app.js';
 import {
   createCompany,
   createStore,
+  listStores,
   resetRegistryDb,
   setStoreCompany,
 } from '../config/registryDb.js';
@@ -105,6 +106,36 @@ describe('Client-Centric Management & Orchestration (§1, §5, §6, §7)', () =>
     expect(detail.body.stores[0].configState).toBeDefined();
     expect(detail.body.stores[0].terminalNames).toBeDefined();
     expect(detail.body.headOffice).toBeNull();
+  });
+
+  it('preserves the requested deploymentName through onboarding', async () => {
+    const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send({
+        name: 'Naming Client',
+        slug: 'naming-client',
+        deploymentType: 'single_store',
+        autoDeploy: false,
+        stores: [
+          {
+            name: 'Naming Store',
+            slug: 'naming-store',
+            deploymentName: 'm4-store-a',
+            baseUrl: 'http://localhost:3245',
+            terminalCount: 1,
+          },
+        ],
+      })
+      .expect(201);
+
+    const store = listStores().find((s) => s.slug === 'naming-store');
+    expect(store?.deployment_name).toBe('m4-store-a');
+    const step = (res.body.steps as Array<{ step_key: string; metadata_json: string | null }>).find(
+      (s) => s.step_key === 'store_deploy_naming-store',
+    );
+    expect(step).toBeDefined();
+    expect(JSON.parse(step!.metadata_json!).deploymentName).toBe('m4-store-a');
   });
 
   it('creates and deploys a multi-store client with Head Office and multiple branches (§6)', async () => {

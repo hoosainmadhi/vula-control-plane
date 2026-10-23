@@ -59,6 +59,8 @@ export interface StoreDeploymentInput {
   name: string;
   slug: string;
   baseUrl: string;
+  /** Short Coolify label; absent derives `<client>-<store>`. */
+  deploymentName?: string;
   /**
    * 'store' (default) or 'warehouse'. A warehouse runs no tills and draws no
    * terminal licences (owner decisions, 2026-10-09), so it is deployed with a
@@ -79,6 +81,7 @@ export interface HeadOfficeDeploymentInput {
   name: string;
   slug: string;
   baseUrl: string;
+  deploymentName?: string;
   adminEmail?: string;
 }
 
@@ -122,6 +125,7 @@ export async function orchestrateClientDeployment(
       name: input.headOffice.name,
       slug: input.headOffice.slug,
       baseUrl: input.headOffice.baseUrl,
+      deploymentName: input.headOffice.deploymentName,
       adminEmail: input.headOffice.adminEmail,
     });
   }
@@ -131,6 +135,7 @@ export async function orchestrateClientDeployment(
       name: s.name,
       slug: s.slug,
       baseUrl: s.baseUrl,
+      deploymentName: s.deploymentName,
       terminalCount: s.terminalCount,
       licensedTerminalCount: s.licensedTerminalCount,
       adminEmail: s.adminEmail,
@@ -199,6 +204,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
             name: meta.name,
             slug: meta.slug,
             baseUrl: meta.baseUrl,
+            deploymentName: meta.deploymentName ?? null,
             controlPlaneToken: token,
             adminEmail: meta.adminEmail ?? null,
           });
@@ -338,6 +344,7 @@ export async function runJobSteps(jobId: number, autoDeploy = true): Promise<voi
               name: meta.name,
               slug: meta.slug,
               baseUrl: meta.baseUrl,
+              deploymentName: meta.deploymentName ?? null,
               kind: meta.kind ?? 'store',
               // `|| 1` would turn a warehouse's 0 into a till it must not have.
               terminalCount: meta.kind === 'warehouse' ? 0 : meta.terminalCount || 1,
