@@ -61,3 +61,17 @@ body {
     background: #fff;
   }
 }
+
+/* Shared form control used by the Releases workspace. */
+.input {
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid #e2e8f0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  outline: none;
+}
+.input:focus {
+  border-color: #2dd4bf;
+}

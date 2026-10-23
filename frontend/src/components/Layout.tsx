@@ -24,6 +24,7 @@ const NAV: NavItem[] = [
   { to: '/devices', label: 'Devices' },
   { to: '/versions', label: 'Versions' },
   { to: '/deployments', label: 'Deployments' },
+  { to: '/releases', label: 'Releases' },
   { to: '/errors', label: 'Errors' },
   { to: '/settings', label: 'Settings' },
 ];
