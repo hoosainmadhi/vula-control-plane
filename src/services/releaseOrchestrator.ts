@@ -15,6 +15,7 @@ import {
   getReleaseBatch,
   getRunningReleaseDeployment,
   getTenantReleaseState,
+  imageNameFor,
   listImageReleases,
   listReleaseBatchItems,
   listTenantReleaseStates,
@@ -112,6 +113,83 @@ export const waitForTenantHealth = async (
     await delay(intervalMs);
   } while (Date.now() < deadline);
   return false;
+};
+
+/**
+ * Post-deploy readiness. Coolify can report `running:unhealthy` while a new
+ * container is warming up, then become healthy. Poll for the exact image and
+ * health rather than treating the first transient status as a terminal failure.
+ * A definitively failed/exited/stopped app or a wrong image fails immediately;
+ * time out only when the app never reaches the expected state.
+ */
+export const waitForApplicationReady = async (
+  coolifyUuid: string,
+  release: ImageRelease,
+  baseUrl: string,
+  timeoutMs = env.releaseHealthTimeoutMs,
+  intervalMs = env.releaseHealthIntervalMs,
+): Promise<{ ok: boolean; error?: string }> => {
+  const expectedTag = release.digest.replace(/^sha256:/, '');
+  const expectedName = `${imageNameFor(release.kind)}@sha256`;
+  const cleanBase = baseUrl.replace(/\/+$/, '');
+  const deadline = Date.now() + timeoutMs;
+  do {
+    let application;
+    try {
+      application = await getApplication(coolifyUuid);
+    } catch {
+      if (Date.now() >= deadline) break;
+      await delay(intervalMs);
+      continue;
+    }
+
+    const status = String(application.status ?? '').toLowerCase();
+    if (/failed|exited|stopped/.test(status)) {
+      return { ok: false, error: `application_status_${status}` };
+    }
+    const imageName = String(application.docker_registry_image_name ?? '');
+    const imageTag = String(application.docker_registry_image_tag ?? '');
+    if (imageName !== expectedName || imageTag !== expectedTag) {
+      return {
+        ok: false,
+        error: `application_image_mismatch: expected ${expectedName}:${expectedTag}, running ${imageName || '(none)'}:${imageTag || '(none)'}`,
+      };
+    }
+
+    const healthyApp = application.container_present === true && status === 'running:healthy';
+    if (healthyApp) {
+      try {
+        const res = await fetch(`${cleanBase}/health`, {
+          redirect: 'error',
+          signal: AbortSignal.timeout(5000),
+        });
+        const body = (await res.json().catch(() => null)) as {
+          status?: unknown;
+          app?: unknown;
+          service?: unknown;
+          version?: unknown;
+          revision?: unknown;
+          database?: unknown;
+        } | null;
+        const identified = body?.app === 'vula' || body?.service === 'vula-head-office';
+        const versionMatches = body?.version === release.version;
+        const revisionMatches = !release.revision || body?.revision === release.revision;
+        const databaseMatches = release.kind !== 'store' || body?.database === 'connected';
+        if (res.ok && identified && versionMatches && revisionMatches && databaseMatches) {
+          return { ok: true };
+        }
+      } catch {
+        // Container is still warming up or the route is not ready.
+      }
+    }
+
+    if (Date.now() >= deadline) break;
+    await delay(intervalMs);
+  } while (Date.now() < deadline);
+  return {
+    ok: false,
+    error: `health_timeout_or_version_mismatch: ${cleanBase}/health did not report version ${release.version}`,
+  };
 };
 
 const assertReleaseKind = (release: ImageRelease, tenantType: TenantType): void => {
@@ -240,20 +318,14 @@ export const verifyImageDeployment = async (
   if (!deployment.ok) {
     throw new Error(deployment.error ?? `coolify_deployment_${deployment.status}`);
   }
-  const application = await getApplication(coolifyUuid);
-  const appStatus = String(application.status ?? '').toLowerCase();
-  if (appStatus && /failed|exited|stopped|unhealthy/.test(appStatus)) {
-    throw new Error(`application_status_${appStatus}`);
-  }
-  const healthy = await waitForTenantHealth(baseUrl, options.timeoutMs, options.intervalMs, {
-    version: release.version,
-    revision: release.revision,
-  });
-  if (!healthy) {
-    throw new Error(
-      `health_timeout_or_version_mismatch: ${baseUrl}/health did not report version ${release.version}`,
-    );
-  }
+  const readiness = await waitForApplicationReady(
+    coolifyUuid,
+    release,
+    baseUrl,
+    options.timeoutMs,
+    options.intervalMs,
+  );
+  if (!readiness.ok) throw new Error(readiness.error ?? 'application_not_ready');
 };
 
 /**
@@ -601,24 +673,17 @@ export const applyReleaseToTenant = async (
       throw new Error(deployment.error ?? `coolify_deployment_${deployment.status}`);
     }
 
-    const application = await getApplication(coolifyUuid);
-    const appStatus = String(application.status ?? '').toLowerCase();
-    if (appStatus && /failed|exited|stopped|unhealthy/.test(appStatus)) {
-      throw new Error(`application_status_${appStatus}`);
-    }
-
     updateReleaseDeploymentTracking(deploymentId, { phase: 'verifying' });
     markTenantDeployStatus(tenantType, tenantId, 'provisioning', 'verifying');
-    const healthy = await waitForTenantHealth(
+    const readiness = await waitForApplicationReady(
+      coolifyUuid,
+      release,
       state.baseUrl,
       options.healthTimeoutMs,
       options.healthIntervalMs,
-      { version: release.version, revision: release.revision },
     );
-    if (!healthy) {
-      throw new Error(
-        `health_timeout_or_version_mismatch: ${state.baseUrl}/health did not report version ${release.version}`,
-      );
+    if (!readiness.ok) {
+      throw new Error(readiness.error ?? 'application_not_ready');
     }
 
     const schemaVersion =

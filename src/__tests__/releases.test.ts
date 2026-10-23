@@ -22,6 +22,7 @@ import {
 import { runStoreProvisioning } from '../services/storeProvisioning.js';
 import { env } from '../config/env.js';
 import { jsonResponse, loginAsOffice, authHeader } from './helpers.js';
+import { signOfficeToken } from '../middleware/auth.js';
 
 const COOLIFY = 'http://coolify.test';
 const OLD_DIGEST = `sha256:${'0'.repeat(64)}`;
@@ -44,6 +45,8 @@ let storeStatusName: string | null = null;
 let activeAppDeployment = false;
 let createdAppName = 'za-pos-test';
 let createdAppFqdn = 'https://test.example';
+let appImageName = 'ghcr.io/hoosainmadhi/vula-pos-store@sha256';
+let appImageTag = 'old';
 
 const configureCoolify = (): void => {
   process.env.COOLIFY_API_URL = COOLIFY;
@@ -150,6 +153,8 @@ beforeEach(() => {
   activeAppDeployment = false;
   createdAppName = 'za-pos-test';
   createdAppFqdn = 'https://test.example';
+  appImageName = 'ghcr.io/hoosainmadhi/vula-pos-store@sha256';
+  appImageTag = 'old';
   fetchMock = jest.spyOn(globalThis, 'fetch');
   fetchMock.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
     const s = String(url);
@@ -159,6 +164,15 @@ beforeEach(() => {
       if (s.endsWith('/applications/dockerimage')) {
         if (createFailureStatus) {
           return jsonResponse(createFailureStatus, { message: 'image not found or unauthorized' });
+        }
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          docker_registry_image_name?: string;
+        };
+        const ref = String(body.docker_registry_image_name ?? '');
+        const parsed = /^(.*)@sha256:([a-f0-9]{64})$/.exec(ref);
+        if (parsed) {
+          appImageName = `${parsed[1]}@sha256`;
+          appImageTag = parsed[2];
         }
         return jsonResponse(201, { uuid: `new-${calls.length}` });
       }
@@ -203,12 +217,21 @@ beforeEach(() => {
           status: stopped ? 'exited' : 'running:healthy',
           container_present: !stopped,
           build_pack: 'dockerimage',
-          docker_registry_image_name: 'ghcr.io/hoosainmadhi/vula-pos-store',
-          docker_registry_image_tag: 'old',
+          docker_registry_image_name: appImageName,
+          docker_registry_image_tag: appImageTag,
         });
       }
       if (method === 'PATCH' && /\/applications\/[^/]+$/.test(s) && patchFailureStatus) {
         return jsonResponse(patchFailureStatus, { message: 'Unauthenticated.' });
+      }
+      if (method === 'PATCH' && /\/applications\/[^/]+$/.test(s)) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          docker_registry_image_name?: string;
+          docker_registry_image_tag?: string;
+        };
+        if (body.docker_registry_image_name) appImageName = body.docker_registry_image_name;
+        if (body.docker_registry_image_tag) appImageTag = body.docker_registry_image_tag;
+        return jsonResponse(200, { ok: true });
       }
       return jsonResponse(200, { ok: true });
     }
@@ -223,6 +246,7 @@ beforeEach(() => {
         status: 'ok',
         app: 'vula',
         version: healthVersion,
+        database: 'connected',
       });
     }
     return jsonResponse(200, {});
@@ -871,5 +895,36 @@ describe('release API surface', () => {
     expect(rollout.body.batch.status).toBe('dry_run');
     expect(rollout.body.items).toHaveLength(1);
     expect(rollout.body.items[0].tenantId).toBe(store.id);
+  });
+
+  it('exposes release-manager capability and denies non-manager mutations', async () => {
+    const app = createApp();
+    const manager = await loginAsOffice(app);
+    const caps = await request(app)
+      .get('/api/releases/capabilities')
+      .set(authHeader(manager))
+      .expect(200);
+    expect(caps.body.releaseManager).toBe(true);
+
+    const outsider = signOfficeToken('viewer@test.local');
+    const outsiderCaps = await request(app)
+      .get('/api/releases/capabilities')
+      .set(authHeader(outsider))
+      .expect(200);
+    expect(outsiderCaps.body.releaseManager).toBe(false);
+
+    await request(app)
+      .post('/api/releases')
+      .set(authHeader(outsider))
+      .send({
+        kind: 'store',
+        tag: 'forbidden',
+        digest: D,
+        version: '1.0.0',
+        schemaVersion: 1,
+        schemaMin: 1,
+        schemaMax: 1,
+      })
+      .expect(403);
   });
 });

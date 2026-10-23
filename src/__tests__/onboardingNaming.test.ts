@@ -53,14 +53,22 @@ beforeEach(() => {
           uuid: 'new-store-app',
           name: 'za-pos-m4-store-a',
           status: 'running:healthy',
+          container_present: true,
           build_pack: 'dockerimage',
           fqdn: 'http://localhost:3245',
+          docker_registry_image_name: 'ghcr.io/hoosainmadhi/vula-pos-store@sha256',
+          docker_registry_image_tag: 'e'.repeat(64),
         });
       }
       return jsonResponse(200, { ok: true });
     }
     if (s.endsWith('/health')) {
-      return jsonResponse(200, { status: 'ok', app: 'vula', version: '1.0.0' });
+      return jsonResponse(200, {
+        status: 'ok',
+        app: 'vula',
+        version: '1.0.0',
+        database: 'connected',
+      });
     }
     if (s.endsWith('/api/internal/status')) {
       return jsonResponse(200, { ok: true, storeName: 'Naming Store', version: '1.0.0' });

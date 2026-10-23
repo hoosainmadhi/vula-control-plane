@@ -90,6 +90,8 @@ export interface Env {
   releaseLockMinutes: number;
   /** Explicit Coolify application UUID allowlist for image changes. */
   allowedAppUuids: string[];
+  /** Office users allowed to publish/apply/rollback releases. */
+  releaseManagerEmails: string[];
   /** Explicit opt-in for the legacy Dockerfile path on non-production onboarding. */
   allowLegacyDockerfileOnboarding: boolean;
   /**
@@ -160,6 +162,10 @@ export const env: Env = {
   allowedAppUuids: (process.env.VULA_ALLOWED_APP_UUIDS ?? '')
     .split(',')
     .map((value) => value.trim())
+    .filter(Boolean),
+  releaseManagerEmails: (process.env.RELEASE_MANAGER_EMAILS ?? '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
     .filter(Boolean),
   allowLegacyDockerfileOnboarding: process.env.ALLOW_LEGACY_DOCKERFILE_ONBOARDING === 'true',
   stagingMode: process.env.VULA_STAGING_MODE === 'true',

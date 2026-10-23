@@ -52,3 +52,34 @@ export const requireKind =
   };
 
 export const requireOffice = requireKind('office');
+
+/**
+ * Release publication and tenant release actions are a narrower permission than
+ * general office access. The configured allowlist is authoritative; an empty
+ * allowlist in production denies every mutation. Development keeps the single
+ * office admin usable when no allowlist is configured.
+ */
+export const isReleaseManagerEmail = (email: string): boolean => {
+  const normalized = email.trim().toLowerCase();
+  if (env.releaseManagerEmails.includes(normalized)) return true;
+  return (
+    !env.isProduction &&
+    env.releaseManagerEmails.length === 0 &&
+    normalized === env.officeAdminEmail
+  );
+};
+
+export const requireReleaseManager: RequestHandler = (req, res, next) => {
+  if (!req.auth) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  if (!isReleaseManagerEmail(req.auth.email)) {
+    res.status(403).json({
+      error:
+        'Release-manager permission is required to publish, apply, roll back or start a release wave',
+    });
+    return;
+  }
+  next();
+};

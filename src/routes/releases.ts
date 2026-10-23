@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireOffice } from '../middleware/auth.js';
+import { requireOffice, requireReleaseManager, isReleaseManagerEmail } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HttpError } from '../utils/errors.js';
 import {
@@ -35,6 +35,17 @@ import {
 
 export const releasesRouter = Router();
 releasesRouter.use(requireOffice);
+
+releasesRouter.get(
+  '/capabilities',
+  asyncHandler(async (req, res) => {
+    res.json({
+      email: req.auth!.email,
+      releaseManager: isReleaseManagerEmail(req.auth!.email),
+      configured: true,
+    });
+  }),
+);
 
 const releaseOut = (release: ReturnType<typeof getImageRelease> & object) => ({
   id: release.id,
@@ -131,6 +142,7 @@ releasesRouter.get(
 
 releasesRouter.post(
   '/',
+  requireReleaseManager,
   asyncHandler(async (req, res) => {
     const release = createImageRelease(req.body);
     recordAuditLog(req.auth!.email, 'release_published', 'release', release.id, {
@@ -210,6 +222,7 @@ releasesRouter.get(
 
 releasesRouter.patch(
   '/tenants/:tenantType/:tenantId/channel',
+  requireReleaseManager,
   asyncHandler(async (req, res) => {
     const tenantType = tenantTypeOf(req.params.tenantType);
     const tenantId = parseIdParam(req.params.tenantId);
@@ -231,6 +244,7 @@ releasesRouter.patch(
 
 releasesRouter.post(
   '/tenants/:tenantType/:tenantId/reconcile',
+  requireReleaseManager,
   asyncHandler(async (req, res) => {
     const tenantType = tenantTypeOf(req.params.tenantType);
     const tenantId = parseIdParam(req.params.tenantId);
@@ -247,6 +261,7 @@ releasesRouter.post(
 
 releasesRouter.post(
   '/tenants/:tenantType/:tenantId/apply',
+  requireReleaseManager,
   asyncHandler(async (req, res) => {
     const tenantType = tenantTypeOf(req.params.tenantType);
     const tenantId = parseIdParam(req.params.tenantId);
@@ -270,6 +285,7 @@ releasesRouter.post(
 
 releasesRouter.post(
   '/tenants/:tenantType/:tenantId/rollback',
+  requireReleaseManager,
   asyncHandler(async (req, res) => {
     const tenantType = tenantTypeOf(req.params.tenantType);
     const tenantId = parseIdParam(req.params.tenantId);
@@ -286,6 +302,7 @@ releasesRouter.post(
 
 releasesRouter.post(
   '/:id/rollout',
+  requireReleaseManager,
   asyncHandler(async (req, res) => {
     const releaseId = parseIdParam(req.params.id);
     const release = getImageRelease(releaseId);
