@@ -79,10 +79,10 @@ to a shared image.
 
 - Store release **A** (`v2026.10.21-5781c2c`, stable) is registered.
 - Store release **B** (`v2026.10.23-86ed3e1-m4b`) is **beta and staging-only**.
-- **No Head Office image release is registered yet.** Production therefore
-  cannot onboard a new multi-store client's Head Office until an `ho` release
-  is published and registered. This is the main gap before production can use
-  the new path end to end.
+- Head Office release **A** (`v2026.10.21-5781c2c`, stable, ARM64) is
+  registered in both catalogs. Production can now onboard a new multi-store
+  client's Head Office through the new image path; the first such onboarding is
+  the acceptance test for GHCR pull access.
 - Existing Dockerfile tenants are not migrated automatically. Moving one to the
   new path is a deliberate blue/green migration.
 
@@ -98,7 +98,13 @@ deployment identity; a moving tag alone is never used.
 | ----- | ------------------------- | ------- | ------ | -------------------- |
 | store | `v2026.10.21-5781c2c`     | stable  | 1..1   | staging + production |
 | store | `v2026.10.23-86ed3e1-m4b` | beta    | 1..1   | staging only         |
-| ho    | —                         | —       | —      | none yet             |
+| ho    | `v2026.10.21-5781c2c`     | stable  | 1..1   | staging + production |
+
+The Head Office image is the existing private GHCR artifact for commit
+`5781c2c`, digest
+`sha256:d50f979c3c7a9f1dfdd51928cecf9f29ca6fd01f7dbfb594905b5c34ecb6a9d6`.
+It is ARM64 and reports the same version/revision as Store release A, so the
+pair is matched.
 
 The M4 test release `v2026.10.23-schema-gate` (digest `sha256:ffff…`) was a
 deliberate incompatible test artefact and was **not** copied to either
@@ -246,7 +252,7 @@ unassigned (`company_id = NULL`) because the schema preserves quote documents.
 - 0 clients, 0 stores, 0 Head Offices
 - 0 invoices, 0 payments, 0 deployment jobs
 - 9 plans
-- 1 catalog release: store A, stable
+- 2 catalog releases: store A stable + Head Office A stable
 - 2 unassigned quotes
 - `CP_ENVIRONMENT=production`; `running:healthy`
 
@@ -255,7 +261,7 @@ unassigned (`company_id = NULL`) because the schema preserves quote documents.
 - 11 stores, 2 Head Offices, 8 companies
 - 10 Dockerfile stores + 1 unprovisioned store; 2 Dockerfile Head Offices
 - 8 marketing demos + 3 rehearsal tenants
-- Catalog: store A stable, store B beta
+- Catalog: store A stable, Head Office A stable, store B beta
 - `CP_ENVIRONMENT=staging`; `ALLOW_LEGACY_DOCKERFILE_ONBOARDING=true`
 - All image actions blocked for the existing Dockerfile tenants
 
@@ -390,10 +396,10 @@ deliberately.
   is registered in both CPs, so a new production store can be provisioned from
   that image today. The first production image onboarding should be treated as
   the acceptance test for GHCR pull access on the production Coolify host.
-- **New Head Offices:** the new path is implemented but not usable in production
-  until an `ho` image release is published and registered. Until then,
-  production multi-store onboarding stops at the Head Office step; staging can
-  fall back to Dockerfile explicitly.
+- **New Head Offices:** use the new shared-image path. The stable Head Office
+  release A is registered in both catalogs from the same commit as Store
+  release A. The first production multi-store onboarding is the acceptance test
+  for the HO image, env injection and GHCR pull access.
 - **Existing Dockerfile tenants:** keep them running on the old path. Do not
   convert in place. Migrate blue/green when the tenant is ready.
 - **Release B:** remains beta and staging-only. Promote it to `stable` and

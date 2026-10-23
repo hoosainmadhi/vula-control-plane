@@ -1,5 +1,23 @@
 # Findings
 
+## 2026-10-23 — the HO image was already published; the token can read but not push
+
+- The private GHCR package `vula-pos-ho` already contained tag
+  `v2026.10.21-5781c2c` for the stable Store A commit. Its manifest digest is
+  `sha256:d50f979c…`, architecture `linux/arm64`, revision `5781c2c…`. This is
+  the correct production Head Office artifact and was registered as `ho`
+  release A instead of replacing it with a new build.
+- A fresh build from the same commit (`sha256:bb9b0202…`) passed the image
+  secret/security scripts and a production smoke test, so the build path is
+  reproducible. The available PAT has `write:packages` but the registry
+  returned `denied: denied`; a repo-scoped PAT returned
+  `permission_denied: The token provided does not match expected scopes`.
+  Publishing a new artifact requires a token with both `repo` and
+  `write:packages` (or a fine-grained token with package write access).
+- GHCR token exchange succeeds with the PAT and read requests work. The package
+  is private and linked to the private `vula-app` repository, which is why the
+  write scope alone is not sufficient.
+
 ## 2026-10-23 — consolidation: Dockerfile tenants must not look like image tenants
 
 - **`previous_release_id` is not deployment mode.** The staging and production

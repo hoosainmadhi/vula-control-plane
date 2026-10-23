@@ -1,5 +1,31 @@
 # Progress
 
+## 2026-10-23 — Head Office shared image verified and registered
+
+The stable Store A commit (`5781c2c`) already had a published private GHCR Head
+Office image, tagged `v2026.10.21-5781c2c`. I verified the artifact directly from
+the registry:
+
+- manifest digest `sha256:d50f979c3c7a9f1dfdd51928cecf9f29ca6fd01f7dbfb594905b5c34ecb6a9d6`;
+- `linux/arm64`, version `v2026.10.21-5781c2c`, revision
+  `5781c2c0a891f896b12e2f6cfdc7d7678cc18fa3`;
+- private package, linked to the private tenant repository.
+
+I also built a fresh Head Office image from the same clean commit on the ARM64
+Coolify host. It passed `check-image-secrets.sh` and `check-image-security.sh`,
+and a production-mode smoke run returned
+`{"ok":true,"service":"vula-head-office","database":"connected","version":
+"v2026.10.21-5781c2c-ho","revision":"5781c2c…"}`. The fresh build digest is
+`sha256:bb9b0202…`; it was not pushed because the available GHCR token grants
+read access but the registry denied the write (`permission_denied`, token scope
+mismatch). The existing published artifact from the exact same commit was used
+instead; a fresh push would require a token with both `repo` and
+`write:packages` (or equivalent package write permission).
+
+Registered `ho` release A (stable, schema 1..1, digest `sha256:d50f979c…`) in
+both permanent catalogs. Production now has a matched Store A + Head Office A
+pair; staging has those plus Store B beta.
+
 ## 2026-10-23 — production clients reset to none
 
 The owner asked for the production Clients list to be cleared. A fresh verified
