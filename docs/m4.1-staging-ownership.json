@@ -2,14 +2,17 @@
   "schema": 1,
   "owner": "m4-staging",
   "stage": "M4.1-A",
-  "status": "executed-gate-failed",
+  "status": "verified",
   "purpose": "Disposable M4.1 Stage A live-integration resources. No production, demo or super-stores resource belongs in this manifest.",
   "createdAt": "2026-10-23T03:17:45Z",
-  "verifiedAt": null,
+  "verifiedAt": "2026-10-23T07:28:42.540Z",
   "security": {
     "existingRootTeamCoolifyTokenExposedLocally": true,
-    "rotateOrRevokeBeforeStageA": true,
-    "stagingMustUseNewToken": true
+    "rotationCompleted": true,
+    "oldTokenRecordId": 2,
+    "oldTokenRevoked": true,
+    "oldTokenVersionStatus": 401,
+    "stagingUsesOwnToken": true
   },
   "stagingBoundary": {
     "mode": true,
@@ -97,7 +100,15 @@
         "cleanup": "stop, delete app, then delete its exact volume",
         "expectedName": "za-pos-m4-store-a",
         "actualVolumeName": "hme58ok1x4jvqi3cvdeapqzq-vula-store-m4-store-a-sqlite-db",
-        "actualHostPath": null
+        "actualHostPath": null,
+        "approvedName": "za-pos-m4-staging-client-m4-store-a",
+        "originalPredictedName": "za-pos-m4-store-a",
+        "amendment": {
+          "approved": true,
+          "approvedAt": "2026-10-23",
+          "reason": "Exact Store name differed from prediction; existing app accepted after UUID/project/domain/digest/storage/registry verification. No rename or recreation.",
+          "evidence": "docs/m4.1-stage-a-execution.md"
+        }
       }
     ]
   },
@@ -109,7 +120,9 @@
     "clientId": 1,
     "storeId": 1,
     "releaseId": 1,
-    "allowedAppUuids": []
+    "allowedAppUuids": [
+      "hme58ok1x4jvqi3cvdeapqzq"
+    ]
   },
   "cleanup": {
     "requiresStatus": "verified",
@@ -137,10 +150,13 @@
   },
   "execution": {
     "gate": "exact-store-app-name",
-    "expectedName": "za-pos-m4-store-a",
-    "actualName": "za-pos-m4-staging-client-m4-store-a",
-    "stoppedBeforeAllowlist": true,
+    "resolution": "approved naming amendment",
+    "expectedOriginalName": "za-pos-m4-store-a",
+    "acceptedActualName": "za-pos-m4-staging-client-m4-store-a",
+    "stoppedBeforeAllowlist": false,
+    "allowlistApplied": true,
     "rootCause": "clientOrchestrator step metadata and createStore omitted deploymentName; provisioning fell back to company.slug-store.name",
+    "defectDoc": "docs/onboarding-deployment-name-defect.md",
     "evidence": "docs/m4.1-stage-a-execution.md"
   }
 }

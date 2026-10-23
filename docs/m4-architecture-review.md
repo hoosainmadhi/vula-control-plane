@@ -205,6 +205,7 @@ New:
 - `docs/m4.1-staging-ownership.json`
 - `docs/m4.1-token-rotation-plan.md`
 - `docs/m4.1-stage-a-execution.md`
+- `docs/onboarding-deployment-name-defect.md`
 
 Modified:
 
@@ -226,12 +227,15 @@ Modified:
 - `CONTEXT.md`, `progress.md`, `findings.md`, `task_plan.md` — doctrine and
   review record.
 
-## 7. M4.1 Stage A (executed; stopped at exact-name gate)
+## 7. M4.1 Stage A (complete under approved naming amendment 1)
 
-**Execution result:** the CP and one Store are running and healthy, but the
-Store app was named `za-pos-m4-staging-client-m4-store-a`, not the approved
-`za-pos-m4-store-a`. The allowlist was not changed; execution stopped. Details:
-[`docs/m4.1-stage-a-execution.md`](./m4.1-stage-a-execution.md).
+**Execution result:** the CP and one Store are running and healthy. The Store app
+is `za-pos-m4-staging-client-m4-store-a`, accepted by explicit amendment after
+ownership verification; the exact UUID is allowlisted. No rename or recreation
+was performed. Details:
+[`docs/m4.1-stage-a-execution.md`](./m4.1-stage-a-execution.md). The separate
+`deploymentName` onboarding defect is recorded in
+[`docs/onboarding-deployment-name-defect.md`](./onboarding-deployment-name-defect.md).
 
 **Objective:** validate one CP-provisioned Store from the approved arm64 image
 on isolated staging infrastructure, without upgrading, rolling back, migrating a

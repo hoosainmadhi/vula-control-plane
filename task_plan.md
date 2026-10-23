@@ -1214,14 +1214,17 @@ and test locally; do not deploy the CP or migrate tenants.
   `9ae7fc5` with independent DB/volume and valid TLS; Store A release registered
   and one Store provisioned through the CP. Verified exact arm64 digest, storage,
   DB identity, health and deployment records.
-- [ ] Stage A exact-name gate failed: CP created
-  `za-pos-m4-staging-client-m4-store-a` instead of `za-pos-m4-store-a`.
-  Execution stopped before allowlist. Root cause: onboarding step metadata and
-  `createStore` omit `deploymentName`; evidence in
-  `docs/m4.1-stage-a-execution.md`.
-- [ ] Fix onboarding `deploymentName` propagation (metadata + `createStore`) with
-  a regression test, then redeploy CP and recreate the disposable Store under a
-  new approval.
+- [x] Stage A exact-name gate resolved by approved naming amendment 1: the
+  existing Store `za-pos-m4-staging-client-m4-store-a`
+  (`hme58ok1x4jvqi3cvdeapqzq`) is accepted after read-only UUID/project/domain/
+  digest/storage/registry verification. Only that UUID is allowlisted; only the
+  staging CP was restarted.
+- [x] Stage A final acceptance: CP and Store health 200, exact arm64 digest,
+  `/data` volume and DB, single container, release tracking healthy, project
+  ownership exactly CP + Store, existing Vula/OptiMed health unchanged.
+- [ ] Onboarding API defect (open): onboarding step metadata and `createStore`
+  omit `deploymentName`; `docs/onboarding-deployment-name-defect.md`. Must be
+  fixed with a regression test before general customer onboarding.
 - [ ] M4.1 Stage B: release B, upgrade/rollback and waves; not approved.
 - [ ] Existing Dockerfile→dockerimage blue/green migration (separate approval).
 - [ ] Image signature/attestation verification (supply-chain follow-up).
