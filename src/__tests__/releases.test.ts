@@ -1031,15 +1031,22 @@ describe('release API surface', () => {
     const app = createApp();
     const token = await loginAsOffice(app);
     const oldStaging = env.stagingMode;
+    const oldCp = env.cpEnvironment;
     try {
       env.stagingMode = false;
+      env.cpEnvironment = null;
       const dev = await request(app).get('/api/auth/me').set(authHeader(token)).expect(200);
       expect(dev.body.environment).toBe('development');
       env.stagingMode = true;
       const staging = await request(app).get('/api/auth/me').set(authHeader(token)).expect(200);
       expect(staging.body.environment).toBe('staging');
+      env.stagingMode = false;
+      env.cpEnvironment = 'staging';
+      const explicit = await request(app).get('/api/auth/me').set(authHeader(token)).expect(200);
+      expect(explicit.body.environment).toBe('staging');
     } finally {
       env.stagingMode = oldStaging;
+      env.cpEnvironment = oldCp;
     }
   });
 

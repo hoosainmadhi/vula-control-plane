@@ -70,9 +70,13 @@ if (isProduction && !(process.env.MANAGED_ENDPOINT_SUFFIXES ?? '').trim()) {
   process.exit(1);
 }
 
+export type ControlPlaneEnvironment = 'production' | 'staging' | 'development';
+
 export interface Env {
   port: number;
   isProduction: boolean;
+  /** Explicit environment label for this Control Plane instance. */
+  cpEnvironment: ControlPlaneEnvironment | null;
   logLevel: string;
   dbPath: string;
   officeAdminEmail: string;
@@ -144,6 +148,14 @@ export interface Env {
 export const env: Env = {
   port: Number(process.env.PORT || 3240),
   isProduction,
+  cpEnvironment:
+    process.env.CP_ENVIRONMENT?.trim().toLowerCase() === 'production'
+      ? 'production'
+      : process.env.CP_ENVIRONMENT?.trim().toLowerCase() === 'staging'
+        ? 'staging'
+        : process.env.CP_ENVIRONMENT?.trim().toLowerCase() === 'development'
+          ? 'development'
+          : null,
   logLevel: process.env.LOG_LEVEL || 'info',
   dbPath: process.env.CP_DB_PATH || process.env.DB_PATH || 'data/control-plane.db',
   officeAdminEmail: requireEnv('OFFICE_ADMIN_EMAIL', 'admin@za-pos.local').toLowerCase(),
@@ -193,10 +205,9 @@ export const env: Env = {
   trustProxyHops: Math.max(0, Number(process.env.CP_TRUST_PROXY_HOPS || 0)),
 };
 
-export type ControlPlaneEnvironment = 'production' | 'staging' | 'development';
-
 /** The environment the Control Plane itself is running as, not the browser host. */
 export const controlPlaneEnvironment = (): ControlPlaneEnvironment => {
+  if (env.cpEnvironment) return env.cpEnvironment;
   if (env.stagingMode) return 'staging';
   if (env.isProduction) return 'production';
   return 'development';
