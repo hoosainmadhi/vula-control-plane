@@ -12,15 +12,19 @@
 #   release-apps.sh <name>      one app (run `release-apps.sh list` for names)
 #   release-apps.sh list        print the names, deploy nothing
 #
-# Credentials come from COOLIFY_API_URL / COOLIFY_API_TOKEN if set, otherwise
-# from the optimed control plane's .env, where the token already lives — this
-# script does not create another copy.
+# Credentials come only from this application's own environment or its own
+# repository-root .env. There is deliberately no fallback to another
+# application's .env: a missing Vula credential must fail closed.
 set -euo pipefail
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
 if [ -z "${COOLIFY_API_URL:-}" ] || [ -z "${COOLIFY_API_TOKEN:-}" ]; then
-  ENV_FILE=${COOLIFY_ENV_FILE:-$HOME/apps/optimed-control-plane/.env}
+  ENV_FILE="$ROOT_DIR/.env"
   if [ ! -f "$ENV_FILE" ]; then
     echo "COOLIFY_API_URL / COOLIFY_API_TOKEN unset and $ENV_FILE missing" >&2
+    echo "Each application must use its own Coolify credential; no cross-application fallback." >&2
     exit 1
   fi
   COOLIFY_API_URL=$(grep -m1 '^COOLIFY_API_URL=' "$ENV_FILE" | cut -d= -f2-)
