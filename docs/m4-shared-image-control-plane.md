@@ -196,7 +196,7 @@ New suite: `src/__tests__/releases.test.ts` — **29 tests**:
 - office auth, release creation and a dry-run wave through the HTTP API.
 
 Full Control Plane backend on the isolated `m4/shared-image-release` branch:
-**520/520 tests, 39 suites**; the main `dev` working tree with its pre-existing
+**526/526 tests, 41 suites**; the main `dev` working tree with its pre-existing
 unrelated tests is **506/506**. `npm run typecheck` and `npm run build` are
 clean on the branch. No frontend files were changed for M4.
 

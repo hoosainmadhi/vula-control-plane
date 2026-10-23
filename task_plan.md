@@ -1173,12 +1173,12 @@ and test locally; do not deploy the CP or migrate tenants.
   preflight, app allowlist, trigger/app persistence, in-flight reconciliation,
   `release_state`/phase tracking.
 - [x] Tests: `releases.test.ts` 29/29; main `dev` full backend **506/506**;
-  isolated branch **520/520** (39 suites); typecheck and production build clean
+  isolated branch **526/526** (41 suites); typecheck and production build clean
   on both.
 - [x] Isolated M4 branch `m4/shared-image-release` (implementation `14c9133`;
   M4.1 docs `1092f69`, `9c9a654`, `dcb1311`) prepared from clean HEAD;
-  unrelated working-tree changes preserved on `dev`. Branch suite 520/520
-  (39 suites), typecheck and build clean.
+  unrelated working-tree changes preserved on `dev`. Branch suite 526/526
+  (41 suites), typecheck and build clean.
 - [x] Read-only Coolify 4.4.7 contract check: application status, `/data`
   storage, deployment records/status and deployment-by-UUID confirmed; stop is
   an async queued job (exited state, containers removed). No live image app or
@@ -1199,7 +1199,7 @@ and test locally; do not deploy the CP or migrate tenants.
   name/domain, post-create read-back and mandatory allowlist on existing-app
   retry/redeploy paths. First Store creation is intentionally allowed before its
   UUID is added to the existing-app allowlist. Tests in
-  `src/__tests__/stagingBoundary.test.ts`; branch suite 520/520.
+  `src/__tests__/stagingBoundary.test.ts`; branch suite 526/526.
 - [x] Branch secret scan over `origin/dev..HEAD`: no private key, GitHub token,
   JWT, Coolify assignment or exposed token value. No `.github` workflow and no
   auto-deploy app references the branch. Branch pushed at `9ae7fc5`.
@@ -1225,7 +1225,7 @@ and test locally; do not deploy the CP or migrate tenants.
 - [x] Onboarding API defect fixed and deployed: nested input, step metadata,
   `createStore`/`createPanel` and inserts preserve `deploymentName`.
   Regression tests in `clients.test.ts` and `onboardingNaming.test.ts`; full
-  suite 520/520, typecheck/build clean. CP commit `619f936` deployed to staging.
+  suite 526/526, typecheck/build clean. CP commit `619f936` deployed to staging.
 - [x] M4.1 Stage B: Release B published privately at exact digest
   `sha256:72a9aeb8...`, version `v2026.10.23-86ed3e1-m4b`, arm64. Approval packet
   in `docs/m4.1-release-b-approval.md`.
@@ -1233,16 +1233,18 @@ and test locally; do not deploy the CP or migrate tenants.
 - [x] CP naming and image-update fixes deployed to `vula-cp-m4-staging`
   (commit `619f936`); registry intact.
 - [x] Store A backup created and verified (`53180ac2...`).
-- [!] Stage B A→B failed: Coolify image update used `<repo>:<digest-hex>` and
-  could not pull B. Stop-first held (max one container); Store A restored to A
-  and DB intact. The fixed image-update path was then deployed, but CP
-  rollback-to-A reconciliation failed at stop confirmation because Coolify kept
-  reporting `running:healthy` after the container was gone. Store A was restored
-  manually again. No rollback/wave test. Full report:
-  `docs/m4.1-stage-b-execution.md`.
-- [ ] Stop-confirmation reconciliation defect open: Coolify app status can remain
-  `running:healthy` after the container is removed; CP refuses after 30s. Fix and
-  retest before retrying Stage B.
+- [x] Stage B **complete**: A→B→A through the CP verified with exact digests,
+  one container throughout, SQLite integrity and a persistence probe surviving
+  both transitions. Final report: `docs/m4.1-stage-b-results.md`.
+- [x] Stop confirmation now uses Coolify `container_present=false`; stale status
+  and unknown state fail closed. Regression tests added.
+- [x] Runtime reconciliation endpoint verifies UUID/digest/version/revision/DB/
+  volume/schema/no-active-job, audits the correction and preserves failed history.
+- [x] Two-store wave test: wave 1 Store B failed schema gate, wave 2 Store A
+  skipped, no Coolify deployment, `stopOnFailure=true`.
+- [ ] Post-deploy status race: B can report `running:unhealthy` briefly during
+  warm-up; audited reconciliation corrects the false failure. A future fix should
+  wait for app/container readiness before declaring the upgrade failed.
 - [ ] Existing Dockerfile→dockerimage blue/green migration (separate approval).
 - [ ] Image signature/attestation verification (supply-chain follow-up).
 - [ ] Panel schema reporting from live telemetry (currently only set by this

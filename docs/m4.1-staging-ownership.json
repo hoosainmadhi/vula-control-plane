@@ -33,7 +33,8 @@
       "uuid": "rvwcat5q2rdaref7i2msawkt",
       "mustContainOnly": [
         "vula-cp-m4-staging",
-        "za-pos-m4-staging-client-m4-store-a"
+        "za-pos-m4-staging-client-m4-store-a",
+        "za-pos-m4-store-b"
       ]
     },
     "serverUuid": "fmt7mqgjmpswlmtgsu65g1w5",
@@ -121,7 +122,23 @@
     "storeId": 1,
     "releaseId": 1,
     "allowedAppUuids": [
-      "hme58ok1x4jvqi3cvdeapqzq"
+      "hme58ok1x4jvqi3cvdeapqzq",
+      "o3xwk2sox9nyn1e6cg5hjoph"
+    ],
+    "additionalStores": [
+      {
+        "storeSlug": "m4-store-b",
+        "clientSlug": "m4-stage-b-client",
+        "storeId": 2,
+        "appName": "za-pos-m4-store-b",
+        "appUuid": "o3xwk2sox9nyn1e6cg5hjoph",
+        "volumeName": "vula-store-m4-store-b-sqlite-db",
+        "actualVolumeName": "o3xwk2sox9nyn1e6cg5hjoph-vula-store-m4-store-b-sqlite-db",
+        "domain": "https://m4-store-b.vula-app.co.za",
+        "imageDigest": "sha256:6db6b974b78c663a42796db9b738cc4ee21bc097bd1f9ba29ea836ef8ef5cb14",
+        "imageTag": "v2026.10.21-5781c2c",
+        "environment": "staging"
+      }
     ]
   },
   "cleanup": {
@@ -158,5 +175,15 @@
     "rootCause": "clientOrchestrator step metadata and createStore omitted deploymentName; provisioning fell back to company.slug-store.name",
     "defectDoc": "docs/onboarding-deployment-name-defect.md",
     "evidence": "docs/m4.1-stage-a-execution.md"
+  },
+  "stageB": {
+    "status": "complete",
+    "waveBatchId": 1,
+    "waveStatus": "partial",
+    "waveFailedStore": "m4-store-b",
+    "waveSkippedStore": "m4-store-a",
+    "releaseBDigest": "sha256:72a9aeb896d4aa6bdb570e696f9b51b6954acd981a6fe304c3bd18ee6a585cb5",
+    "notes": "A→B→A verified; persistence probe survived; post-deploy app-status race reconciled via audited endpoint",
+    "evidence": "docs/m4.1-stage-b-results.md"
   }
 }
