@@ -55,8 +55,12 @@ Existing failed history is never rewritten by the UI.
 - `rollbackTenant()` enforces the same rules with `409 rollback_not_eligible`.
   A caller-supplied `toReleaseId` must equal the server-verified target;
   any other release is refused with a message directing it to Upgrade.
-- Live staging verification (2026-10-23, before the direction fix): header
+- Live staging verification after the direction fix (2026-10-23): header
   **Staging**, Tenants 2, Runtime healthy 2, Needs attention 0, Active
-  releases 3. After the fix, Store A (A → B → A) reports
-  `rollbackEligible: false`; Store B (first verified deployment) also reports
-  `rollbackEligible: false`.
+  releases 3. Store A (`A → B → A`, `previousReleaseId = B`) reports
+  `rollbackEligible: false` with “The current release was restored by a
+  rollback; there is no earlier verified release to roll back to. Use Upgrade
+  to move forward”. Store B (first deployment) reports
+  `rollbackEligible: false` with “No verified successful forward deployment
+  into the current release is recorded; use Upgrade to change releases”.
+  Upgrade remains enabled for both.
