@@ -1,5 +1,22 @@
 # Progress
 
+## 2026-10-23 — production clients reset to none
+
+The owner asked for the production Clients list to be cleared. A fresh verified
+backup was taken first: `sha256:528d22a24917d59f9fa4eb789971fe5778c6b6a6adbf9e82f513b99c33b3f9ef`,
+258,048 bytes, 1 company / 1 invoice / 1 payment, integrity ok, stored at
+`~/.config/za-pos/backups/vula-cp-prod-pre-client-reset-20261023.db` (mode 600).
+
+The `Super Stores` company was then deleted in one transaction with foreign
+keys enabled. Its dependent invoice, payment, subscription, deployment job and
+billing rows cascaded; the paid invoice and payment are gone by owner request,
+not through the normal delete endpoint, which still refuses financial history.
+An audit row `company_deleted` was written. Post-reset: 0 companies, 0 stores,
+0 panels, 0 invoices, 0 payments, 0 deployment jobs; two quotes remain with
+`company_id = NULL`; plans remain. `/api/clients`, `/api/companies`,
+`/api/billing/invoices` and `/api/billing/payments` all return empty; the CP is
+healthy.
+
 ## 2026-10-23 — M4 release management consolidated into the permanent Control Planes
 
 One codebase now serves both permanent Control Planes. `m4/shared-image-release`
