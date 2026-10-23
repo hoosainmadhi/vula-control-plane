@@ -1,5 +1,9 @@
 # M4 — Shared-Image Release Controller (repository-side)
 
+> **Superseded for operations** by [`docs/control-plane-guide.md`](control-plane-guide.md).
+> This file is retained as the design history of the M4 implementation; the
+> current release/rollback rules and deployment policy are in the guide.
+
 **Status:** implemented and tested in the Control Plane repository only. **No
 Control Plane deployment, no registry publish, no live Coolify change and no
 existing-tenant migration was performed.** Existing uncommitted work in this

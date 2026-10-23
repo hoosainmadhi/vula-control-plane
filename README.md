@@ -7,6 +7,10 @@ and can reset a store's admin password. House control-plane pattern (see
 `~/apps/common-files/CONTROL-PLANE-SPEC.md`; reference implementation
 `~/apps/optimed-control-plane`).
 
+**Operations guide:** [`docs/control-plane-guide.md`](docs/control-plane-guide.md)
+covers the current architecture, the two permanent environments, the shared-image
+release workflow, legacy Dockerfile handling and the current production state.
+
 **Scope:** the fleet registry, terminal provisioning, **subscription licensing**
 and **billing**. Concretely:
 
