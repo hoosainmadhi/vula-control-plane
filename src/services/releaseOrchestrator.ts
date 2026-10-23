@@ -12,6 +12,7 @@ import {
   createReleaseDeployment,
   finishReleaseDeployment,
   getImageRelease,
+  getLastSuccessfulForwardDeployment,
   getReleaseBatch,
   getRunningReleaseDeployment,
   getTenantReleaseState,
@@ -775,14 +776,46 @@ export interface RollbackEligibility {
   reason: string | null;
 }
 
-/** Server-owned rollback eligibility: an active prior release that can open the current schema. */
+/**
+ * Server-owned rollback eligibility. A rollback returns to the release the
+ * tenant ran before the current release was applied, so the target comes from
+ * verified successful forward history (provision/upgrade INTO the current
+ * release), never from `previous_release_id` alone:
+ *
+ *   A -> B -> rollback A      no target (B is a forward Upgrade, not a rollback)
+ *   A -> B -> C -> rollback B target A (not C, the release just left)
+ *
+ * The target must still be in the catalog, be active, match the tenant kind,
+ * and support the database schema the tenant currently runs.
+ */
 export const getRollbackEligibility = (state: TenantReleaseState): RollbackEligibility => {
-  const targetId = state.previousReleaseId;
+  if (!state.lastReleaseId) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason: 'No verified successful deployment is recorded for this tenant',
+    };
+  }
+  const forward = getLastSuccessfulForwardDeployment(
+    state.tenantType,
+    state.id,
+    state.lastReleaseId,
+  );
+  if (!forward) {
+    return {
+      eligible: false,
+      targetReleaseId: null,
+      reason:
+        'No verified successful forward deployment into the current release is recorded; use Upgrade to change releases',
+    };
+  }
+  const targetId = forward.from_release_id;
   if (!targetId) {
     return {
       eligible: false,
       targetReleaseId: null,
-      reason: 'No previous release is recorded for this deployment',
+      reason:
+        'The current release is the first verified deployment for this tenant; there is no earlier release to roll back to',
     };
   }
   const target = getImageRelease(targetId);
@@ -790,21 +823,21 @@ export const getRollbackEligibility = (state: TenantReleaseState): RollbackEligi
     return {
       eligible: false,
       targetReleaseId: null,
-      reason: `Previous release ${targetId} is not in the catalog`,
+      reason: `Rollback target release ${targetId} is not in the catalog`,
     };
   }
   if (target.kind !== (state.tenantType === 'store' ? 'store' : 'ho')) {
     return {
       eligible: false,
       targetReleaseId: null,
-      reason: 'Previous release is for a different application kind',
+      reason: 'Rollback target release is for a different application kind',
     };
   }
   if (!target.is_active) {
     return {
       eligible: false,
       targetReleaseId: null,
-      reason: 'Previous release is inactive',
+      reason: 'Rollback target release is inactive',
     };
   }
   if (state.schemaVersion === null || state.schemaVersion === undefined) {
@@ -818,7 +851,7 @@ export const getRollbackEligibility = (state: TenantReleaseState): RollbackEligi
     return {
       eligible: false,
       targetReleaseId: null,
-      reason: `Previous release supports schema ${target.schema_min}..${target.schema_max}, current schema is ${state.schemaVersion}`,
+      reason: `Rollback target supports schema ${target.schema_min}..${target.schema_max}, current schema is ${state.schemaVersion}`,
     };
   }
   return { eligible: true, targetReleaseId: target.id, reason: null };
@@ -833,14 +866,18 @@ export const rollbackTenant = async (
   const state = getTenantReleaseState(tenantType, tenantId);
   if (!state)
     throw new HttpError(404, tenantType === 'store' ? 'Store not found' : 'Head Office not found');
-  const eligibility = getRollbackEligibility({
-    ...state,
-    previousReleaseId: toReleaseId ?? state.previousReleaseId,
-  });
+  const eligibility = getRollbackEligibility(state);
   if (!eligibility.eligible || !eligibility.targetReleaseId) {
     throw new HttpError(
       409,
       `rollback_not_eligible: ${eligibility.reason ?? 'no valid rollback target'}`,
+      'rollback_not_eligible',
+    );
+  }
+  if (toReleaseId !== undefined && toReleaseId !== eligibility.targetReleaseId) {
+    throw new HttpError(
+      409,
+      `rollback_not_eligible: release ${toReleaseId} is not the verified rollback target; use Upgrade to move to another release`,
       'rollback_not_eligible',
     );
   }

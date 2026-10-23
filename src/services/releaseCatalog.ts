@@ -846,6 +846,40 @@ export const finishReleaseDeployment = (
     );
 };
 
+/**
+ * The last successful deployment that moved this tenant forward INTO
+ * `toReleaseId`. Rollback rows are deliberately excluded: a release the tenant
+ * left by rolling back is not itself a rollback target. That distinction is
+ * what keeps A -> B -> A from offering B as a "rollback" (which would really be
+ * an upgrade).
+ */
+export const getLastSuccessfulForwardDeployment = (
+  tenantType: TenantType,
+  tenantId: number,
+  toReleaseId: number,
+): {
+  id: number;
+  action: ReleaseAction;
+  from_release_id: number | null;
+  to_release_id: number | null;
+} | null =>
+  (getRegistryDb()
+    .prepare(
+      `SELECT id, action, from_release_id, to_release_id
+         FROM release_deployments
+        WHERE tenant_type = ? AND tenant_id = ? AND status = 'complete'
+          AND action IN ('provision', 'upgrade') AND to_release_id = ?
+        ORDER BY id DESC LIMIT 1`,
+    )
+    .get(tenantType, tenantId, toReleaseId) as
+    | {
+        id: number;
+        action: ReleaseAction;
+        from_release_id: number | null;
+        to_release_id: number | null;
+      }
+    | undefined) ?? null;
+
 export const listReleaseDeployments = (tenantType: TenantType, tenantId: number, limit = 20) =>
   getRegistryDb()
     .prepare(

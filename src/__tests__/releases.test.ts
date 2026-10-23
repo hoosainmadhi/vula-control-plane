@@ -12,10 +12,12 @@ import {
 import {
   acquireDeploymentLock,
   createImageRelease,
+  getTenantReleaseState,
   listReleaseDeployments,
 } from '../services/releaseCatalog.js';
 import {
   applyReleaseToTenant,
+  getRollbackEligibility,
   rollbackTenant,
   startReleaseBatch,
 } from '../services/releaseOrchestrator.js';
@@ -128,6 +130,24 @@ const release = (
     schemaMax: 1,
     ...over,
   });
+
+/** Record a terminal-success deployment row, as the orchestrator does on success. */
+const recordCompleteDeployment = (
+  storeId: number,
+  action: 'provision' | 'upgrade' | 'rollback',
+  releaseId: number,
+  fromReleaseId: number | null,
+  toDigest: string,
+): void => {
+  getRegistryDb()
+    .prepare(
+      `INSERT INTO release_deployments
+         (tenant_type, tenant_id, release_id, action, from_release_id, to_release_id,
+          to_digest, status, phase, completed_at)
+       VALUES ('store', ?, ?, ?, ?, ?, ?, 'complete', 'healthy', datetime('now'))`,
+    )
+    .run(storeId, releaseId, action, fromReleaseId, releaseId, toDigest);
+};
 
 beforeEach(() => {
   resetRegistryDb();
@@ -455,7 +475,7 @@ describe('per-tenant release application', () => {
     }
   });
 
-  it('rolls back to the previous release only when the target schema is compatible', async () => {
+  it('rolls back to the previous release when verified forward history proves the target', async () => {
     const store = seedStore({ slug: 'rollback' });
     const first = release({ tag: 'v1', digest: A });
     const second = release({ tag: 'v2', digest: B });
@@ -464,6 +484,7 @@ describe('per-tenant release application', () => {
         "UPDATE stores SET image_digest = ?, image_tag = 'v2', last_release_id = ?, previous_release_id = ?, schema_version = 1 WHERE id = ?",
       )
       .run(B, second.id, first.id, store.id);
+    recordCompleteDeployment(store.id, 'upgrade', second.id, first.id, B);
     calls = [];
     const result = await rollbackTenant('store', store.id, 'office@test.local');
     expect(result.status).toBe('complete');
@@ -474,14 +495,102 @@ describe('per-tenant release application', () => {
     expect(updated.previous_release_id).toBe(second.id);
   });
 
+  it('does not offer the release it just rolled back from as another rollback target', async () => {
+    const store = seedStore({ slug: 'abab' });
+    const a = release({ tag: 'v1', digest: A, version: '1.0.0' });
+    const b = release({ tag: 'v2', digest: B, version: '2.0.0' });
+    getRegistryDb()
+      .prepare(
+        "UPDATE stores SET image_digest = ?, image_tag = 'v1', last_release_id = ? WHERE id = ?",
+      )
+      .run(A, a.id, store.id);
+
+    healthVersion = '2.0.0';
+    const up = await applyReleaseToTenant('store', store.id, b.id, {
+      actor: 'office@test.local',
+      healthTimeoutMs: 100,
+      healthIntervalMs: 5,
+    });
+    expect(up.status).toBe('complete');
+    expect(getRollbackEligibility(getTenantReleaseState('store', store.id)!)).toMatchObject({
+      eligible: true,
+      targetReleaseId: a.id,
+    });
+
+    healthVersion = '1.0.0';
+    const down = await rollbackTenant('store', store.id, 'office@test.local');
+    expect(down.status).toBe('complete');
+    expect(down.toDigest).toBe(A);
+
+    const after = getTenantReleaseState('store', store.id)!;
+    expect(after.lastReleaseId).toBe(a.id);
+    // The rolled-back-from release is still recorded, but recorded history now
+    // says the only forward move into A was the original baseline: no target.
+    expect(after.previousReleaseId).toBe(b.id);
+    const eligibility = getRollbackEligibility(after);
+    expect(eligibility.eligible).toBe(false);
+    expect(eligibility.targetReleaseId).toBeNull();
+    expect(eligibility.reason).toMatch(/No verified successful forward deployment/);
+
+    await expect(rollbackTenant('store', store.id, 'office@test.local')).rejects.toThrow(
+      /rollback_not_eligible/,
+    );
+
+    // B remains reachable through the normal Upgrade workflow.
+    healthVersion = '2.0.0';
+    const forwardAgain = await applyReleaseToTenant('store', store.id, b.id, {
+      actor: 'office@test.local',
+      action: 'upgrade',
+      healthTimeoutMs: 100,
+      healthIntervalMs: 5,
+    });
+    expect(forwardAgain.status).toBe('complete');
+    expect(getStoreById(store.id)!.image_digest).toBe(B);
+  });
+
+  it('after A -> B -> C -> rollback B, offers A rather than the release just left', () => {
+    const store = seedStore({ slug: 'abc' });
+    const a = release({ tag: 'v1', digest: A, version: '1.0.0' });
+    const b = release({ tag: 'v2', digest: B, version: '2.0.0' });
+    const c = release({ tag: 'v3', digest: C, version: '3.0.0' });
+    getRegistryDb()
+      .prepare(
+        'UPDATE stores SET image_digest = ?, last_release_id = ?, previous_release_id = ?, schema_version = 1 WHERE id = ?',
+      )
+      .run(B, b.id, c.id, store.id);
+    recordCompleteDeployment(store.id, 'upgrade', b.id, a.id, B);
+    recordCompleteDeployment(store.id, 'upgrade', c.id, b.id, C);
+    recordCompleteDeployment(store.id, 'rollback', b.id, c.id, B);
+
+    const eligibility = getRollbackEligibility(getTenantReleaseState('store', store.id)!);
+    expect(eligibility).toMatchObject({ eligible: true, targetReleaseId: a.id });
+  });
+
+  it('refuses a requested rollback target that is not the verified one', async () => {
+    const store = seedStore({ slug: 'rollback-mismatch' });
+    const a = release({ tag: 'v1', digest: A });
+    const b = release({ tag: 'v2', digest: B });
+    getRegistryDb()
+      .prepare('UPDATE stores SET image_digest = ?, last_release_id = ? WHERE id = ?')
+      .run(B, b.id, store.id);
+    recordCompleteDeployment(store.id, 'upgrade', b.id, a.id, B);
+
+    await expect(rollbackTenant('store', store.id, 'office@test.local', b.id)).rejects.toThrow(
+      /not the verified rollback target/,
+    );
+    expect(calls).toHaveLength(0);
+  });
+
   it('refuses a rollback whose target cannot open the current schema', async () => {
     const store = seedStore({ slug: 'rollback-schema' });
     const older = release({ tag: 'v0', digest: A, schemaVersion: 0, schemaMin: 0, schemaMax: 0 });
+    const current = release({ tag: 'v2', digest: B });
     getRegistryDb()
       .prepare(
-        'UPDATE stores SET schema_version = 1, last_release_id = ?, previous_release_id = ? WHERE id = ?',
+        'UPDATE stores SET image_digest = ?, schema_version = 1, last_release_id = ?, previous_release_id = ? WHERE id = ?',
       )
-      .run(older.id + 1, older.id, store.id);
+      .run(B, current.id, older.id, store.id);
+    recordCompleteDeployment(store.id, 'upgrade', current.id, older.id, B);
     calls = [];
     await expect(rollbackTenant('store', store.id, 'office@test.local')).rejects.toThrow(
       /rollback_not_eligible/,
@@ -935,7 +1044,80 @@ describe('release API surface', () => {
       fleet.body.stores as Array<{ id: number; rollbackEligible: boolean; rollbackReason: string }>
     ).find((row) => row.id === store.id);
     expect(state?.rollbackEligible).toBe(false);
-    expect(state?.rollbackReason).toMatch(/No previous release/);
+    expect(state?.rollbackReason).toMatch(/No verified successful deployment/);
+  });
+
+  it('publishes the verified rollback target and refuses a different requested release', async () => {
+    const app = createApp();
+    const token = await loginAsOffice(app);
+    const store = seedStore({ slug: 'api-rollback-target' });
+    const a = release({ tag: 'api-a', digest: A });
+    const b = release({ tag: 'api-b', digest: B });
+    const c = release({ tag: 'api-c', digest: C });
+    getRegistryDb()
+      .prepare('UPDATE stores SET image_digest = ?, last_release_id = ? WHERE id = ?')
+      .run(B, b.id, store.id);
+    recordCompleteDeployment(store.id, 'upgrade', b.id, a.id, B);
+    calls = [];
+
+    const fleet = await request(app).get('/api/releases/fleet').set(authHeader(token)).expect(200);
+    const state = (
+      fleet.body.stores as Array<{
+        id: number;
+        rollbackEligible: boolean;
+        rollbackReleaseId: number | null;
+        rollbackReason: string | null;
+      }>
+    ).find((row) => row.id === store.id);
+    expect(state?.rollbackEligible).toBe(true);
+    expect(state?.rollbackReleaseId).toBe(a.id);
+    expect(state?.rollbackReason).toBeNull();
+
+    const refused = await request(app)
+      .post(`/api/releases/tenants/store/${store.id}/rollback`)
+      .set(authHeader(token))
+      .send({ toReleaseId: c.id })
+      .expect(409);
+    expect(refused.body.error).toMatch(/not the verified rollback target/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('disables the rollback button after A -> B -> A although previousReleaseId is B', async () => {
+    const app = createApp();
+    const token = await loginAsOffice(app);
+    const store = seedStore({ slug: 'api-abab' });
+    const a = release({ tag: 'api-abab-a', digest: A });
+    const b = release({ tag: 'api-abab-b', digest: B });
+    getRegistryDb()
+      .prepare(
+        'UPDATE stores SET image_digest = ?, last_release_id = ?, previous_release_id = ? WHERE id = ?',
+      )
+      .run(A, a.id, b.id, store.id);
+    recordCompleteDeployment(store.id, 'upgrade', b.id, a.id, B);
+    recordCompleteDeployment(store.id, 'rollback', a.id, b.id, A);
+
+    const fleet = await request(app).get('/api/releases/fleet').set(authHeader(token)).expect(200);
+    const state = (
+      fleet.body.stores as Array<{
+        id: number;
+        lastReleaseId: number | null;
+        previousReleaseId: number | null;
+        rollbackEligible: boolean;
+        rollbackReleaseId: number | null;
+        rollbackReason: string | null;
+      }>
+    ).find((row) => row.id === store.id);
+    expect(state?.lastReleaseId).toBe(a.id);
+    expect(state?.previousReleaseId).toBe(b.id);
+    expect(state?.rollbackEligible).toBe(false);
+    expect(state?.rollbackReleaseId).toBeNull();
+    expect(state?.rollbackReason).toMatch(/No verified successful forward deployment/);
+
+    await request(app)
+      .post(`/api/releases/tenants/store/${store.id}/rollback`)
+      .set(authHeader(token))
+      .send({})
+      .expect(409);
   });
 
   it('exposes release-manager capability and denies non-manager mutations', async () => {

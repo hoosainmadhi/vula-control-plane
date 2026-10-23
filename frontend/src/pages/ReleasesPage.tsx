@@ -924,7 +924,7 @@ function ReleaseActionModal({
   const compatible = releases.filter((r) => r.kind === kind && r.isActive);
   const defaultTarget =
     target.action === 'rollback'
-      ? (target.tenant.previousReleaseId ?? target.tenant.lastReleaseId)
+      ? (target.tenant.rollbackReleaseId ?? null)
       : (compatible[0]?.id ?? null);
   const [releaseId, setReleaseId] = useState<number | null>(defaultTarget);
   const [confirm, setConfirm] = useState('');
