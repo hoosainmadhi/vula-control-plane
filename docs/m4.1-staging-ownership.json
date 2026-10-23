@@ -2,9 +2,9 @@
   "schema": 1,
   "owner": "m4-staging",
   "stage": "M4.1-A",
-  "status": "planned",
+  "status": "executed-gate-failed",
   "purpose": "Disposable M4.1 Stage A live-integration resources. No production, demo or super-stores resource belongs in this manifest.",
-  "createdAt": null,
+  "createdAt": "2026-10-23T03:17:45Z",
   "verifiedAt": null,
   "security": {
     "existingRootTeamCoolifyTokenExposedLocally": true,
@@ -27,10 +27,10 @@
   "coolify": {
     "project": {
       "name": "vula-m4-staging",
-      "uuid": null,
+      "uuid": "rvwcat5q2rdaref7i2msawkt",
       "mustContainOnly": [
         "vula-cp-m4-staging",
-        "za-pos-m4-store-a"
+        "za-pos-m4-staging-client-m4-store-a"
       ]
     },
     "serverUuid": "fmt7mqgjmpswlmtgsu65g1w5",
@@ -39,8 +39,8 @@
       "kind": "dedicated-coolify-api-token",
       "name": "coolify-vula-m4-staging-cp",
       "forApplication": "vula-cp-m4-staging",
-      "tokenId": null,
-      "userId": null,
+      "tokenId": 11,
+      "userId": 2,
       "abilities": [
         "read",
         "write",
@@ -51,7 +51,7 @@
         "read:sensitive",
         "write:sensitive"
       ],
-      "expiresAt": null,
+      "expiresAt": "2027-01-21T03:12:54Z",
       "teamId": 0,
       "residualScope": "Coolify 4.4.7 tokens are team-bound only; this token remains able to modify other Root Team resources. Not equivalent to VULA_ALLOWED_APP_UUIDS.",
       "otherApplicationTokens": [
@@ -66,22 +66,23 @@
         "kind": "control-plane",
         "owner": "m4-staging",
         "name": "vula-cp-m4-staging",
-        "uuid": null,
+        "uuid": "pkr5cdk2pnlh3nqrqhwvf7qf",
         "domain": "https://m4-cp.vula-app.co.za",
         "source": "m4/shared-image-release",
-        "sourceCommit": null,
+        "sourceCommit": "9ae7fc540b6196ef05010aa1d3f1dfb4fed7de04",
         "buildPack": "dockerfile",
         "autoDeploy": false,
         "volumeName": "vula-cp-m4-staging-data",
         "mountPath": "/data",
         "dbPath": "/data/control-plane.db",
-        "cleanup": "delete app then its exact volume"
+        "cleanup": "delete app then its exact volume",
+        "actualVolumeName": "pkr5cdk2pnlh3nqrqhwvf7qf-vula-cp-m4-staging-data"
       },
       {
         "kind": "store",
         "owner": "m4-staging",
-        "name": "za-pos-m4-store-a",
-        "uuid": null,
+        "name": "za-pos-m4-staging-client-m4-store-a",
+        "uuid": "hme58ok1x4jvqi3cvdeapqzq",
         "domain": "https://m4-store-a.vula-app.co.za",
         "cpStoreSlug": "m4-store-a",
         "cpClientSlug": "m4-staging-client",
@@ -93,7 +94,10 @@
         "imageDigest": "sha256:6db6b974b78c663a42796db9b738cc4ee21bc097bd1f9ba29ea836ef8ef5cb14",
         "imageTag": "v2026.10.21-5781c2c",
         "architecture": "linux/arm64",
-        "cleanup": "stop, delete app, then delete its exact volume"
+        "cleanup": "stop, delete app, then delete its exact volume",
+        "expectedName": "za-pos-m4-store-a",
+        "actualVolumeName": "hme58ok1x4jvqi3cvdeapqzq-vula-store-m4-store-a-sqlite-db",
+        "actualHostPath": null
       }
     ]
   },
@@ -102,9 +106,9 @@
     "mustBeEmptyBeforeOnboarding": true,
     "clientSlug": "m4-staging-client",
     "storeSlug": "m4-store-a",
-    "clientId": null,
-    "storeId": null,
-    "releaseId": null,
+    "clientId": 1,
+    "storeId": 1,
+    "releaseId": 1,
     "allowedAppUuids": []
   },
   "cleanup": {
@@ -130,5 +134,13 @@
       "revoke staging Coolify token/user",
       "remove /data/apps/vula-m4-staging only after app and volume are gone"
     ]
+  },
+  "execution": {
+    "gate": "exact-store-app-name",
+    "expectedName": "za-pos-m4-store-a",
+    "actualName": "za-pos-m4-staging-client-m4-store-a",
+    "stoppedBeforeAllowlist": true,
+    "rootCause": "clientOrchestrator step metadata and createStore omitted deploymentName; provisioning fell back to company.slug-store.name",
+    "evidence": "docs/m4.1-stage-a-execution.md"
   }
 }

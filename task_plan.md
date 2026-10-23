@@ -1202,18 +1202,26 @@ and test locally; do not deploy the CP or migrate tenants.
   `src/__tests__/stagingBoundary.test.ts`; branch suite 518/518.
 - [x] Branch secret scan over `origin/dev..HEAD`: no private key, GitHub token,
   JWT, Coolify assignment or exposed token value. No `.github` workflow and no
-  auto-deploy app references the branch. Branch remains unpushed.
-- [ ] Stage A approval gates: explicit acceptance of Root Team token residual
-  (Coolify has no project/app-scoped token); a dedicated verified
-  `coolify-vula-m4-staging-cp` token; push the exact isolated branch commit
-  (currently unpushed); create the isolated Coolify project. Legacy token
-  rotation is tracked independently and is not a Stage A dependency.
-- [ ] Independent legacy rotation: four per-app tokens, coordinated OptiMed
-  credential window, old token revoked only after all consumers are verified and
-  a 401 check confirms it no longer authenticates.
-- [ ] M4.1 Stage A live execution: deploy `vula-cp-m4-staging`, register only
-  Store release A, provision `za-pos-m4-store-a` through the CP, verify digest/
-  arm64/TLS/DB/single writer, then stop. Separate approval required.
+  auto-deploy app references the branch. Branch pushed at `9ae7fc5`.
+- [x] Stage A approval gates: Root Team residual accepted for the disposable
+  staging test; `coolify-vula-m4-staging-cp` created and verified; exact branch
+  commit pushed; isolated project created.
+- [x] Independent legacy rotation: four per-app tokens created; OptiMed, Vula
+  production and existing Vula staging CPs updated/restarted and verified; old
+  token id 2 revoked and confirmed 401; new tokens all 200; OptiMed health
+  unchanged.
+- [x] M4.1 Stage A live execution: `vula-cp-m4-staging` deployed from
+  `9ae7fc5` with independent DB/volume and valid TLS; Store A release registered
+  and one Store provisioned through the CP. Verified exact arm64 digest, storage,
+  DB identity, health and deployment records.
+- [ ] Stage A exact-name gate failed: CP created
+  `za-pos-m4-staging-client-m4-store-a` instead of `za-pos-m4-store-a`.
+  Execution stopped before allowlist. Root cause: onboarding step metadata and
+  `createStore` omit `deploymentName`; evidence in
+  `docs/m4.1-stage-a-execution.md`.
+- [ ] Fix onboarding `deploymentName` propagation (metadata + `createStore`) with
+  a regression test, then redeploy CP and recreate the disposable Store under a
+  new approval.
 - [ ] M4.1 Stage B: release B, upgrade/rollback and waves; not approved.
 - [ ] Existing Dockerfile→dockerimage blue/green migration (separate approval).
 - [ ] Image signature/attestation verification (supply-chain follow-up).

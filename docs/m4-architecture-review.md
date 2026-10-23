@@ -204,6 +204,7 @@ New:
 - `docs/m4.1-live-integration-plan.md`
 - `docs/m4.1-staging-ownership.json`
 - `docs/m4.1-token-rotation-plan.md`
+- `docs/m4.1-stage-a-execution.md`
 
 Modified:
 
@@ -225,7 +226,12 @@ Modified:
 - `CONTEXT.md`, `progress.md`, `findings.md`, `task_plan.md` — doctrine and
   review record.
 
-## 7. M4.1 Stage A (prepared; approval required before execution)
+## 7. M4.1 Stage A (executed; stopped at exact-name gate)
+
+**Execution result:** the CP and one Store are running and healthy, but the
+Store app was named `za-pos-m4-staging-client-m4-store-a`, not the approved
+`za-pos-m4-store-a`. The allowlist was not changed; execution stopped. Details:
+[`docs/m4.1-stage-a-execution.md`](./m4.1-stage-a-execution.md).
 
 **Objective:** validate one CP-provisioned Store from the approved arm64 image
 on isolated staging infrastructure, without upgrading, rolling back, migrating a
