@@ -1189,20 +1189,28 @@ and test locally; do not deploy the CP or migrate tenants.
   and `docs/m4.1-staging-ownership.json`.
 - [x] Token consumer audit: exact exposed value in Vula and OptiMed
   `.env`; both deployed CPs expose `COOLIFY_API_TOKEN` env keys (values masked);
-  no local process/container/cron/systemd consumer found. Rotation sequence,
-  failure impact and rollback in `docs/m4.1-token-rotation-plan.md`.
+  no local process/container/cron/systemd consumer found. Four per-application
+  credentials and an independent rotation/rollback plan are in
+  `docs/m4.1-token-rotation-plan.md`.
+- [x] Cross-application credential dependency removed: `release-apps.sh` reads
+  only this application's environment or its own repository-root `.env`; missing
+  credentials fail closed, with no OptiMed fallback.
 - [x] Staging boundary guard: exact project/server/destination, staging
   name/domain, post-create read-back and mandatory allowlist on existing-app
-  retry/redeploy paths. Tests in `src/__tests__/stagingBoundary.test.ts`;
-  branch suite 518/518.
+  retry/redeploy paths. First Store creation is intentionally allowed before its
+  UUID is added to the existing-app allowlist. Tests in
+  `src/__tests__/stagingBoundary.test.ts`; branch suite 518/518.
 - [x] Branch secret scan over `origin/dev..HEAD`: no private key, GitHub token,
   JWT, Coolify assignment or exposed token value. No `.github` workflow and no
   auto-deploy app references the branch. Branch remains unpushed.
 - [ ] Stage A approval gates: explicit acceptance of Root Team token residual
-  (Coolify has no project/app-scoped token), revoke/rotate the existing token
-  exposed in a local tool log after coordinated Vula/OptiMed replacement, push
-  the exact isolated branch commit (currently unpushed), and create the isolated
-  Coolify project/token.
+  (Coolify has no project/app-scoped token); a dedicated verified
+  `coolify-vula-m4-staging-cp` token; push the exact isolated branch commit
+  (currently unpushed); create the isolated Coolify project. Legacy token
+  rotation is tracked independently and is not a Stage A dependency.
+- [ ] Independent legacy rotation: four per-app tokens, coordinated OptiMed
+  credential window, old token revoked only after all consumers are verified and
+  a 401 check confirms it no longer authenticates.
 - [ ] M4.1 Stage A live execution: deploy `vula-cp-m4-staging`, register only
   Store release A, provision `za-pos-m4-store-a` through the CP, verify digest/
   arm64/TLS/DB/single writer, then stop. Separate approval required.

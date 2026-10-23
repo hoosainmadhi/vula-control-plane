@@ -219,6 +219,8 @@ Modified:
   production/opt-in fallback policy and staging redeploy guard.
 - `src/services/clientOrchestrator.ts` — image-first onboarding, verification
   and staging retry guard.
+- `scripts/release-apps.sh` — reads only the Vula application's own credential;
+  no OptiMed `.env` fallback.
 - `src/routes/index.ts` — release routes.
 - `CONTEXT.md`, `progress.md`, `findings.md`, `task_plan.md` — doctrine and
   review record.
@@ -246,7 +248,10 @@ exact-resource manifest is
   Coolify token can modify. Stage A must explicitly accept the residual Root
   Team access or remain blocked. During preparation, shell-sourcing the CP
   `.env` emitted part of the existing token into a local tool log; treat that
-  token as exposed and revoke/rotate it before Stage A.
+  token as exposed. Its replacement is coordinated per application
+  (`coolify-optimed-cp`, `coolify-vula-prod-cp`,
+  `coolify-vula-staging-cp`, `coolify-vula-m4-staging-cp`) and is independent of
+  Stage A. The Vula release script no longer falls back to OptiMed's `.env`.
 - **The isolated branch is unpushed.** Stage A must deploy the exact reviewed
   `m4/shared-image-release` commit, not dirty `dev`; until that commit is on the
   CP remote (or packaged as an approved image), Stage A cannot start.

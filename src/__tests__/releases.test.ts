@@ -367,6 +367,7 @@ describe('per-tenant release application', () => {
       domainSuffix: env.stagingDomainSuffix,
     };
     const oldDestination = process.env.COOLIFY_DESTINATION_UUID;
+    const oldAllowed = [...env.allowedAppUuids];
     env.stagingMode = true;
     env.stagingProjectUuid = 'proj';
     env.stagingServerUuid = 'srv';
@@ -374,6 +375,7 @@ describe('per-tenant release application', () => {
     env.stagingAppPrefixes = ['za-pos-m4-', 'vula-m4-'];
     env.stagingDomainPrefix = 'm4-';
     env.stagingDomainSuffix = '.vula-app.co.za';
+    env.allowedAppUuids = [];
     process.env.COOLIFY_DESTINATION_UUID = 'dest-m4';
     createdAppName = 'za-pos-m4-store-a';
     createdAppFqdn = 'https://m4-store-a.vula-app.co.za';
@@ -390,6 +392,7 @@ describe('per-tenant release application', () => {
         )
         .run(store.id);
       const rel = release({ tag: 'v-stage', digest: C });
+      expect(env.allowedAppUuids).toEqual([]);
       const result = await applyReleaseToTenant('store', store.id, rel.id, {
         actor: 'office@test.local',
         action: 'provision',
@@ -414,6 +417,7 @@ describe('per-tenant release application', () => {
       env.stagingAppPrefixes = [...oldStaging.prefixes];
       env.stagingDomainPrefix = oldStaging.domainPrefix;
       env.stagingDomainSuffix = oldStaging.domainSuffix;
+      env.allowedAppUuids = [...oldAllowed];
       if (oldDestination === undefined) delete process.env.COOLIFY_DESTINATION_UUID;
       else process.env.COOLIFY_DESTINATION_UUID = oldDestination;
     }

@@ -37,6 +37,8 @@
     "destinationUuid": "yrsscsx3cerbxnf4iv3ujvm8",
     "credential": {
       "kind": "dedicated-coolify-api-token",
+      "name": "coolify-vula-m4-staging-cp",
+      "forApplication": "vula-cp-m4-staging",
       "tokenId": null,
       "userId": null,
       "abilities": [
@@ -51,7 +53,13 @@
       ],
       "expiresAt": null,
       "teamId": 0,
-      "residualScope": "Coolify 4.4.7 tokens are team-bound only; this token remains able to modify other Root Team resources. Not equivalent to VULA_ALLOWED_APP_UUIDS."
+      "residualScope": "Coolify 4.4.7 tokens are team-bound only; this token remains able to modify other Root Team resources. Not equivalent to VULA_ALLOWED_APP_UUIDS.",
+      "otherApplicationTokens": [
+        "coolify-optimed-cp",
+        "coolify-vula-prod-cp",
+        "coolify-vula-staging-cp"
+      ],
+      "noSharedLegacyToken": true
     },
     "resources": [
       {
