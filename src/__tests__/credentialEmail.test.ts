@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { createApp } from '../app.js';
 import { resetRegistryDb } from '../config/registryDb.js';
+import { provisionAdminWhenReady } from '../services/adminProvisioning.js';
 import { jsonResponse, loginAsOffice, authHeader } from './helpers.js';
 
 const app = createApp();
@@ -152,6 +153,35 @@ describe('store admin credentials by email', () => {
     expect(res.body.emailedTo).toBe('manager@north.test');
     expect(transport.sendMail).toHaveBeenCalledTimes(1);
   });
+
+  it('retries the bootstrap until the store answers, then emails the login', async () => {
+    await configureSmtp();
+    const id = await createStore('manager@north.test');
+
+    // The container was building on the first attempt and accepts the second.
+    // This is the case the old orchestrator abandoned after one warning.
+    let attempts = 0;
+    fetchMock.mockImplementation(async (url: string) => {
+      const s = String(url);
+      if (s.endsWith('/api/internal/status')) return jsonResponse(200, { ok: true });
+      if (s.endsWith('/api/internal/admin/init')) {
+        attempts++;
+        return attempts === 1
+          ? jsonResponse(500, { error: 'still building' })
+          : jsonResponse(201, { ok: true });
+      }
+      return jsonResponse(200, { ok: true });
+    });
+
+    await provisionAdminWhenReady('store', id, 'manager@north.test', {
+      intervalMs: 1,
+      timeoutMs: 1000,
+    });
+
+    expect(attempts).toBe(2);
+    expect(transport.sendMail).toHaveBeenCalledTimes(1);
+    expect((transport.sendMail.mock.calls[0][0] as { to: string }).to).toBe('manager@north.test');
+  });
 });
 
 describe('head office executive credentials by email', () => {
@@ -189,5 +219,32 @@ describe('head office executive credentials by email', () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('panel_admin_address_missing');
     expect(transport.sendMail).not.toHaveBeenCalled();
+  });
+
+  it('retries the Head Office bootstrap and emails only after it succeeds', async () => {
+    await configureSmtp();
+    const pid = await createPanelFor('panel-retry', 'exec@ho.test');
+
+    let attempts = 0;
+    fetchMock.mockImplementation(async (url: string) => {
+      const s = String(url);
+      if (s.endsWith('/api/internal/status')) return jsonResponse(200, { ok: true });
+      if (s.endsWith('/api/internal/admin/init')) {
+        attempts++;
+        return attempts === 1
+          ? jsonResponse(500, { error: 'still building' })
+          : jsonResponse(201, { ok: true });
+      }
+      return jsonResponse(200, { ok: true });
+    });
+
+    await provisionAdminWhenReady('panel', pid, 'exec@ho.test', {
+      intervalMs: 1,
+      timeoutMs: 1000,
+    });
+
+    expect(attempts).toBe(2);
+    expect(transport.sendMail).toHaveBeenCalledTimes(1);
+    expect((transport.sendMail.mock.calls[0][0] as { to: string }).to).toBe('exec@ho.test');
   });
 });

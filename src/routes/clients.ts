@@ -169,6 +169,8 @@ interface NestedStore {
   name: string;
   slug: string;
   baseUrl: string;
+  /** Short Coolify label; absent derives `<client>-<name>`. */
+  deploymentName?: string;
   /** 'store' (default) or 'warehouse' — a warehouse runs no tills. */
   kind: StoreRecord['kind'];
   terminalCount: number;
@@ -178,7 +180,13 @@ interface NestedStore {
 
 const validateNestedStore = async (
   entry: unknown,
-  fallback: { name: string; slug: string; baseUrl: string; adminEmail?: string },
+  fallback: {
+    name: string;
+    slug: string;
+    baseUrl: string;
+    adminEmail?: string;
+    deploymentName?: string;
+  },
 ): Promise<NestedStore> => {
   if (
     entry !== undefined &&
@@ -213,6 +221,7 @@ const validateNestedStore = async (
     e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
   const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
   const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
+  const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
 
   if (suppliedUrl) {
     const check = await assertManagedEndpoint(baseUrl, 'store', { allowUnreachable: true });
@@ -232,14 +241,27 @@ const validateNestedStore = async (
     terminalCount,
     licensedTerminalCount,
     ...(adminEmail ? { adminEmail } : {}),
+    ...(deploymentName ? { deploymentName } : {}),
   };
 };
 
 /** A Head Office entry inside onboarding or the single→multi upgrade. */
 const validateNestedHeadOffice = async (
   entry: unknown,
-  fallback: { name: string; slug: string; baseUrl: string; adminEmail?: string },
-): Promise<{ name: string; slug: string; baseUrl: string; adminEmail?: string }> => {
+  fallback: {
+    name: string;
+    slug: string;
+    baseUrl: string;
+    adminEmail?: string;
+    deploymentName?: string;
+  },
+): Promise<{
+  name: string;
+  slug: string;
+  baseUrl: string;
+  adminEmail?: string;
+  deploymentName?: string;
+}> => {
   if (
     entry !== undefined &&
     (typeof entry !== 'object' || entry === null || Array.isArray(entry))
@@ -253,6 +275,7 @@ const validateNestedHeadOffice = async (
     e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
   const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
   const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
+  const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
 
   if (suppliedUrl) {
     const check = await assertManagedEndpoint(baseUrl, 'head-office', { allowUnreachable: true });
@@ -264,7 +287,13 @@ const validateNestedHeadOffice = async (
       );
     }
   }
-  return { name, slug, baseUrl, ...(adminEmail ? { adminEmail } : {}) };
+  return {
+    name,
+    slug,
+    baseUrl,
+    ...(adminEmail ? { adminEmail } : {}),
+    ...(deploymentName ? { deploymentName } : {}),
+  };
 };
 
 // --- Wire Types ---

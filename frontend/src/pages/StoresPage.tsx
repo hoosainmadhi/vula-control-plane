@@ -111,6 +111,7 @@ export default function StoresPage() {
     try {
       const body: Record<string, unknown> = {
         name: values.name.trim(),
+        deploymentName: values.deploymentName?.trim() || null,
         vertical: values.vertical,
         kind: values.kind,
         // A warehouse's count is 0 by rule; the API refuses anything else.

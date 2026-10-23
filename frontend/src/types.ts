@@ -148,6 +148,7 @@ export interface Panel {
   name: string;
   baseUrl: string;
   adminEmail?: string | null;
+  deploymentName?: string | null;
   status: StoreStatus;
   lastHealthStatus: HealthStatus;
   lastHealthAt: string | null;
@@ -194,6 +195,7 @@ export interface Store {
   id: number;
   slug: string;
   name: string;
+  deploymentName?: string | null;
   /** 'store' sells; 'warehouse' holds stock and transfers it out, running no tills. */
   kind: 'store' | 'warehouse';
   terminalNames: string[];
@@ -299,6 +301,8 @@ export interface ResetAdminResponse {
 export interface StoreFormValues {
   name: string;
   slug: string;
+  /** Short Coolify label; blank derives the name from the client and store. */
+  deploymentName?: string;
   vertical: StoreVertical;
   /** 'store' sells; 'warehouse' holds stock and transfers it out, running no tills. */
   kind: 'store' | 'warehouse';

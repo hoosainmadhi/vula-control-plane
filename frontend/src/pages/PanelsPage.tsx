@@ -4,6 +4,7 @@ import { api, ApiError } from '../api';
 import ErrorBox from '../components/ErrorBox';
 import Modal from '../components/Modal';
 import Spinner from '../components/Spinner';
+import { AdminPasswordModal } from '../components/storeModals';
 import StatusBadge, { CONFIG_COLORS, HealthDot, STORE_COLORS } from '../components/StatusBadge';
 import type { Company, Panel, PanelPushOutcome, Plan } from '../types';
 
@@ -50,6 +51,13 @@ export default function PanelsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [formName, setFormName] = useState('');
   const [formUrl, setFormUrl] = useState('');
+  const [adminPassword, setAdminPassword] = useState<{
+    panelName: string;
+    tempPassword: string;
+    note: string;
+    emailedTo?: string;
+    emailError?: string;
+  } | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -111,6 +119,37 @@ export default function PanelsPage() {
         res.ok
           ? `Licence #${res.sequence} delivered to ${panel.name}${caughtUp}`
           : `Push failed: ${res.error}`,
+      );
+    });
+
+  /**
+   * The first executive's login, or a revealed one-time password when the
+   * deployment's bootstrap lost the container-build race. The endpoint is also
+   * the recovery path for a panel that was never given a login at onboarding;
+   * without this button the only way to reach it was curl.
+   */
+  const issueAdminLogin = (panel: Panel): Promise<void> =>
+    run(panel, async () => {
+      const res = await api<{
+        ok: boolean;
+        tempPassword: string;
+        note: string;
+        emailedTo?: string;
+        emailError?: string;
+      }>(`/panels/${panel.id}/reset-admin`, { method: 'POST' });
+      setAdminPassword({
+        panelName: panel.name,
+        tempPassword: res.tempPassword,
+        note: res.note,
+        emailedTo: res.emailedTo,
+        emailError: res.emailError,
+      });
+      setNotice(
+        res.emailedTo
+          ? `Admin login for ${panel.name} emailed to ${res.emailedTo}`
+          : res.emailError
+            ? `Admin login issued for ${panel.name}; email not sent`
+            : `Admin login issued for ${panel.name}`,
       );
     });
 
@@ -388,6 +427,13 @@ export default function PanelsPage() {
                           <KeyRound className="h-3.5 w-3.5" /> Push Licence
                         </button>
                         <button
+                          onClick={() => void issueAdminLogin(panel)}
+                          title="Bootstrap the first executive or issue a new one-time login (audited)"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 px-2.5 py-1.5 text-xs font-semibold text-violet-700 hover:bg-violet-50"
+                        >
+                          <KeyRound className="h-3.5 w-3.5" /> Reset admin login
+                        </button>
+                        <button
                           onClick={() => void checkHealth(panel)}
                           className="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 px-2.5 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-50"
                         >
@@ -606,6 +652,18 @@ export default function PanelsPage() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {adminPassword && (
+        <AdminPasswordModal
+          storeName={adminPassword.panelName}
+          tempPassword={adminPassword.tempPassword}
+          note={adminPassword.note}
+          emailedTo={adminPassword.emailedTo}
+          emailError={adminPassword.emailError}
+          surface="Head Office"
+          onClose={() => setAdminPassword(null)}
+        />
       )}
     </div>
   );

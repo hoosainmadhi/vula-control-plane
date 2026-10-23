@@ -12,6 +12,7 @@ import type {
 export const EMPTY_FORM: StoreFormValues = {
   name: '',
   slug: '',
+  deploymentName: '',
   vertical: 'general',
   kind: 'store',
   baseUrl: '',

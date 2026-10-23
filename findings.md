@@ -1,5 +1,78 @@
 # Findings
 
+## 2026-10-22 — M4 reliability review: API acceptance is not deployment success
+
+- **The first M4 pass could mark an upgrade healthy from the old container.**
+  `triggerDeploy` discarded Coolify's deployment id and `/health` alone was
+  accepted. The review now polls the Coolify deployment record to a terminal
+  state, checks the application state and requires `/health` to report the
+  release's version/revision. A missing deployment id is a hard failure.
+- **Rolling updates could run two SQLite writers.** Existing tenant upgrades now
+  stop the old container and wait until it is no longer running before patching
+  the image and triggering the new deployment.
+- **Missing `/data` storage or a different tenant could be modified.** A
+  preflight now checks the application's `/data` storage, `/api/internal/status`
+  identity (with a store-name comparison) and a Vula app name allowlist. In
+  production `VULA_ALLOWED_APP_UUIDS` must be populated; an empty list refuses
+  existing-app changes.
+- **A failed setup/trigger could leave an unknown app and duplicate it on
+  retry.** Creation and triggering are separate; an `onCreated` callback persists
+  the UUID/volume before env/storage/trigger work. The trigger-failure test
+  proves the retry reuses the app.
+- **Expired locks alone were not enough.** A running `release_deployments` row is
+  reconciled against Coolify (deployment id, or the application's deployment
+  list) before a new attempt; a live job blocks, a stale row is failed.
+  `desired_release_id` is persisted before the trigger.
+- **A failed wave rolled into the next.** `stopOnFailure` defaults to true and
+  marks remaining items `previous_wave_failed`; paused tenants are skipped.
+- **Production onboarding no longer silently falls back to Dockerfile.** The
+  legacy path requires `ALLOW_LEGACY_DOCKERFILE_ONBOARDING=true` and is refused
+  for production. New image onboarding uses the same deployment + health proof.
+- **Read-only Coolify 4.4.7 contract:** app `status` (`running:healthy`), `/data`
+  persistent storage, deployment list/status/timestamps and deployment-by-UUID
+  are confirmed. Dockerfile apps report null image fields. `StopApplication` is
+  an async queued job that removes containers and writes `exited`; live
+  Docker Image app creation and stop still need M4.1.
+- **A clean M4 branch exists.** `m4/shared-image-release` (`14c9133`) was built
+  from clean HEAD with only the release implementation, required naming
+  dependencies and docs; unrelated pre-existing working-tree work remains on
+  `dev`. The branch suite is 502/502 and builds clean.
+- **A second approved arm64 digest per kind is still required for upgrade/
+  rollback.** The published release has only one arm64 Store and one HO digest;
+  the amd64 digests are not deployable. M4.1 therefore needs an explicitly
+  approved staging-only second image (or must abort upgrade/rollback).
+- Remaining P2s: no background queue for large waves, no release UI, no image
+  signature verification, panel schema telemetry gap, static env allowlist for
+  new app UUIDs, office-wide release authorization, and live Docker Image/stop
+  validation in M4.1.
+
+## 2026-10-22 — M4 shared-image release controller decisions
+
+- **The digest, not the tag, is the deployment identity.** The catalog enforces
+  `sha256:<64 hex>` and `UNIQUE(kind,digest)`; Coolify receives the digest in the
+  image name on create and the digest hex in the tag field on update. A moving
+  tag cannot silently change what a tenant runs.
+- **Schema compatibility is checked before the provider.** An existing tenant
+  with no reported schema is refused; an image whose declared range excludes the
+  tenant's schema is refused; a rollback target is checked the same way. The
+  database is never switched to an image that cannot open it.
+- **Locks are per tenant, not per batch.** A second release request for the same
+  store/panel returns `locked` without calling Coolify; the table primary key is
+  the race guard. A skipped lock/dedup attempt is audited.
+- **Dockerfile apps cannot be converted in place.** The existing `build_pack`
+  is verified first; a live database must move through a blue/green app, not a
+  half-switched `dockerimage` conversion.
+- **Onboarding stays compatible until a stable release exists.** The image path
+  is used only when the catalog has an active stable release for that kind;
+  otherwise the old Dockerfile path remains. This avoids breaking existing
+  tests/deployments, but means the CP is not fully authoritative until a stable
+  release is registered.
+- **Panel schema state is a gap.** `panels.schema_version` is populated by this
+  controller, not by existing panel telemetry; an existing panel with no schema
+  fails closed on its first image change.
+- **No automatic rollback.** A failed deploy is recorded and leaves the tenant
+  failed; the operator chooses the schema-safe rollback target.
+
 ## 2026-10-20 — the WhatsApp add-on was sold by the server, invisible on three screens
 
 The vocabulary has priced `whatsapp_cloud` since the 2026-10-20 WhatsApp pass, and
@@ -1692,3 +1765,82 @@ mailbox that owns the From (Zoho hosts this domain's mail), and the Settings pag
 so under the From field. A trap to remember for every deployment whose From is a business
 address while the credentials are somebody's personal mailbox: "sent" on a desk screen
 means the relay took it, no more.
+
+## 2026-10-21 — the dev CP was provisioning into `optimed-tenants`
+
+`za-pos-control-plane/.env` was an exact copy of `optimed-control-plane/.env` for the five
+`COOLIFY_*` settings, project UUID included. Wizard provisioning on the dev control plane
+therefore created Vula stores inside `optimed-tenants` (the WA-wizard tests were the visible
+symptom), while staging and production point at `vula-tenants`. Fixed the local env and
+removed the two orphaned apps. If the dev env is ever regenerated from Optimed's again,
+check `COOLIFY_PROJECT_UUID` before onboarding a client — nothing at startup names the
+target project, so the mistake is only visible in Coolify.
+
+## 2026-10-21 — Super Stores onboarding: why the names differ, and why no credentials email
+
+**The Coolify names follow the SLUG, not the domain.** The wizard derived store slugs from the
+client slug (`super-stores` → `super-stores-1`, `super-stores-2`) and only the domains were
+overridden to `super-stores-jhb` / `super-stores-sandton`. `deployFromSpec` names every store
+application `za-pos-<slug>` (Head Office `vula-ho-<panel-slug>` at the time; since corrected
+to `vula-<client>-ho`), so Coolify showed `za-pos-super-stores-1/2` and
+`vula-ho-super-stores-ho`, and the volumes are
+`vula-store-super-stores-1-sqlite-db` etc. Renaming the domain after onboarding does not rename
+the application or volume; the slug is the stable key.
+
+**The credentials email was refused by Zoho, and the stores never attempted one.** Production's
+office settings prefer SMTP over Resend (`sendMail` checks `smtp_host` first):
+`smtp.zoho.com:465` as `billing@vula-app.co.za`. Zoho answered
+`535 5.7.8 Authentication Failed`, so the Head Office step logged
+`Head Office credentials email pending ... 535 5.7.8 Authentication Failed`. The stores were
+worse: their admin bootstrap ran immediately after the Coolify application was created, while
+the containers were still building (`fetch failed` / "store not accepting yet"), and the
+orchestrator only emails credentials after a successful bootstrap — so no mail was even tried
+for either store.
+
+Evidence from the deployment: both store databases have **zero** `users` rows, the Head Office
+database has **zero** `ho_users` rows, and the job's completed steps carry only warnings. The
+job itself failed later at `wire_topology` for the same "still building" reason; `issue_licences`
+and `final_health_validation` are still pending.
+
+Two lessons:
+- A bootstrapping step that completes with a warning is not a retry: nothing revisits it when the
+  container becomes healthy. Recovery is `POST /stores/:id/reset-admin` and
+  `POST /panels/:id/reset-admin` (both bootstrap when no admin exists), then
+  `POST /clients/jobs/:id/retry` for the topology/licence steps.
+- The Head Office step emails the password even when its bootstrap failed, unlike the store
+  step. That produces a credential that cannot log in; the messages must be gated on the
+  bootstrap succeeding, or the step must be retried before it claims completion.
+
+`RESEND_API_KEY` is valid and `vula-app.co.za` is a verified sending domain on Resend. Clearing
+the SMTP host in Settings makes Resend the active transport on the very next send (the transport
+is chosen per send), which is the immediate unblock while the Zoho app password is corrected.
+
+**Follow-ups found while finishing the Super Stores onboarding.**
+- The Head Office reset endpoint exists (`POST /api/panels/:id/reset-admin`, `routes/panels.ts`)
+  but no screen calls it: `PanelsPage` and the client's Head Office card have no action. Every
+  Head Office whose bootstrap lost the container-build race therefore needs a curl call. A row
+  action reusing the stores' `AdminPasswordModal` is the missing piece.
+- Neither deployment function carries the AI settings. `createStoreDeployment` and
+  `createHeadOfficeDeployment` pass PORT/DB/JWT/lease env only, and the CP has no `AI_*` of its
+  own, so every provisioned deployment starts with `AI_API_KEY` empty — even when the licence
+  grants `ai_assistant`. The store shows its "AI assistant is off" notice; the Head Office hides
+  the dashboard's Copilot button (`DashboardPage.tsx` reads `/ai/status`). Passing
+  `AI_BASE_URL`/`AI_API_KEY`/`AI_MODEL` through from the CP (a shared helper used by both
+  deployment specs) fixes it for future tenants; existing apps need the env added in Coolify and
+  a redeploy.
+- After the first invoice was settled (`paid_through` 2026-11-21), the licences re-issued
+  correctly: store sequence 8 and Head Office sequence 7 are `active` and carry `ai_assistant`,
+  `whatsapp_cloud` and `invoice_import`. The AI gap is therefore deployment env, not entitlement.
+
+**Landed (2026-10-21).** The reset action now sits on the Panels page ("Reset admin login",
+reusing `AdminPasswordModal`). The credential race is closed by `services/adminProvisioning.ts`:
+the deployment step schedules a background retry that probes `/api/internal/status` every 15s
+for up to 15 minutes, then bootstraps the first admin and emails the password; the Head Office
+no longer emails before its admin exists. Coolify application names now use an explicit
+`deployment_name` label on the store/panel (`super-stores-jhb` → `za-pos-super-stores-jhb`); blank
+falls back to `<client-slug>-<store-name>`, and the slug remains the key for domain, volume and
+directory. The two live stores and the panel were set to `super-stores-jhb`,
+`super-stores-sandton` and `super-stores-ho`, and the apps renamed accordingly. The marketing
+page now carries a WhatsApp messaging card and quote toggle at R50/month for 250 messages (per
+company), and the public pricing endpoint already serves `whatsapp_cloud` at 5000. The AI env
+pass-through is still the outstanding item — no deployment has `AI_*` yet.

@@ -81,7 +81,7 @@ beforeEach(() => {
         if (process.env.COOLIFY_FAIL_CREATE === 'true') {
           return jsonResponse(500, { message: 'Coolify exploded' });
         }
-        const isHo = String(init?.body ?? '').includes('"name":"vula-ho-');
+        const isHo = String(init?.body ?? '').includes('"name":"vula-');
         return jsonResponse(201, { uuid: isHo ? 'uuid-ho-1' : `uuid-store-${coolifyCreateCalls}` });
       }
       return jsonResponse(200, { ok: true });
@@ -296,6 +296,43 @@ describe('deployment job truthfulness', () => {
         'https://github.com/hoosainmadhi/vula-app.git',
       );
     }
+  });
+
+  it('names the Coolify applications after the stores and Head Office, not their slugs', async () => {
+    const planId = await multiStorePlanId();
+    await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send({
+        name: 'Super Stores',
+        slug: 'super-stores',
+        planId,
+        deploymentType: 'multi_store',
+        headOffice: {
+          name: 'Super Stores Head Office',
+          slug: 'super-stores-ho',
+          baseUrl: 'http://localhost:3260',
+        },
+        stores: [
+          {
+            name: 'Johannesburg',
+            slug: 'super-stores-1',
+            // The short label the operator sets. The client slug is already in
+            // it, so another client's Johannesburg store cannot collide.
+            deploymentName: 'super-stores-jhb',
+            baseUrl: 'http://localhost:3246',
+            terminalCount: 2,
+          },
+        ],
+      })
+      .expect(201);
+
+    const names = createBodies.map((b) => (JSON.parse(b) as { name: string }).name);
+    // The fleet reads like the merchant's own branches; the slug remains the key
+    // for the domain, volume and host directory.
+    expect(names).toContain('za-pos-super-stores-jhb');
+    expect(names).toContain('vula-super-stores-ho');
+    expect(names).not.toContain('za-pos-super-stores-1');
   });
 
   it('wires the topology in both directions with a per-branch Head Office token', async () => {

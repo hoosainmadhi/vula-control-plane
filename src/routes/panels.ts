@@ -56,6 +56,8 @@ export interface PanelOut {
   name: string;
   baseUrl: string;
   adminEmail: string | null;
+  /** Short Coolify label; null derives `<client>-ho`. */
+  deploymentName: string | null;
   status: 'active' | 'paused';
   lastHealthStatus: 'up' | 'down' | 'unknown';
   lastHealthAt: string | null;
@@ -82,6 +84,7 @@ const panelToOut = (panel: PanelRecord): PanelOut => {
     name: panel.name,
     baseUrl: panel.base_url,
     adminEmail: panel.admin_email ?? null,
+    deploymentName: panel.deployment_name ?? null,
     status: panel.status,
     lastHealthStatus: panel.last_health_status,
     lastHealthAt: panel.last_health_at,
@@ -235,6 +238,7 @@ panelsRouter.post(
       companyId: company.id,
       slug,
       name,
+      deploymentName: optionalString(req.body, 'deploymentName', 60),
       baseUrl: baseUrl.replace(/\/+$/, ''),
       controlPlaneToken,
     });
@@ -293,6 +297,9 @@ panelsRouter.put(
     }
     const updated = updatePanel(panel.id, {
       ...(body.name !== undefined ? { name: String(body.name).trim() } : {}),
+      ...(body.deploymentName !== undefined
+        ? { deploymentName: optionalString(body, 'deploymentName', 60) }
+        : {}),
       ...(nextBaseUrl !== undefined ? { baseUrl: nextBaseUrl } : {}),
       ...(body.status !== undefined ? { status: body.status as 'active' | 'paused' } : {}),
     });

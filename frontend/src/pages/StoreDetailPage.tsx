@@ -138,6 +138,7 @@ export default function StoreDetailPage() {
     try {
       const body: Record<string, unknown> = {
         name: values.name.trim(),
+        deploymentName: values.deploymentName?.trim() || null,
         vertical: values.vertical,
         baseUrl: values.baseUrl.trim(),
         terminalCount: Number(values.terminalCount),

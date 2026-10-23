@@ -144,6 +144,8 @@ export interface StoreOut {
   deployStatus: 'not_deployed' | 'provisioning' | 'deployed' | 'failed';
   coolifyUuid: string | null;
   adminEmail: string | null;
+  /** Short Coolify label; null derives `<client>-<name>`. */
+  deploymentName: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -186,6 +188,7 @@ export const storeToOut = (store: StoreRecord): StoreOut => {
   id: store.id,
   slug: store.slug,
   name: store.name,
+  deploymentName: store.deployment_name ?? null,
   vertical: store.vertical,
   kind: store.kind,
   terminalCount: store.terminal_count,
@@ -412,6 +415,10 @@ storesRouter.post(
     // Default the store's environment to the control plane's own (SPOG §5).
     const environment =
       optionalEnvironment(req.body) ?? (env.isProduction ? 'production' : 'development');
+    // The short Coolify label (`jhb`), never the full display name: the client
+    // slug goes in front of it at deployment time so two Johannesburg stores in
+    // different client accounts cannot collide.
+    const deploymentName = optionalString(req.body, 'deploymentName', 60);
     if (getStoreBySlug(slug)) {
       res.status(409).json({ error: `A store with slug "${slug}" already exists` });
       return;
@@ -517,7 +524,17 @@ storesRouter.post(
         : null;
 
     const store = createStore(
-      { name, slug, vertical, kind, terminalCount, baseUrl, environment, adminEmail },
+      {
+        name,
+        slug,
+        vertical,
+        kind,
+        terminalCount,
+        baseUrl,
+        environment,
+        adminEmail,
+        deploymentName,
+      },
       controlPlaneToken,
     );
     if (companyId !== null) setStoreCompany(store.id, companyId);
@@ -606,6 +623,7 @@ storesRouter.put(
     const store = storeFromParams(req.params.id);
     const input: {
       name?: string;
+      deploymentName?: string | null;
       vertical?: StoreVertical;
       kind?: StoreRecord['kind'];
       terminalCount?: number;
@@ -616,6 +634,9 @@ storesRouter.put(
     } = {};
     const body = req.body as Record<string, unknown>;
     if (body['name'] !== undefined) input.name = requireString(body, 'name');
+    if (body['deploymentName'] !== undefined) {
+      input.deploymentName = optionalString(body, 'deploymentName', 60);
+    }
     if (body['vertical'] !== undefined) input.vertical = optionalVertical(body);
     if (body['kind'] !== undefined) input.kind = optionalStoreKind(body);
     // The kind that will hold AFTER this edit: the terminal rules are about the

@@ -301,6 +301,24 @@ describe('PUT /api/stores/:id — edit', () => {
     expect(fetchMock).toHaveBeenCalledTimes(callsAfterCreate);
   });
 
+  it('stores the Coolify deployment label and lets an edit change it', async () => {
+    mockConfigureOk();
+    const created = await request(app)
+      .post('/api/stores')
+      .set(auth())
+      .send(createPayload({ deploymentName: 'super-stores-jhb' }));
+    expect(created.status).toBe(201);
+    const store = (created.body as { store: { id: number; deploymentName: string } }).store;
+    expect(store.deploymentName).toBe('super-stores-jhb');
+
+    const res = await request(app)
+      .put(`/api/stores/${store.id}`)
+      .set(auth())
+      .send({ deploymentName: 'super-stores-jhb-north' });
+    expect(res.status).toBe(200);
+    expect(res.body.deploymentName).toBe('super-stores-jhb-north');
+  });
+
   it('rejects an unknown vertical on edit', async () => {
     mockConfigureOk();
     const created = await request(app).post('/api/stores').set(auth()).send(createPayload());

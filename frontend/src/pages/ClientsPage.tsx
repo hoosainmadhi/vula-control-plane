@@ -76,8 +76,14 @@ export default function ClientsPage() {
   const [hoUrl, setHoUrl] = useState('');
   const [hoAdminEmail, setHoAdminEmail] = useState('');
   const [multiStores, setMultiStores] = useState<
-    Array<{ name: string; slug: string; baseUrl: string; terminalCount: number }>
-  >([{ name: '', slug: '', baseUrl: '', terminalCount: 2 }]);
+    Array<{
+      name: string;
+      slug: string;
+      deploymentName: string;
+      baseUrl: string;
+      terminalCount: number;
+    }>
+  >([{ name: '', slug: '', deploymentName: '', baseUrl: '', terminalCount: 2 }]);
 
   const [deploying, setDeploying] = useState(false);
 
@@ -147,6 +153,7 @@ export default function ClientsPage() {
       {
         name: '',
         slug: '',
+        deploymentName: '',
         baseUrl: '',
         terminalCount: 2,
       },
@@ -185,6 +192,8 @@ export default function ClientsPage() {
           {
             name: singleStoreName || clientName,
             slug: clientSlug,
+            // One store, one client: the client's slug is the deployment name.
+            deploymentName: clientSlug,
             baseUrl: singleStoreUrl || `https://${clientSlug}.vula-app.co.za`,
             terminalCount: licensed,
             licensedTerminalCount: licensed,
@@ -203,6 +212,9 @@ export default function ClientsPage() {
           return {
             name: s.name || `${clientName} Branch ${i + 1}`,
             slug: s.slug || `${clientSlug}-${i + 1}`,
+            // The short branch code (`jhb`), so two Johannesburg stores in
+            // different client accounts cannot produce the same Coolify name.
+            ...(s.deploymentName.trim() ? { deploymentName: s.deploymentName.trim() } : {}),
             baseUrl: s.baseUrl || `https://${clientSlug}-${i + 1}.vula-app.co.za`,
             terminalCount: licensed,
             licensedTerminalCount: licensed,
@@ -236,7 +248,9 @@ export default function ClientsPage() {
     setHoName('');
     setHoUrl('');
     setHoAdminEmail('');
-    setMultiStores([{ name: '', slug: '', baseUrl: '', terminalCount: 2 }]);
+    setMultiStores([
+      { name: '', slug: '', deploymentName: '', baseUrl: '', terminalCount: 2 },
+    ]);
     setSetupFeeCents(null);
     setWhatsappBundle(whatsAppMessagesForCents(selectedPlan?.featurePrices?.whatsapp_cloud));
   };
@@ -1015,7 +1029,19 @@ export default function ClientsPage() {
                                 next[idx].name = e.target.value;
                                 setMultiStores(next);
                               }}
-                              className="col-span-5 rounded border border-slate-300 p-2 text-xs"
+                              className="col-span-4 rounded border border-slate-300 p-2 text-xs"
+                            />
+                            <input
+                              type="text"
+                              placeholder="za-pos name (client-jhb)"
+                              title="Full Coolify label after za-pos-, e.g. super-stores-jhb. Leave blank to use the client slug and store name."
+                              value={ms.deploymentName}
+                              onChange={(e) => {
+                                const next = [...multiStores];
+                                next[idx].deploymentName = e.target.value.toLowerCase();
+                                setMultiStores(next);
+                              }}
+                              className="col-span-2 rounded border border-slate-300 p-2 text-xs font-mono"
                             />
                             <input
                               type="text"
@@ -1026,7 +1052,7 @@ export default function ClientsPage() {
                                 next[idx].baseUrl = e.target.value;
                                 setMultiStores(next);
                               }}
-                              className="col-span-4 rounded border border-slate-300 p-2 text-xs font-mono"
+                              className="col-span-3 rounded border border-slate-300 p-2 text-xs font-mono"
                             />
                             <div className="col-span-3 flex items-center justify-end gap-1.5">
                               <span className="text-[10px] font-bold text-slate-500 uppercase shrink-0">

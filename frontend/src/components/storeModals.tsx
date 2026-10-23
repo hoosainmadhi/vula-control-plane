@@ -36,6 +36,7 @@ export function StoreFormModal({ modal, saving, error, companies, onClose, onSub
       ? {
           name: editing.name,
           slug: editing.slug,
+          deploymentName: editing.deploymentName ?? '',
           vertical: editing.vertical,
           kind: editing.kind ?? 'store',
           baseUrl: editing.baseUrl,
@@ -67,6 +68,21 @@ export function StoreFormModal({ modal, saving, error, companies, onClose, onSub
             className={inputCls}
             placeholder="Gardens Mall"
           />
+        </div>
+        <div>
+          <label className={labelCls}>Coolify deployment name</label>
+          <input
+            value={form.deploymentName ?? ''}
+            onChange={(e) => setForm({ ...form, deploymentName: e.target.value })}
+            className={inputCls}
+            placeholder="super-stores-jhb"
+          />
+          <p className="mt-1 text-xs text-slate-400">
+            The full label after <span className="font-mono">za-pos-</span>. Leave blank to use the
+            client slug and store name; set <span className="font-mono">super-stores-jhb</span> when
+            the store name is the full city, so two Johannesburg stores cannot collide. Used when
+            the deployment is created — changing it later does not rename an existing Coolify app.
+          </p>
         </div>
         <div>
           <label className={labelCls}>Slug</label>
@@ -321,6 +337,8 @@ export interface AdminPasswordModalProps {
   note: string;
   emailedTo?: string;
   emailError?: string;
+  /** What the password belongs to: a store (default) or a Head Office panel. */
+  surface?: string;
   onClose: () => void;
 }
 
@@ -330,6 +348,7 @@ export function AdminPasswordModal({
   note,
   emailedTo,
   emailError,
+  surface = 'store',
   onClose,
 }: AdminPasswordModalProps) {
   const copy = async (): Promise<void> => {
@@ -343,8 +362,8 @@ export function AdminPasswordModal({
     <Modal title={`Admin password — ${storeName}`} onClose={onClose}>
       <div className="space-y-4">
         <p className="text-sm text-slate-600">
-          The store reset its admin password. The temporary password below is shown once and is not
-          stored by the control plane — save it somewhere safe, then close this box.
+          A new admin password was issued for the {surface}. The temporary password below is shown
+          once and is not stored by the control plane — save it somewhere safe, then close this box.
         </p>
         <div className="rounded-lg bg-slate-900 px-4 py-3 text-center font-mono text-lg tracking-widest text-emerald-300">
           {tempPassword}
