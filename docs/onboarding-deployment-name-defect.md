@@ -1,7 +1,7 @@
 # Onboarding API Defect: deploymentName Is Dropped
 
 **Status:** fixed in the repository, **not deployed**. Regression test added;
-full CP suite 526/526, typecheck and build clean. The existing Stage A Store is
+full CP suite 532/532, typecheck and build clean. The existing Stage A Store is
 not renamed. The fix must be deployed to the staging CP before the second Store
 is onboarded.
 
@@ -44,7 +44,7 @@ difference.
      `m4-store-a`;
    - `onboardingNaming.test.ts` mocks the Coolify create call and asserts the
      app name is exactly `za-pos-m4-store-a`.
-5. Full CP suite **526/526**, typecheck and build clean.
+5. Full CP suite **532/532**, typecheck and build clean.
 
 Deployment is still required before onboarding the second Store. Do not rename
 existing apps or edit registry identity by hand.

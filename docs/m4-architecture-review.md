@@ -319,7 +319,7 @@ procedural:
 
 Tests: `src/__tests__/stagingBoundary.test.ts` covers project/server/destination
 mismatch, name/domain refusal, missing scope, created-app mismatch and the exact
-allowlist. Full branch suite: **526/526** after this guard.
+allowlist. Full branch suite: **532/532** after this guard.
 
 Residual: the staging CP still holds a Root Team Coolify token. The guard
 prevents the CP's normal code paths from selecting another project/app, but a

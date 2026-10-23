@@ -1173,12 +1173,12 @@ and test locally; do not deploy the CP or migrate tenants.
   preflight, app allowlist, trigger/app persistence, in-flight reconciliation,
   `release_state`/phase tracking.
 - [x] Tests: `releases.test.ts` 29/29; main `dev` full backend **506/506**;
-  isolated branch **526/526** (41 suites); typecheck and production build clean
+  isolated branch **532/532** (42 suites); typecheck and production build clean
   on both.
 - [x] Isolated M4 branch `m4/shared-image-release` (implementation `14c9133`;
   M4.1 docs `1092f69`, `9c9a654`, `dcb1311`) prepared from clean HEAD;
-  unrelated working-tree changes preserved on `dev`. Branch suite 526/526
-  (41 suites), typecheck and build clean.
+  unrelated working-tree changes preserved on `dev`. Branch suite 532/532
+  (42 suites), typecheck and build clean.
 - [x] Read-only Coolify 4.4.7 contract check: application status, `/data`
   storage, deployment records/status and deployment-by-UUID confirmed; stop is
   an async queued job (exited state, containers removed). No live image app or
@@ -1199,7 +1199,7 @@ and test locally; do not deploy the CP or migrate tenants.
   name/domain, post-create read-back and mandatory allowlist on existing-app
   retry/redeploy paths. First Store creation is intentionally allowed before its
   UUID is added to the existing-app allowlist. Tests in
-  `src/__tests__/stagingBoundary.test.ts`; branch suite 526/526.
+  `src/__tests__/stagingBoundary.test.ts`; branch suite 532/532.
 - [x] Branch secret scan over `origin/dev..HEAD`: no private key, GitHub token,
   JWT, Coolify assignment or exposed token value. No `.github` workflow and no
   auto-deploy app references the branch. Branch pushed at `9ae7fc5`.
@@ -1225,7 +1225,7 @@ and test locally; do not deploy the CP or migrate tenants.
 - [x] Onboarding API defect fixed and deployed: nested input, step metadata,
   `createStore`/`createPanel` and inserts preserve `deploymentName`.
   Regression tests in `clients.test.ts` and `onboardingNaming.test.ts`; full
-  suite 526/526, typecheck/build clean. CP commit `619f936` deployed to staging.
+  suite 532/532, typecheck/build clean. CP commit `619f936` deployed to staging.
 - [x] M4.1 Stage B: Release B published privately at exact digest
   `sha256:72a9aeb8...`, version `v2026.10.23-86ed3e1-m4b`, arm64. Approval packet
   in `docs/m4.1-release-b-approval.md`.
@@ -1242,9 +1242,11 @@ and test locally; do not deploy the CP or migrate tenants.
   volume/schema/no-active-job, audits the correction and preserves failed history.
 - [x] Two-store wave test: wave 1 Store B failed schema gate, wave 2 Store A
   skipped, no Coolify deployment, `stopOnFailure=true`.
-- [ ] Post-deploy status race: B can report `running:unhealthy` briefly during
-  warm-up; audited reconciliation corrects the false failure. A future fix should
-  wait for app/container readiness before declaring the upgrade failed.
+- [x] Post-deploy readiness fixed: poll exact image, `/health` version/revision
+  and database connectivity; stale Coolify status no longer causes a false
+  failure. Clean A→B→A verified on staging.
+- [x] Releases UI: fleet/catalog/rollouts/history, actions, confirmations,
+  dry-run and release-manager gating. `docs/releases-ui.md`.
 - [ ] Existing Dockerfile→dockerimage blue/green migration (separate approval).
 - [ ] Image signature/attestation verification (supply-chain follow-up).
 - [ ] Panel schema reporting from live telemetry (currently only set by this
