@@ -1,5 +1,44 @@
 # Progress
 
+## 2026-10-23 — M4 release management consolidated into the permanent Control Planes
+
+One codebase now serves both permanent Control Planes. `m4/shared-image-release`
+was merged into `dev`, `staging` and `main`; all three branches point at
+`f36157f` and the same commit was deployed to `vula-cp-staging` and
+`vula-cp-prod`.
+
+- Preserved Clients, Quotes, Plans, Billing, Devices, Versions, Deployments,
+  Errors and Settings. Backend **545/545 across 42 suites**, frontend **33/33**,
+  typecheck and production build clean.
+- Added explicit `deploy_mode` (`image` / `dockerfile` / `unprovisioned`) to
+  stores and panels, backfilled once for existing rows, and set by
+  provisioning. Existing Dockerfile tenants now say so in the fleet, with
+  Upgrade and Rollback disabled and a blue/green migration explanation. The
+  API refuses image changes for them with `409 dockerfile_requires_blue_green`.
+- Added `CP_ENVIRONMENT=staging|production` so the header label does not depend
+  on the M4-only `VULA_STAGING_MODE` creation boundary.
+- Verified backups before deployment:
+  - staging registry `sha256:3505230daf53…`, 11 stores, 2 panels, 8 companies,
+    9 plans, integrity ok, `user_version 2`.
+  - production registry `sha256:208fa9d557fe…`, 0 stores, 0 panels, 1 company
+    (`Super Stores`), 9 plans, integrity ok, `user_version 2`.
+  Backups are in `~/.config/za-pos/backups/` (mode 600).
+- Staging deployment `qz0oyymqxet5maimudodwyf2` finished; production
+  deployment `ie9fwpbaybtzxnbqd5zuhlfl` finished. Both on commit `f36157f`,
+  `running:healthy`, database connected. All existing modules return 200.
+- Staging fleet: 11 stores + 2 panels, 12 Dockerfile and 1 unprovisioned, all
+  image actions blocked. Production fleet: 0 stores + 0 panels; the registry
+  contains only the `Super Stores` company row, before and after deployment.
+- Marketing demos: all eight `demo-*.vula-app.co.za` URLs return 200 with
+  `database: connected`; registry URLs unchanged. The nightly reset is installed
+  at `/usr/local/bin/vula-demo-reset.sh`, scheduled by
+  `/etc/cron.d/vula-demo-reset` at 02:17, and the 2026-10-23 run reset all demos.
+- Release catalog: Release A (`v2026.10.21-5781c2c`, stable) registered in both
+  CPs; Release B (`v2026.10.23-86ed3e1-m4b`, beta) registered in staging only.
+  The fake `schema-gate` M4 test release was not copied.
+- The temporary M4 environment and OptiMed are untouched; both health endpoints
+  return 200.
+
 ## 2026-10-23 — M4 Releases UI accepted; staging session security closed; M4 frozen
 
 The Releases UI was accepted for staging after three rounds of fixes: the header

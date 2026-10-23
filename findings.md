@@ -1,5 +1,38 @@
 # Findings
 
+## 2026-10-23 — consolidation: Dockerfile tenants must not look like image tenants
+
+- **`previous_release_id` is not deployment mode.** The staging and production
+  registries predate the shared-image controller: every existing tenant was
+  created from a Dockerfile and has no image digest. Without an explicit field
+  they appeared as image tenants with blank image state, and the Upgrade button
+  offered an in-place image change that the orchestrator would only refuse after
+  the operator confirmed. `deploy_mode` now records `image`, `dockerfile` or
+  `unprovisioned`; the fleet labels Dockerfile tenants and disables image
+  actions, and `applyReleaseToTenant` refuses them before Coolify with
+  `dockerfile_requires_blue_green`.
+- **The migration is inference-safe only for pre-controller rows.** On the first
+  boot after this change, rows with an image digest are `image`; rows with a
+  Coolify UUID and no digest are `dockerfile`; the rest are `unprovisioned`.
+  New rows are classified by provisioning, not by inference, so a half-finished
+  image onboarding cannot be mistaken for a Dockerfile tenant on a later boot.
+- **The permanent staging CP must not enable `VULA_STAGING_MODE`.** That flag is
+  the M4 isolated-creation boundary (m4- name/domain prefixes); enabling it on
+  staging-cp would reject the existing demo names and domains. `CP_ENVIRONMENT`
+  now supplies the header label without changing creation rules.
+- **The production registry was already empty of tenants.** Before deployment it
+  contained one company (`Super Stores`) and no stores or panels; the verified
+  backup and the post-deployment read agree. The Superstores Coolify apps, if
+  any remain, are not registered in the production CP and were not touched.
+- **Release B is beta and staging-only.** Only Release A was registered in the
+  production catalog; Release B stays available in staging. The fake
+  `schema-gate` release used for the negative wave test was not copied to either
+  permanent catalog.
+- **Backups:** staging `sha256:3505230daf53…` (11 stores / 2 panels / 8
+  companies), production `sha256:208fa9d557fe…` (0 stores / 0 panels / 1
+  company), both `integrity_check=ok`, `user_version 2`. Stored under
+  `~/.config/za-pos/backups/` with mode 600.
+
 ## 2026-10-22 — M4 reliability review: API acceptance is not deployment success
 
 - **The first M4 pass could mark an upgrade healthy from the old container.**

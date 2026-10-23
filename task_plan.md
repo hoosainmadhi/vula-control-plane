@@ -1270,3 +1270,24 @@ and test locally; do not deploy the CP or migrate tenants.
    upgrades.
 3. Production-readiness review: backups, tenant migration and operational
    recovery.
+
+## Phase: permanent Control Plane consolidation (2026-10-23) — complete
+
+- [x] Merged the accepted M4 release code and UI into `dev`, `staging` and
+      `main`; all three branches at `f36157f`.
+- [x] Preserved Clients, Quotes, Plans, Billing, Devices, Versions, Deployments,
+      Errors and Settings; backend 545/545 (42 suites), frontend 33/33, build
+      clean.
+- [x] One codebase, separate registries, credentials and environment:
+      `CP_ENVIRONMENT=staging` / `production`.
+- [x] Explicit `deploy_mode`; legacy Dockerfile tenants are labelled and image
+      actions are refused with `dockerfile_requires_blue_green`.
+- [x] Verified backups before deployment: staging 11 stores / 2 panels / 8
+      companies, production 0 stores / 0 panels / 1 company; both integrity ok.
+- [x] Staging deployed and validated: all modules 200, fleet 11 + 2, demo URLs
+      200, nightly reset verified at 02:17.
+- [x] Production deployed and validated: all modules 200, fleet 0 + 0,
+      environment production, `running:healthy`.
+- [x] Release A stable registered in both catalogs; Release B beta in staging
+      only; fake schema-gate release not copied.
+- [x] M4 environment retained; OptiMed health 200 and untouched.
