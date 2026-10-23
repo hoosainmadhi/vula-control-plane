@@ -1,8 +1,9 @@
 # Onboarding API Defect: deploymentName Is Dropped
 
-**Status:** open — must be fixed and tested before general customer onboarding.
-Stage A accepts the existing Store through naming amendment 1; this document
-records the defect separately.
+**Status:** fixed in the repository, **not deployed**. Regression test added;
+full CP suite 520/520, typecheck and build clean. The existing Stage A Store is
+not renamed. The fix must be deployed to the staging CP before the second Store
+is onboarded.
 
 ## Symptom
 
@@ -32,18 +33,21 @@ prefix and domain. Its name check is intentionally a prefix/domain guard, not an
 exact per-tenant name prediction; the plan's exact-name gate caught the
 difference.
 
-## Required fix
+## Fix implemented in the repository
 
-1. Include `deploymentName` in the `store_deploy_*` step metadata.
-2. Pass it through to `createStore()` in `runJobSteps`.
-3. Add a regression test that onboards a Store with
-   `deploymentName: "m4-store-a"` and asserts:
-   - the Store row stores it;
-   - the Coolify app name is `za-pos-m4-store-a`;
-   - the volume remains `vula-store-m4-store-a-sqlite-db`.
-4. Run the affected onboarding/orchestration suites and typecheck.
-5. Deploy only after review; do not rename existing apps or edit registry
-   identity by hand.
+1. `deploymentName` is accepted by the nested onboarding input types and
+   preserved in the Store/Head Office step metadata.
+2. `createStore()` and `createPanel()` now write `deployment_name`.
+3. `runJobSteps()` passes the metadata value through.
+4. Regression coverage:
+   - `clients.test.ts` asserts the Store row and step metadata retain
+     `m4-store-a`;
+   - `onboardingNaming.test.ts` mocks the Coolify create call and asserts the
+     app name is exactly `za-pos-m4-store-a`.
+5. Full CP suite **520/520**, typecheck and build clean.
+
+Deployment is still required before onboarding the second Store. Do not rename
+existing apps or edit registry identity by hand.
 
 ## Scope
 

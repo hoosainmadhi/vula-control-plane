@@ -1173,12 +1173,12 @@ and test locally; do not deploy the CP or migrate tenants.
   preflight, app allowlist, trigger/app persistence, in-flight reconciliation,
   `release_state`/phase tracking.
 - [x] Tests: `releases.test.ts` 29/29; main `dev` full backend **506/506**;
-  isolated branch **518/518** (38 suites); typecheck and production build clean
+  isolated branch **520/520** (39 suites); typecheck and production build clean
   on both.
 - [x] Isolated M4 branch `m4/shared-image-release` (implementation `14c9133`;
   M4.1 docs `1092f69`, `9c9a654`, `dcb1311`) prepared from clean HEAD;
-  unrelated working-tree changes preserved on `dev`. Branch suite 518/518
-  (38 suites), typecheck and build clean.
+  unrelated working-tree changes preserved on `dev`. Branch suite 520/520
+  (39 suites), typecheck and build clean.
 - [x] Read-only Coolify 4.4.7 contract check: application status, `/data`
   storage, deployment records/status and deployment-by-UUID confirmed; stop is
   an async queued job (exited state, containers removed). No live image app or
@@ -1199,7 +1199,7 @@ and test locally; do not deploy the CP or migrate tenants.
   name/domain, post-create read-back and mandatory allowlist on existing-app
   retry/redeploy paths. First Store creation is intentionally allowed before its
   UUID is added to the existing-app allowlist. Tests in
-  `src/__tests__/stagingBoundary.test.ts`; branch suite 518/518.
+  `src/__tests__/stagingBoundary.test.ts`; branch suite 520/520.
 - [x] Branch secret scan over `origin/dev..HEAD`: no private key, GitHub token,
   JWT, Coolify assignment or exposed token value. No `.github` workflow and no
   auto-deploy app references the branch. Branch pushed at `9ae7fc5`.
@@ -1222,10 +1222,17 @@ and test locally; do not deploy the CP or migrate tenants.
 - [x] Stage A final acceptance: CP and Store health 200, exact arm64 digest,
   `/data` volume and DB, single container, release tracking healthy, project
   ownership exactly CP + Store, existing Vula/OptiMed health unchanged.
-- [ ] Onboarding API defect (open): onboarding step metadata and `createStore`
-  omit `deploymentName`; `docs/onboarding-deployment-name-defect.md`. Must be
-  fixed with a regression test before general customer onboarding.
-- [ ] M4.1 Stage B: release B, upgrade/rollback and waves; not approved.
+- [x] Onboarding API defect fixed in repository: nested input, step metadata,
+  `createStore`/`createPanel` and inserts now preserve `deploymentName`.
+  Regression tests in `clients.test.ts` and `onboardingNaming.test.ts`; full
+  suite 520/520, typecheck/build clean. Not yet deployed.
+- [ ] M4.1 Stage B: Release B prepared as OCI
+  `sha256:72a9aeb8...`, version `v2026.10.23-86ed3e1-m4b`, arm64, private staging
+  tag planned. Not published or deployed; approval packet in
+  `docs/m4.1-release-b-approval.md`.
+- [ ] M4.1 Stage B execution after approval: deploy CP naming fix, publish exact
+  digest, upgrade A→B, stop-first/database checks, rollback B→A, then two-wave
+  stop-on-failure test. Not started.
 - [ ] Existing Dockerfile→dockerimage blue/green migration (separate approval).
 - [ ] Image signature/attestation verification (supply-chain follow-up).
 - [ ] Panel schema reporting from live telemetry (currently only set by this
