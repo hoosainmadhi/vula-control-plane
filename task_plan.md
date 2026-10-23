@@ -1230,9 +1230,11 @@ and test locally; do not deploy the CP or migrate tenants.
   `sha256:72a9aeb8...`, version `v2026.10.23-86ed3e1-m4b`, arm64, private staging
   tag planned. Not published or deployed; approval packet in
   `docs/m4.1-release-b-approval.md`.
-- [ ] M4.1 Stage B execution after approval: deploy CP naming fix, publish exact
-  digest, upgrade A→B, stop-first/database checks, rollback B→A, then two-wave
-  stop-on-failure test. Not started.
+- [ ] M4.1 Stage B execution blocked at publication: GHCR rejected the exact
+  OCI push with HTTP 403 because the available token lacks `write:packages`;
+  the temporary workflow route was rejected for missing `workflow` scope. No
+  tag/manifest published; CP remains on `9ae7fc5`; Store A remains on A;
+  no backup/upgrade/rollback/wave test started.
 - [ ] Existing Dockerfile→dockerimage blue/green migration (separate approval).
 - [ ] Image signature/attestation verification (supply-chain follow-up).
 - [ ] Panel schema reporting from live telemetry (currently only set by this
