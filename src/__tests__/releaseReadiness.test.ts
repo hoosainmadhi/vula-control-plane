@@ -66,21 +66,23 @@ const release = () =>
   });
 
 describe('post-deployment readiness', () => {
-  it('polls through warm-up unhealthy status until the exact release is healthy', async () => {
+  it('polls through stale status and warm-up health until the exact release is healthy', async () => {
     const rel = release();
-    let calls = 0;
+    let healthCalls = 0;
     fetchMock.mockImplementation(async (url: string | URL | Request) => {
       const s = String(url);
       if (s.endsWith('/applications/app')) {
-        calls += 1;
-        return jsonResponse(200, app(calls < 3 ? 'running:unhealthy' : 'running:healthy'));
+        return jsonResponse(200, app('exited:unhealthy', { container_present: false }));
       }
-      return health();
+      healthCalls += 1;
+      return healthCalls < 3
+        ? jsonResponse(503, { status: 'error', app: 'vula', database: 'unhealthy' })
+        : health();
     });
     await expect(waitForApplicationReady('app', rel, 'http://store.test', 300, 5)).resolves.toEqual(
       { ok: true },
     );
-    expect(calls).toBeGreaterThanOrEqual(3);
+    expect(healthCalls).toBeGreaterThanOrEqual(3);
   });
 
   it('waits for the health endpoint to report the exact version and revision', async () => {
@@ -101,20 +103,20 @@ describe('post-deployment readiness', () => {
     const rel = release();
     fetchMock.mockImplementation(async (url: string | URL | Request) =>
       String(url).endsWith('/applications/app')
-        ? jsonResponse(200, app('exited:unhealthy'))
+        ? jsonResponse(200, app('failed:unhealthy'))
         : health(),
     );
     const result = await waitForApplicationReady('app', rel, 'http://store.test', 300, 5);
     expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/application_status_exited/);
+    expect(result.error).toMatch(/application_status_failed/);
   });
 
   it('fails closed with a timeout when the app never becomes healthy', async () => {
     const rel = release();
     fetchMock.mockImplementation(async (url: string | URL | Request) =>
       String(url).endsWith('/applications/app')
-        ? jsonResponse(200, app('running:unhealthy'))
-        : health(),
+        ? jsonResponse(200, app('exited:unhealthy', { container_present: false }))
+        : jsonResponse(503, { status: 'error', app: 'vula', database: 'unhealthy' }),
     );
     const result = await waitForApplicationReady('app', rel, 'http://store.test', 30, 5);
     expect(result.ok).toBe(false);

@@ -144,7 +144,11 @@ export const waitForApplicationReady = async (
     }
 
     const status = String(application.status ?? '').toLowerCase();
-    if (/failed|exited|stopped/.test(status)) {
+    // Coolify's human-readable status is unreliable in both directions after a
+    // restart: it can say running:healthy while absent, or exited while the new
+    // container is already serving. Only a definitive `failed` status is
+    // terminal; readiness itself is proven by the image fields and /health.
+    if (/failed/.test(status)) {
       return { ok: false, error: `application_status_${status}` };
     }
     const imageName = String(application.docker_registry_image_name ?? '');
@@ -156,31 +160,28 @@ export const waitForApplicationReady = async (
       };
     }
 
-    const healthyApp = application.container_present === true && status === 'running:healthy';
-    if (healthyApp) {
-      try {
-        const res = await fetch(`${cleanBase}/health`, {
-          redirect: 'error',
-          signal: AbortSignal.timeout(5000),
-        });
-        const body = (await res.json().catch(() => null)) as {
-          status?: unknown;
-          app?: unknown;
-          service?: unknown;
-          version?: unknown;
-          revision?: unknown;
-          database?: unknown;
-        } | null;
-        const identified = body?.app === 'vula' || body?.service === 'vula-head-office';
-        const versionMatches = body?.version === release.version;
-        const revisionMatches = !release.revision || body?.revision === release.revision;
-        const databaseMatches = release.kind !== 'store' || body?.database === 'connected';
-        if (res.ok && identified && versionMatches && revisionMatches && databaseMatches) {
-          return { ok: true };
-        }
-      } catch {
-        // Container is still warming up or the route is not ready.
+    try {
+      const res = await fetch(`${cleanBase}/health`, {
+        redirect: 'error',
+        signal: AbortSignal.timeout(5000),
+      });
+      const body = (await res.json().catch(() => null)) as {
+        status?: unknown;
+        app?: unknown;
+        service?: unknown;
+        version?: unknown;
+        revision?: unknown;
+        database?: unknown;
+      } | null;
+      const identified = body?.app === 'vula' || body?.service === 'vula-head-office';
+      const versionMatches = body?.version === release.version;
+      const revisionMatches = !release.revision || body?.revision === release.revision;
+      const databaseMatches = release.kind !== 'store' || body?.database === 'connected';
+      if (res.ok && identified && versionMatches && revisionMatches && databaseMatches) {
+        return { ok: true };
       }
+    } catch {
+      // Container is still warming up or the route is not ready.
     }
 
     if (Date.now() >= deadline) break;
