@@ -265,6 +265,13 @@ describe('per-tenant release application', () => {
     expect(calls.some((c) => c.method === 'PATCH' && c.url.includes(store.coolify_uuid!))).toBe(
       true,
     );
+    const imagePatch = calls.find(
+      (c) => c.method === 'PATCH' && c.url.includes(store.coolify_uuid!),
+    )!;
+    expect(JSON.parse(imagePatch.body)).toMatchObject({
+      docker_registry_image_name: 'ghcr.io/hoosainmadhi/vula-pos-store@sha256',
+      docker_registry_image_tag: A.replace(/^sha256:/, ''),
+    });
     expect(calls.some((c) => c.method === 'POST' && c.url.includes('/deploy'))).toBe(true);
 
     const updated = getStoreById(store.id)!;

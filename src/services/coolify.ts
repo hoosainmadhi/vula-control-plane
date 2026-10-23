@@ -750,8 +750,12 @@ export async function updateApplicationImage(
 ): Promise<void> {
   const config = readCoolifyConfig();
   if (!config) throw new CoolifyError('Coolify is not configured');
+  // Coolify normalises a digest reference to `<name>@sha256` plus the hex tag.
+  // Sending a plain repository name makes it pull `<name>:<hex>`, which does not
+  // exist for a digest-only release.
+  const digestName = `${imageNameFor(release.kind).split('@')[0]}@sha256`;
   await request(config, 'PATCH', `${API_VERSION_PATH}/applications/${coolifyUuid}`, {
-    docker_registry_image_name: imageNameFor(release.kind),
+    docker_registry_image_name: digestName,
     docker_registry_image_tag: imageTagFor(release),
   });
 }

@@ -1230,11 +1230,16 @@ and test locally; do not deploy the CP or migrate tenants.
   `sha256:72a9aeb8...`, version `v2026.10.23-86ed3e1-m4b`, arm64, private staging
   tag planned. Not published or deployed; approval packet in
   `docs/m4.1-release-b-approval.md`.
-- [ ] M4.1 Stage B execution blocked at publication: GHCR rejected the exact
-  OCI push with HTTP 403 because the available token lacks `write:packages`;
-  the temporary workflow route was rejected for missing `workflow` scope. No
-  tag/manifest published; CP remains on `9ae7fc5`; Store A remains on A;
-  no backup/upgrade/rollback/wave test started.
+- [x] Release B published privately at exact digest
+  `sha256:72a9aeb8...`, arm64, version `v2026.10.23-86ed3e1-m4b`.
+- [x] CP naming fix deployed to `vula-cp-m4-staging`; registry/Store intact.
+- [x] Store A backup created and verified (`53180ac2...`).
+- [!] Stage B A→B failed: Coolify image update used `<repo>:<digest-hex>` and
+  could not pull B. Stop-first held (max one container); Store A restored to A
+  and DB intact. No rollback/wave test. Full report:
+  `docs/m4.1-stage-b-execution.md`.
+- [ ] Image-update fix (`<repo>@sha256` + hex tag, regression test) prepared but
+  not deployed; retry Stage B requires separate approval after deploying it.
 - [ ] Existing Dockerfile→dockerimage blue/green migration (separate approval).
 - [ ] Image signature/attestation verification (supply-chain follow-up).
 - [ ] Panel schema reporting from live telemetry (currently only set by this
