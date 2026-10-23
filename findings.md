@@ -1,5 +1,19 @@
 # Findings
 
+## 2026-10-23 — HO image first post-bind startup was transiently unhealthy
+
+During the Head Office blue/green migration, the first deploy after binding the
+new volume and copying the golden `head-office.db` was removed by Coolify as
+`exited:unhealthy` before the temporary health check passed. The same image,
+volume, database and environment were healthy immediately after a second start
+and have stayed healthy since. The image itself was already validated with a
+manual production-mode run.
+
+Lesson: after a bind-and-copy step, if an HO container exits unhealthy on its
+first post-bind deploy, start/deploy it once more before declaring the image
+bad. The migration script retries the affected app manually; all nine demos
+were verified after the final state.
+
 ## 2026-10-23 — the HO image was already published; the token can read but not push
 
 - The private GHCR package `vula-pos-ho` already contained tag

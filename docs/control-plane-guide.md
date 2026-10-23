@@ -259,11 +259,13 @@ unassigned (`company_id = NULL`) because the schema preserves quote documents.
 **Staging**
 
 - 11 stores, 2 Head Offices, 8 companies
-- 10 Dockerfile stores + 1 unprovisioned store; 2 Dockerfile Head Offices
-- 8 marketing demos + 3 rehearsal tenants
+- 8 image demo stores + 2 Dockerfile rehearsal stores + 1 unprovisioned rehearsal store
+- 1 image demo Head Office + 1 Dockerfile rehearsal Head Office
 - Catalog: store A stable, Head Office A stable, store B beta
 - `CP_ENVIRONMENT=staging`; `ALLOW_LEGACY_DOCKERFILE_ONBOARDING=true`
-- All image actions blocked for the existing Dockerfile tenants
+- Image actions remain blocked for the three legacy rehearsal tenants
+- The marketing demos are fully migrated; see
+  [`docs/demo-image-migration.md`](demo-image-migration.md)
 
 **M4**
 

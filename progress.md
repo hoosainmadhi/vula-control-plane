@@ -1,5 +1,34 @@
 # Progress
 
+## 2026-10-23 — all marketing demos migrated to shared image deployments
+
+Completed on the permanent staging Control Plane only. Eight demo Stores and
+the Urban Threads Head Office now run the stable shared images; the old
+Dockerfile apps and volumes are stopped and retained for rollback.
+
+- Pre-migration registry backup:
+  `vula-cp-staging-pre-demo-migration-20261023.db`,
+  `sha256:0def7c5603d1ddca5e254aa3b69f5f7b1445b33075b51181a0246b4736481918`,
+  integrity ok.
+- Set `VULA_DATA_ROOT=/data/apps/vula-app-image` so every image app has a new
+  host tree, separate from the old `/data/apps/vula-app`.
+- Pilot: Demo General Retail. Then the remaining seven Stores and the Head
+  Office. Each was provisioned through the CP release controller on a temporary
+  `-img` URL, bound to a new volume, seeded from its golden demo DB, verified,
+  then switched to its original public URL. The old app was stopped and its
+  domain removed before the new app received the public URL.
+- All nine report `deployMode=image`, `deployStatus=deployed`,
+  `runtimeHealth=up`, `imageTag=v2026.10.21-5781c2c`; all public logins return
+  200 and sample data is present (27–31 products per Store; Head Office
+  dashboard and 5 categories).
+- Updated `scripts/vula-demo-reset.sh` for the new UUIDs and host tree and ran
+  it; all nine demos reset and re-verified. The 02:17 cron remains installed.
+- Old apps are stopped with `container_present=false` and no domain; all nine
+  old volumes remain present. No old app or volume was deleted.
+- Full mapping, verification table and rollback instructions:
+  [`docs/demo-image-migration.md`](docs/demo-image-migration.md).
+- Production CP, Superstores, M4, OptiMed, proxy, DNS and firewall untouched.
+
 ## 2026-10-23 — Head Office shared image verified and registered
 
 The stable Store A commit (`5781c2c`) already had a published private GHCR Head
