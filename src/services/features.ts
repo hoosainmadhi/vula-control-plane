@@ -74,8 +74,8 @@ export const PLAN_FEATURES: readonly PlanFeature[] = [
     key: 'ai_assistant',
     label: 'AI Copilot',
     description:
-      'The store assistant (its own figures, admin-only) AND the Head Office executive copilot, which asks across branches. One key, both surfaces; each needs AI_* configured where it runs.',
-    enforcedBy: ['store', 'head-office'],
+      'The Head Office executive copilot, asking across every branch. Sold once per company and only with Head Office (`multi_store`); store licences do not carry it. Needs AI_* configured where the panel runs.',
+    enforcedBy: ['control-plane', 'head-office'],
   },
   // Split out of the keys that used to imply them (2026-10-10), so each can be
   // sold and switched off on its own: lay-bys were gated on `customer_credit`,
@@ -112,9 +112,13 @@ export const PRICED_FEATURE_KEYS: readonly string[] = [
 
 /**
  * The add-ons charged once per COMPANY, not once per trading store (owner,
- * 2026-10-14). There are three, and each is one thing for the whole business:
+ * 2026-10-14; AI Copilot joined 2026-10-24). Each is one thing for the whole
+ * business:
  *
  *  - `multi_store` (Head Office) — there is one panel for the company.
+ *  - `ai_assistant` — one executive copilot for the company, asking across its
+ *    branches. Head Office only: the store licences do not carry it, and it
+ *    cannot be bought without `multi_store`.
  *  - `ecommerce_bridges` — one storefront connection to WooCommerce/Shopify. The
  *    online shop is the business's, not a shop's; a second branch does not open a
  *    second storefront, so charging per store would bill the same integration
@@ -124,13 +128,13 @@ export const PRICED_FEATURE_KEYS: readonly string[] = [
  *    bought once for the business.
  *
  * Every other paid add-on is a per-store capability — each register either takes
- * lay-bys, holds credit accounts, asks the assistant or imports invoices, so the
- * bill follows the stores that have it. `addonQuantity` (services/pricing.ts) is
- * the one place this is applied; the marketing page's `data-per` attributes are
- * its display copy.
+ * lay-bys, holds credit accounts or imports invoices, so the bill follows the
+ * stores that have it. `addonQuantity` (services/pricing.ts) is the one place
+ * this is applied; the marketing page's `data-per` attributes are its display copy.
  */
 export const PER_COMPANY_FEATURE_KEYS: readonly string[] = [
   'multi_store',
+  'ai_assistant',
   'ecommerce_bridges',
   'whatsapp_cloud',
 ];
@@ -160,6 +164,27 @@ export const SUSPENSION_STRIPPED_FEATURES: readonly string[] = [
 export const FEATURE_LABELS: Record<string, string> = Object.fromEntries(
   PLAN_FEATURES.map((f) => [f.key, f.label]),
 );
+
+/**
+ * Paid features that cannot be sold on their own. AI Copilot is the Head Office
+ * copilot (owner, 2026-10-24): it asks across branches, so it needs the Head
+ * Office add-on. The same check runs on plan prices, quotes, onboarding and the
+ * subscription editor, so no surface can create an AI-only client.
+ */
+export const FEATURE_REQUIRES: Readonly<Record<string, string>> = {
+  ai_assistant: 'multi_store',
+};
+
+export const validateFeatureDependencies = (keys: readonly string[]): void => {
+  for (const [feature, required] of Object.entries(FEATURE_REQUIRES)) {
+    if (!keys.includes(feature) || keys.includes(required)) continue;
+    const label = FEATURE_LABELS[feature] ?? feature;
+    const requiredLabel = FEATURE_LABELS[required] ?? required;
+    throw new ValidationError(
+      `${label} needs ${requiredLabel} — add ${requiredLabel} or remove ${label}.`,
+    );
+  }
+};
 
 /**
  * What each add-on costs per month (2026-10-10; Head Office repriced
@@ -245,6 +270,7 @@ export const validateFeaturePrices = (raw: unknown): Record<string, number> => {
     }
     if (value > 0) out[key] = value;
   }
+  validateFeatureDependencies(Object.keys(out));
   return out;
 };
 

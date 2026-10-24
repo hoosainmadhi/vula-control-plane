@@ -693,4 +693,24 @@ describe('the wizard checks the plan before writing anything', () => {
     expect(String(res.body.error)).toMatch(/needs two or more stores/i);
     expect(await countClients()).toBe(before);
   });
+
+  it('refuses AI Copilot on a single-store deployment (2026-10-24)', async () => {
+    const planId = await planIdByCode('vula-grow');
+    const before = await countClients();
+    const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send({
+        name: 'No Copilot',
+        slug: 'no-copilot',
+        planId,
+        deploymentType: 'single_store',
+        features: ['ai_assistant'],
+        stores: [{ slug: 'no-copilot-main', baseUrl: 'http://localhost:3245', terminalCount: 1 }],
+        autoDeploy: false,
+      });
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toMatch(/AI Copilot needs Head Office/i);
+    expect(await countClients()).toBe(before);
+  });
 });

@@ -126,11 +126,22 @@ const reconcileSequence = async (holder: Holder): Promise<LicenceSequenceReconci
  * Operational add-ons (Head Office, credit, lay-by, e-commerce) stay in the
  * claim — suspension blocks new sales, not a merchant's access to data it
  * already owns.
+ *
+ * AI Copilot is Head Office only (owner, 2026-10-24): the executive copilot asks
+ * across the company's branches, and there is no store-level copilot for sale.
+ * Store licences therefore never carry `ai_assistant`; the panel's licence does.
  */
-export const licenceFeaturesFor = (ent: Entitlements): string[] =>
-  ent.billingState === 'suspended'
-    ? ent.features.filter((key) => !SUSPENSION_STRIPPED_FEATURES.includes(key))
-    : ent.features;
+const STORE_EXCLUDED_FEATURES: readonly string[] = ['ai_assistant'];
+
+export const licenceFeaturesFor = (ent: Entitlements, holder: LicenceHolderKind): string[] => {
+  const features =
+    ent.billingState === 'suspended'
+      ? ent.features.filter((key) => !SUSPENSION_STRIPPED_FEATURES.includes(key))
+      : ent.features;
+  return holder === 'store'
+    ? features.filter((key) => !STORE_EXCLUDED_FEATURES.includes(key))
+    : features;
+};
 
 /** Signs and delivers a store's licence; throws if the store refuses it. */
 export const deliverStoreLicence = async (store: StoreRecord): Promise<LicenceDelivery> => {
@@ -151,7 +162,7 @@ export const deliverStoreLicence = async (store: StoreRecord): Promise<LicenceDe
     companyName: ent.companyName,
     planCode: ent.planCode,
     planName: ent.planName,
-    features: licenceFeaturesFor(ent),
+    features: licenceFeaturesFor(ent, 'store'),
     whatsappMessages: ent.whatsappMessages,
     maxStores: ent.maxStores,
     maxTerminalsPerStore: ent.maxTerminalsPerStore,
@@ -187,7 +198,7 @@ export const deliverPanelLicence = async (panel: PanelRecord): Promise<LicenceDe
     companyName: ent.companyName,
     planCode: ent.planCode,
     planName: ent.planName,
-    features: licenceFeaturesFor(ent),
+    features: licenceFeaturesFor(ent, 'panel'),
     whatsappMessages: ent.whatsappMessages,
     maxStores: ent.maxStores,
     maxTerminalsPerStore: ent.maxTerminalsPerStore,

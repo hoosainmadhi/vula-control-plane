@@ -54,6 +54,12 @@ describe('quote pricing', () => {
     ).toThrow(/two or more stores/i);
   });
 
+  it('refuses AI Copilot without Head Office (2026-10-24)', () => {
+    expect(() =>
+      validateQuoteConfig({ stores: 3, tills: 6, addons: ['ai_assistant'], setup: 'assisted' }),
+    ).toThrow(/AI Copilot needs Head Office/i);
+  });
+
   it('refuses an add-on the vocabulary does not know', () => {
     expect(() => validateQuoteConfig({ ...base, addons: ['free_lunch'] })).toThrow(
       /unknown add-on/i,
@@ -80,6 +86,21 @@ describe('quote pricing', () => {
     expect(line('Lay-by')).toMatchObject({ cents: 14_700, rateCents: 4900, quantity: 3 });
     // Three stores (first till in each) + the two per-company add-ons + 3 × lay-by.
     expect(priced.monthlyTotalCents).toBe(3 * 19_900 + 19_900 + 4900 + 3 * 4900);
+  });
+
+  it('charges AI Copilot once for the business, alongside Head Office (2026-10-24)', () => {
+    const priced = priceQuote(
+      {
+        stores: 3,
+        tills: 3,
+        addons: ['multi_store', 'ai_assistant'],
+        setup: 'self',
+      },
+      15,
+    );
+    const ai = priced.lines.find((line) => line.label === 'AI Copilot')!;
+    expect(ai).toMatchObject({ cents: 9900, rateCents: 9900, quantity: 1 });
+    expect(priced.monthlyTotalCents).toBe(3 * 19_900 + 19_900 + 9900);
   });
 
   it('keeps the stores line plain when the tills do not divide evenly', () => {

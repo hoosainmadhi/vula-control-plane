@@ -1198,6 +1198,23 @@ describe('paid add-ons', () => {
       .expect(400);
   });
 
+  it('refuses an AI Copilot price without Head Office on the same plan (2026-10-24)', async () => {
+    const planId = await planIdByCode('vula-grow');
+    const refused = await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ featurePrices: { ai_assistant: 9900 } });
+    expect(refused.status).toBe(400);
+    expect(String(refused.body.error)).toMatch(/AI Copilot needs Head Office/i);
+
+    const accepted = await request(app)
+      .put(`/api/plans/${planId}`)
+      .set(auth())
+      .send({ featurePrices: { multi_store: 19_900, ai_assistant: 9900 } })
+      .expect(200);
+    expect(accepted.body.featurePrices).toEqual({ multi_store: 19_900, ai_assistant: 9900 });
+  });
+
   it('bills what the client bought, and snapshots the price at purchase', async () => {
     // On a plan that bundles NOTHING (Vula Start): an add-on the plan already
     // includes is not billed, because the client is not buying it twice.

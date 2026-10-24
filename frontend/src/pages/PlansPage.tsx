@@ -48,8 +48,9 @@ const ADDON_ORDER = [
   'layby',
   'ecommerce_bridges',
   // The WhatsApp messaging add-on is sold from the CP (R50/company entry
-  // bundle) but is not on the marketing page yet, so it sits last. Which keys
-  // ARE add-ons still comes from the vocabulary's `soldMonthly`.
+  // bundle) and now also appears on the marketing page; it sits last in the
+  // display order. Which keys ARE add-ons still comes from the vocabulary's
+  // `soldMonthly`.
   'whatsapp_cloud',
 ] as const;
 

@@ -57,6 +57,7 @@ import {
   featureCatalogue,
   PLAN_FEATURES,
   PRICED_FEATURE_KEYS,
+  validateFeatureDependencies,
   validateFeatureKeys,
   validateFeaturePrices,
   whatsAppBundleCents,
@@ -608,6 +609,8 @@ companiesRouter.post(
                 `${chosenPlan?.name ?? 'That plan'} does not price ${notPriced.join(', ')} — set the add-on's price on the plan first.`,
               );
             }
+            // AI Copilot is Head Office only (owner, 2026-10-24).
+            validateFeatureDependencies(onboardingFeatures);
             const whatsappCents = whatsAppBundleCents(req.body?.whatsappBundle);
             const agreedPrices = Object.fromEntries(
               onboardingFeatures.map((key) => [
@@ -773,6 +776,9 @@ companiesRouter.put(
           `${planAtRequest?.name ?? 'This plan'} does not price ${notPriced.join(', ')} — set the add-on's price on the plan first.`,
         );
       }
+      // AI Copilot is Head Office only (owner, 2026-10-24): the editor sends the
+      // full set, so the state that would be written must include multi_store.
+      validateFeatureDependencies(requestedFeatures);
     }
     let featuresChanged = false;
     /** A changed add-on price (e.g. the WhatsApp bundle) changes the licence. */

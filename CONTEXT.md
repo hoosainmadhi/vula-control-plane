@@ -80,8 +80,8 @@ control plane is what makes the two confusable in conversation. Do not write
   also **create their own plans** — the seeded tiers are a starting point, not a
   closed catalogue. Each plan also carries what it SELLS as add-ons
   (`feature_prices_json`), seeded from the approved pricing page (§5,
-  `DEFAULT_FEATURE_PRICES`). Head Office is R199,00 for the business; E-commerce
-  and WhatsApp are one charge for the business; AI Copilot and Upload invoice are
+  `DEFAULT_FEATURE_PRICES`). Head Office is R199,00 for the business; AI Copilot,
+  E-commerce and WhatsApp are one charge for the business; Upload invoice is
   R99,00 per store; Credit accounts and Lay-by are R49,00 per store.
 - **Four terminal quantities, and only one of them is billable.** **Licensed** is
   the commercial quantity (bought from the vendor, drives the fee). **Configured**
@@ -184,7 +184,7 @@ Served machine-readably at `GET /api/plans/features` (see `src/services/features
 | `multi_store`       | Head Office                  | control plane · Head Office · store |
 | `stock_transfers`   | Inter-branch transfers       | Head Office                         |
 | `ecommerce_bridges` | E-commerce                   | store                               |
-| `ai_assistant`      | AI Copilot                   | store · Head Office                 |
+| `ai_assistant`      | AI Copilot                   | control plane · Head Office         |
 | `layby`             | Lay-by                       | store                               |
 | `invoice_import`    | Upload invoice (AI assisted) | store                               |
 | `whatsapp_cloud`    | WhatsApp messaging           | store                               |
@@ -196,7 +196,10 @@ unlocked nothing) and the supplier-invoice importer was gated on **no key at all
 `wa.me` sharing remains free. Seven of the nine are sold per month and priced per
 plan (§5, `feature_prices_json`); the other two are included by whichever plan grants
 them. `whatsapp_cloud` is a **per-company** add-on (one business WhatsApp sender),
-alongside `multi_store` and `ecommerce_bridges`. Its entry bundle is **R50 for 250
+alongside `multi_store`, `ecommerce_bridges` and `ai_assistant`. `ai_assistant`
+joined that set on 2026-10-24: it is the Head Office executive copilot, sold once
+for the company and only with `multi_store`; store licences do not carry it. Its
+entry bundle is **R50 for 250
 messages**; **R100/500**, **R150/750** and **R200/1000** are chosen in the new-client form, the
 client subscription editor or a quote, and the chosen price is stored on the
 subscription. Existing plans were backfilled with R50 once (`user_version` guards
@@ -514,12 +517,13 @@ the API).
 
 ### The add-on model (2026-10-10)
 
-The pricing page sells a per-till rate plus six monthly add-ons, so entitlement and
+The pricing page sells a per-store rate plus seven monthly add-ons, so entitlement and
 **price** are now separate facts:
 
-- **`services/features.ts` owns the vocabulary** — eight keys, and the contract both
+- **`services/features.ts` owns the vocabulary** — nine keys, and the contract both
   applications read: `customer_credit`, `layby`, `advanced_reports`, `multi_store`,
-  `stock_transfers`, `ecommerce_bridges`, `ai_assistant`, `invoice_import`.
+  `stock_transfers`, `ecommerce_bridges`, `ai_assistant`, `invoice_import`,
+  `whatsapp_cloud`.
   `layby` and `invoice_import` were split out on 2026-10-10: lay-bys were implied by
   `customer_credit`, and the importer had **no gate at all** on the store.
 - **A plan includes some features and prices others.** A feature the plan lists in
@@ -532,6 +536,12 @@ The pricing page sells a per-till rate plus six monthly add-ons, so entitlement 
   editing the plan afterwards re-prices nobody.
 - **The licence carries the union** (`effectiveFeatures`): plan-included features plus
   what the client bought. That list is the only thing the applications gate on.
+- **AI Copilot is panel-only (2026-10-24).** The union is company-wide, but
+  `licenceFeaturesFor` removes `ai_assistant` from every **store** licence; the Head
+  Office licence keeps it. The copilot asks across branches and is sold with Head
+  Office, so a branch register is never entitled to it. `addonQuantity` charges it
+  once per company, and `validateFeatureDependencies` refuses it without
+  `multi_store` on plans, quotes, onboarding and the subscription editor.
 - **The invoice itemises it**: one line per add-on (label, price), snapshotted onto
   the invoice as `addons_json`; the recurring total is terminals × rate + the add-ons.
   Add-ons are not pro-rated mid-period (see `tidbits.md`).
@@ -1182,7 +1192,7 @@ existing client pays — related words, different things; keep them apart.
   figures (`requested_*`) beside the catalogue's (`priced_*`); a disagreement — or
   an unreadable figure — sets `drift`, and the desk's email names both. Refused by
   name: an unknown add-on, a missing setup choice, Head Office below two stores,
-  and **fewer tills than stores** — tills are the total across the stores, and the
+  **AI Copilot without Head Office**, and **fewer tills than stores** — tills are the total across the stores, and the
   office's forms ask the product's own two numbers (stores × tills per store) so
   the multiplication is never left to the typist (the desk once recorded 3 stores /
   1 till; the owner caught it in testing), and the priced line spells the split out

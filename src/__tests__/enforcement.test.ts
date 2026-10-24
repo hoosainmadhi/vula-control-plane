@@ -6,6 +6,8 @@ import {
   PER_COMPANY_FEATURE_KEYS,
   PRICED_FEATURE_KEYS,
 } from '../services/features.js';
+import { licenceFeaturesFor } from '../services/licenceDelivery.js';
+import { UNASSIGNED } from '../services/subscriptions.js';
 import { jsonResponse, loginAsOffice, authHeader } from './helpers.js';
 
 /**
@@ -140,6 +142,38 @@ describe('feature vocabulary', () => {
       cents: 5000,
       perStore: false,
     });
+  });
+
+  it('sells AI Copilot once per company, only with Head Office (2026-10-24)', async () => {
+    expect(PER_COMPANY_FEATURE_KEYS).toContain('ai_assistant');
+    const pricing = await request(app).get('/api/public/pricing').expect(200);
+    expect(pricing.body.pricing.addons.ai_assistant).toMatchObject({
+      label: 'AI Copilot',
+      cents: 9900,
+      perStore: false,
+    });
+
+    // The subscription editor sends the full set; AI without Head Office is not
+    // a state the CP will write, whichever surface asked.
+    const company = await makeCompany();
+    const refused = await request(app)
+      .put(`/api/clients/${company.id}`)
+      .set(auth())
+      .send({ features: ['ai_assistant'] });
+    expect(refused.status).toBe(400);
+    expect(String(refused.body.error)).toMatch(/AI Copilot needs Head Office/i);
+
+    const accepted = await request(app)
+      .put(`/api/clients/${company.id}`)
+      .set(auth())
+      .send({ features: ['multi_store', 'ai_assistant'] })
+      .expect(200);
+    expect(accepted.body.id).toBe(company.id);
+    const detail = await request(app).get(`/api/clients/${company.id}`).set(auth()).expect(200);
+    const addons = (
+      detail.body.subscription as { addons: Array<{ key: string; quantity: number }> }
+    ).addons;
+    expect(addons.find((addon) => addon.key === 'ai_assistant')).toMatchObject({ quantity: 1 });
   });
 
   it('refuses a plan granting an unknown feature key, naming it', async () => {
@@ -323,37 +357,81 @@ describe('suspended companies get no new capacity', () => {
 });
 
 describe('a suspended licence drops the metered add-ons', () => {
-  /**
-   * The claims of the last licence pushed to a deployment. The licence token is
-   * `payload.signature`, so the feature list is readable without the signing key.
-   */
-  const lastLicenceFeatures = (): string[] => {
-    const calls = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/api/internal/licence'));
-    const init = calls.at(-1)?.[1] as { body?: string } | undefined;
-    const token = (JSON.parse(init?.body ?? '{}') as { token?: string }).token ?? '';
-    return JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf-8')).features;
+  /** The feature claims of every licence pushed, with the deployment it went to. */
+  const licenceFeatureSets = (): Array<{ url: string; features: string[] }> =>
+    fetchMock.mock.calls
+      .filter(([u]) => String(u).endsWith('/api/internal/licence'))
+      .map(([u, init]) => {
+        const token =
+          (JSON.parse((init as { body?: string } | undefined)?.body ?? '{}') as { token?: string })
+            .token ?? '';
+        return {
+          url: String(u),
+          features: JSON.parse(Buffer.from(token.split('.')[0], 'base64url').toString('utf-8'))
+            .features as string[],
+        };
+      });
+
+  const lastFeaturesFor = (needle: string): string[] => {
+    const match = licenceFeatureSets()
+      .filter((entry) => entry.url.includes(needle))
+      .at(-1);
+    if (!match) throw new Error(`No licence was pushed to ${needle}`);
+    return match.features;
   };
 
   const buyAddons = async (companyId: number, features: string[]): Promise<void> => {
     await request(app).put(`/api/clients/${companyId}`).set(auth()).send({ features }).expect(200);
   };
 
-  it('carries the bought add-ons while the account is in good standing', async () => {
+  const makePanelFor = async (companyId: number, slug: string): Promise<void> => {
+    await request(app)
+      .post('/api/panels')
+      .set(auth())
+      .send({
+        companyId,
+        name: 'Urban Threads Head Office',
+        slug,
+        baseUrl: 'http://localhost:3260',
+      })
+      .expect(201);
+  };
+
+  it('carries the bought add-ons, but never AI Copilot to a store', async () => {
     const company = await makeCompany({ paidThrough: daysFromToday(30) });
     await makeStore({ slug: 'addons-good', companyId: company.id }).expect(201);
-    await buyAddons(company.id, ['ai_assistant', 'invoice_import', 'customer_credit']);
-    expect(lastLicenceFeatures()).toEqual(
-      expect.arrayContaining(['ai_assistant', 'invoice_import', 'customer_credit']),
+    await makePanelFor(company.id, 'addons-good-ho');
+    await buyAddons(company.id, [
+      'multi_store',
+      'ai_assistant',
+      'invoice_import',
+      'customer_credit',
+    ]);
+
+    // AI Copilot is the Head Office copilot (owner, 2026-10-24): the store
+    // licences do not carry it, even though the company bought it.
+    expect(lastFeaturesFor('3299')).toEqual(
+      expect.arrayContaining(['multi_store', 'invoice_import', 'customer_credit']),
+    );
+    expect(lastFeaturesFor('3299')).not.toContain('ai_assistant');
+    expect(lastFeaturesFor('3260')).toEqual(
+      expect.arrayContaining(['multi_store', 'ai_assistant', 'invoice_import', 'customer_credit']),
     );
   });
 
   it('omits AI Copilot and Upload invoice while suspended, keeping the operational add-ons', async () => {
-    // The register refuses those two on a suspended licence too (the tenant gate).
+    // The panel refuses those two on a suspended licence too (the tenant gate).
     // This is the vendor half of the same rule: the signed claim matches the
     // intent even if a gate were bypassed, and settling puts them back.
     const company = await makeCompany({ paidThrough: daysFromToday(30) });
     await makeStore({ slug: 'addons-suspended', companyId: company.id }).expect(201);
-    await buyAddons(company.id, ['ai_assistant', 'invoice_import', 'customer_credit']);
+    await makePanelFor(company.id, 'addons-suspended-ho');
+    await buyAddons(company.id, [
+      'multi_store',
+      'ai_assistant',
+      'invoice_import',
+      'customer_credit',
+    ]);
 
     await request(app)
       .put(`/api/companies/${company.id}`)
@@ -361,11 +439,31 @@ describe('a suspended licence drops the metered add-ons', () => {
       .send({ status: 'suspended' })
       .expect(200);
 
-    const suspended = lastLicenceFeatures();
+    const suspended = lastFeaturesFor('3260');
     expect(suspended).not.toContain('ai_assistant');
     expect(suspended).not.toContain('invoice_import');
     // Suspension stops new sales, not a merchant's access to what it already owns.
     expect(suspended).toContain('customer_credit');
+    expect(suspended).toContain('multi_store');
+    // The store never carried AI Copilot in the first place.
+    expect(lastFeaturesFor('3299')).not.toContain('ai_assistant');
+  });
+
+  it('keeps AI Copilot on the Head Office claim only, by role', () => {
+    const ent = {
+      ...UNASSIGNED,
+      features: ['multi_store', 'ai_assistant', 'invoice_import'],
+      billingState: 'active' as const,
+    };
+    expect(licenceFeaturesFor(ent, 'store')).toEqual(['multi_store', 'invoice_import']);
+    expect(licenceFeaturesFor(ent, 'panel')).toEqual([
+      'multi_store',
+      'ai_assistant',
+      'invoice_import',
+    ]);
+    expect(licenceFeaturesFor({ ...ent, billingState: 'suspended' }, 'panel')).toEqual([
+      'multi_store',
+    ]);
   });
 });
 

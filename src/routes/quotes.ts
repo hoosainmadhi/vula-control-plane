@@ -27,7 +27,7 @@ import { HttpError } from '../utils/errors.js';
 import { ValidationError, optionalString, requireInt, requireSlug } from '../utils/validate.js';
 import { defaultMailRecipient, getRawOfficeSettings } from '../services/officeSettings.js';
 import { buildQuotePdf, quotePdfFilename } from '../services/quotePdf.js';
-import { DEFAULT_FEATURE_PRICES } from '../services/features.js';
+import { DEFAULT_FEATURE_PRICES, validateFeatureDependencies } from '../services/features.js';
 import {
   LIST_STORE_RATE_CENTS,
   LIST_TILL_RATE_CENTS,
@@ -771,6 +771,9 @@ quotesRouter.post(
     }
 
     const addons = JSON.parse(quote.addons_json) as string[];
+    // A quote written before AI Copilot became Head Office-only can still be
+    // accepted; it must not become a client that holds AI without the panel.
+    validateFeatureDependencies(addons);
     const hasHeadOffice = addons.includes('multi_store');
     const stores = storesFromQuote(quote, name, slug, split);
     const headOffice = hasHeadOffice

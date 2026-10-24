@@ -51,14 +51,16 @@ export const perStoreLabel = (
 
 /**
  * The add-ons charged once per COMPANY rather than once per trading store (owner,
- * 2026-10-14): Head Office (one panel for the business), the e-commerce bridges
- * (one storefront for the business) and WhatsApp messaging (one business sender).
- * Mirrors `PER_COMPANY_FEATURE_KEYS` in the server's `services/features.ts` — the
- * two builds cannot share a module, so the rule is stated in both and the server's
- * copy is the authority the invoice uses.
+ * 2026-10-14; AI Copilot joined 2026-10-24): Head Office (one panel for the
+ * business), AI Copilot (one executive copilot, Head Office only), the e-commerce
+ * bridges (one storefront for the business) and WhatsApp messaging (one business
+ * sender). Mirrors `PER_COMPANY_FEATURE_KEYS` in the server's
+ * `services/features.ts` — the two builds cannot share a module, so the rule is
+ * stated in both and the server's copy is the authority the invoice uses.
  */
 export const PER_COMPANY_ADDONS: readonly string[] = [
   'multi_store',
+  'ai_assistant',
   'ecommerce_bridges',
   'whatsapp_cloud',
 ];

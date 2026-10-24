@@ -54,6 +54,7 @@ import {
 } from '../services/subscriptions.js';
 import {
   PRICED_FEATURE_KEYS,
+  validateFeatureDependencies,
   validateFeatureKeys,
   whatsAppBundleCents,
 } from '../services/features.js';
@@ -641,6 +642,10 @@ clientsRouter.put(
           `${planForRequest?.name ?? 'This plan'} does not price ${notPriced.join(', ')} — set the add-on's price on the plan first.`,
         );
       }
+      // AI Copilot is the Head Office copilot (owner, 2026-10-24): it cannot be
+      // held on its own. The editor sends the full set, so this checks the state
+      // that would be written, not just the delta.
+      validateFeatureDependencies(requestedFeatures);
     }
 
     const entitlementChanged =
@@ -899,6 +904,13 @@ clientsRouter.post(
           `${planAtCreation?.name ?? 'That plan'} does not sell ${notSold.join(', ')} — price ${notSold.length === 1 ? 'it' : 'them'} on the plan first.`,
         );
       }
+      // AI Copilot is the Head Office copilot (owner, 2026-10-24): the wizard may
+      // not onboard a client with AI and no Head Office. A multi-store topology
+      // buys Head Office itself just below, so it satisfies the dependency even
+      // when the operator did not tick it explicitly.
+      validateFeatureDependencies(
+        deploymentType === 'multi_store' ? [...requestedAddons, 'multi_store'] : requestedAddons,
+      );
     }
 
     // Head Office is a multi-store capability: there is one panel for the

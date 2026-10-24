@@ -3597,3 +3597,27 @@ vocabulary and pricing had the add-on; three surfaces did not expose it:
 
 Tests: frontend **33/33** (new: the bundle price → allowance mapping); backend **473/473**,
 typecheck and build clean.
+
+## AI Copilot becomes Head Office-only (2026-10-24)
+
+Owner: "Ai Copilot : ho only and not per store." The CP now states the same model as
+the marketing page:
+
+- **Billing.** `ai_assistant` joined `PER_COMPANY_FEATURE_KEYS`: one charge for the
+  company, however many branches it runs.
+- **Eligibility.** `validateFeatureDependencies` refuses AI Copilot without Head
+  Office in plan prices, public quotes, quote → client conversion, both onboarding
+  paths and the subscription editor. On a multi-store onboarding the topology buys
+  Head Office itself, so the dependency is satisfied even when the operator did not
+  tick it.
+- **Licences.** `licenceFeaturesFor(ent, 'store')` removes `ai_assistant`; the
+  panel licence keeps it. A branch register is never entitled to the copilot.
+- **Public list.** `GET /api/public/pricing` now reports `perStore: false` for AI
+  Copilot, so the marketing page can use the shared hydration rule.
+- **Surfaces.** `PER_COMPANY_ADDONS` includes the key (the invoice preview and
+  editor price it once), and the New Client wizard blocks it on a single-store
+  deployment with "needs Head Office".
+
+Tests: backend **552/552** across 42 suites (new: the per-company price, the
+dependency refusals at plan/quote/onboarding/subscription, and the store-vs-panel
+licence claims); frontend **33/33**; `npm run typecheck` and `npm run build` clean.

@@ -1,4 +1,9 @@
-import { DEFAULT_FEATURE_PRICES, FEATURE_LABELS, PRICED_FEATURE_KEYS } from './features.js';
+import {
+  DEFAULT_FEATURE_PRICES,
+  FEATURE_LABELS,
+  PRICED_FEATURE_KEYS,
+  validateFeatureDependencies,
+} from './features.js';
 import { addonQuantity } from './pricing.js';
 import { getRawOfficeSettings } from './officeSettings.js';
 import { ValidationError } from '../utils/validate.js';
@@ -118,6 +123,9 @@ export const validateQuoteConfig = (config: QuoteConfig): void => {
   if (unknown.length > 0) {
     throw new ValidationError(`Unknown add-on in the quote: ${unknown.join(', ')}`);
   }
+  // AI Copilot is the Head Office copilot (owner, 2026-10-24): a quote cannot
+  // sell it to a single store or without the panel.
+  validateFeatureDependencies(config.addons);
   // The page switches Head Office off at one store (it has no branches to
   // oversee); a post that asks for it anyway is refused by name rather than
   // priced, so the record never quotes a capability the product cannot deliver.

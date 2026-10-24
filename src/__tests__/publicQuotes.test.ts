@@ -46,6 +46,9 @@ describe('GET /api/public/pricing', () => {
     expect(addons['layby']).toMatchObject({ cents: 4_900, perStore: true });
     // E-commerce is one storefront for the business, like Head Office (2026-10-14).
     expect(addons['ecommerce_bridges']).toMatchObject({ cents: 4_900, perStore: false });
+    // AI Copilot is one executive copilot for the business, Head Office only
+    // (2026-10-24).
+    expect(addons['ai_assistant']).toMatchObject({ cents: 9_900, perStore: false });
   });
 
   it('serves the office’s own figures, not constants', async () => {
@@ -167,6 +170,15 @@ describe('POST /api/public/quote-request', () => {
       .send({ ...validQuote(), website: 'http://cheap-pills.example' });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses AI Copilot without Head Office (2026-10-24)', async () => {
+    const res = await request(app)
+      .post('/api/public/quote-request')
+      .send(validQuote({ addons: ['ai_assistant'] }));
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toMatch(/AI Copilot needs Head Office/i);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

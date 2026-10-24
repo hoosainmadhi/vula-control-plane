@@ -634,7 +634,7 @@ describe('L3 Billing & Invoicing', () => {
     await request(app)
       .put(`/api/clients/${company.id}`)
       .set(auth())
-      .send({ features: ['ai_assistant', 'invoice_import'] })
+      .send({ features: ['multi_store', 'ai_assistant', 'invoice_import'] })
       .expect(200);
 
     const created = await request(app)
@@ -649,6 +649,7 @@ describe('L3 Billing & Invoicing', () => {
     const items = invoiceLineItems(getInvoiceById(created.body.id)!);
     const addonLines = items.filter((item) => item.included);
     expect(addonLines.map((item) => item.label)).toEqual([
+      'Head Office',
       'AI Copilot',
       'Upload invoice (AI assisted)',
     ]);
@@ -664,7 +665,7 @@ describe('L3 Billing & Invoicing', () => {
     await request(app)
       .put(`/api/clients/${company.id}`)
       .set(auth())
-      .send({ features: ['ai_assistant', 'customer_credit'] })
+      .send({ features: ['multi_store', 'ai_assistant', 'customer_credit'] })
       .expect(200);
 
     const created = await request(app)
@@ -672,8 +673,11 @@ describe('L3 Billing & Invoicing', () => {
       .set(auth())
       .send({ companyId: company.id, purpose: 'renewal', includeOnboarding: false })
       .expect(201);
-    // 8 licensed terminals × the agreed rate + R99 (AI Copilot) + R49 (credit).
-    expect(created.body.amountCents).toBe(8 * company.subscription.rateCents + 9_900 + 4_900);
+    // 8 licensed terminals × the agreed rate + R199 (Head Office, one panel)
+    // + R99 (AI Copilot, one copilot) + R49 (credit).
+    expect(created.body.amountCents).toBe(
+      8 * company.subscription.rateCents + 19_900 + 9_900 + 4_900,
+    );
 
     const { getInvoiceById } = await import('../config/registryDb.js');
     const { invoiceLineItems } = await import('../services/billing.js');
@@ -684,6 +688,7 @@ describe('L3 Billing & Invoicing', () => {
     expect(items.map((item) => item.label)).toEqual([
       'Additional tills',
       'Credit accounts',
+      'Head Office',
       'AI Copilot',
     ]);
     expect(items.reduce((sum, i) => sum + i.amountCents, 0)).toBe(created.body.amountCents);

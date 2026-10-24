@@ -248,9 +248,7 @@ export default function ClientsPage() {
     setHoName('');
     setHoUrl('');
     setHoAdminEmail('');
-    setMultiStores([
-      { name: '', slug: '', deploymentName: '', baseUrl: '', terminalCount: 2 },
-    ]);
+    setMultiStores([{ name: '', slug: '', deploymentName: '', baseUrl: '', terminalCount: 2 }]);
     setSetupFeeCents(null);
     setWhatsappBundle(whatsAppMessagesForCents(selectedPlan?.featurePrices?.whatsapp_cloud));
   };
@@ -312,7 +310,12 @@ export default function ClientsPage() {
           ? chosenWhatsApp.cents
           : (selectedPlan?.featurePrices?.[f.key] ?? 0),
       forced: f.key === 'multi_store' && deploymentType === 'multi_store',
-      blocked: f.key === 'multi_store' && deploymentType === 'single_store',
+      blocked:
+        (f.key === 'multi_store' && deploymentType === 'single_store') ||
+        // AI Copilot is the Head Office copilot (2026-10-24): no panel, no
+        // copilot. Head Office is forced on a multi-store deployment, so this
+        // only blocks the single-store case.
+        (f.key === 'ai_assistant' && !previewSelected.includes('multi_store')),
     }));
 
   const toggleAddon = (key: string): void =>
@@ -759,8 +762,8 @@ export default function ClientsPage() {
                     </label>
                     <p className="mt-0.5 text-[11px] text-slate-400">
                       What this client buys on top of the plan. A capability add-on is charged per
-                      trading store; Head Office, E-commerce and WhatsApp are one charge for the
-                      business. Unticked can be added later from the client's subscription.
+                      trading store; Head Office, AI Copilot, E-commerce and WhatsApp are one charge
+                      for the business. Unticked can be added later from the client's subscription.
                     </p>
                     <div className="mt-2 grid gap-2 sm:grid-cols-2">
                       {addonOptions.map((option) => (
@@ -785,7 +788,9 @@ export default function ClientsPage() {
                             {option.forced
                               ? ' · with Head Office'
                               : option.blocked
-                                ? ' · needs multi-store'
+                                ? option.key === 'ai_assistant'
+                                  ? ' · needs Head Office'
+                                  : ' · needs multi-store'
                                 : ''}
                           </span>
                         </label>

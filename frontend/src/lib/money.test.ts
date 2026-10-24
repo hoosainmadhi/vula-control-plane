@@ -95,7 +95,9 @@ describe('addonLinesFor', () => {
       { key: 'multi_store', cents: 19_900, label: 'Head Office' },
     ];
     expect(addonLinesFor(withHeadOffice, ['ai_assistant', 'multi_store'], {}, 3)).toEqual([
-      { key: 'ai_assistant', label: 'AI Copilot', cents: 29_700, unitCents: 9900, quantity: 3 },
+      // AI Copilot is one executive copilot for the business (2026-10-24), like
+      // Head Office; only the store capability multiplies.
+      { key: 'ai_assistant', label: 'AI Copilot', cents: 9900, unitCents: 9900, quantity: 1 },
       { key: 'multi_store', label: 'Head Office', cents: 19_900, unitCents: 19_900, quantity: 1 },
     ]);
   });

@@ -1909,3 +1909,21 @@ directory. The two live stores and the panel were set to `super-stores-jhb`,
 page now carries a WhatsApp messaging card and quote toggle at R50/month for 250 messages (per
 company), and the public pricing endpoint already serves `whatsapp_cloud` at 5000. The AI env
 pass-through is still the outstanding item — no deployment has `AI_*` yet.
+
+## 2026-10-24 — AI Copilot is Head Office-only and one charge per company
+
+Owner: "Ai Copilot : ho only and not per store." The CP follows the marketing
+site rather than flagging a contradiction: `ai_assistant` joined
+`PER_COMPANY_FEATURE_KEYS` (quantity 1 whatever the branch count),
+`validateFeatureDependencies` refuses it without `multi_store` in plan prices,
+quotes, onboarding and the subscription editor, and `licenceFeaturesFor(ent,
+'store')` removes it from store licences so only the Head Office panel carries
+it. The public pricing endpoint now reports `perStore: false`.
+
+This reverses the 2026-10-12 finding that "AI Copilot is NOT multi-store-only",
+which was true of the code then: the store assistant and the panel copilot shared
+one key. The owner's decision retires the store-level sale. The tenant route still
+exists and would work if a legacy licence carried the key, but the CP no longer
+signs one for a store. Existing subscriptions whose AI sits beside `multi_store`
+keep working at Head Office; a legacy AI-only subscription is refused on its next
+edit until Head Office is added.

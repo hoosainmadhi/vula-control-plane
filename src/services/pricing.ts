@@ -64,11 +64,10 @@ const wholeCount = (n: number): number => (Number.isInteger(n) && n > 0 ? n : 0)
 /**
  * How many times a paid add-on is charged: once per TRADING STORE (owner,
  * 2026-10-14: "the addons must be charge per store, no? so if three stores -
- * laybuy must be charged per store") — except the two per-COMPANY ones
- * (`PER_COMPANY_FEATURE_KEYS`): Head Office, because there is one panel for the
- * company, and the e-commerce bridges, because the online shop is the business's
- * and a second branch does not open a second storefront (owner, same day:
- * "ecommerce should be for the whole business and not per store").
+ * laybuy must be charged per store") — except the per-COMPANY ones
+ * (`PER_COMPANY_FEATURE_KEYS`): Head Office (one panel), AI Copilot (one
+ * executive copilot, Head Office only), the e-commerce bridges (one storefront)
+ * and WhatsApp messaging (one business sender).
  *
  * A client that has bought an add-on always pays at least one store's worth, even
  * before its first store is provisioned — an add-on never becomes free by having

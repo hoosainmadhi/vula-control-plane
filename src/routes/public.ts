@@ -108,9 +108,10 @@ publicRouter.get(
         additionalTillCents: LIST_TILL_RATE_CENTS,
         /**
          * The paid add-ons, priced as the list holds them. `perStore: false` marks
-         * the per-company add-ons — Head Office (one panel) and the e-commerce
-         * bridges (one storefront for the business); the rest are charged once per
-         * store.
+         * the per-company add-ons — Head Office (one panel), AI Copilot (one
+         * executive copilot, Head Office only), the e-commerce bridges (one
+         * storefront) and WhatsApp messaging (one business sender); the rest are
+         * charged once per store.
          */
         addons: Object.fromEntries(
           // An add-on with no list price yet is not advertised as free. It
