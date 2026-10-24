@@ -1,11 +1,14 @@
 # Marketing Demo Image Migration — 2026-10-23
 
 **Status:** complete on the permanent staging Control Plane
-(`staging-cp.vula-app.co.za`). All eight marketing demo Stores and the Urban
+(`staging-cp.vula-app.co.za`). All nine marketing demo Stores and the Urban
 Threads Head Office now run the shared ARM64 GHCR images instead of per-tenant
 Dockerfile builds. The public URLs, marketing links, demo logins, client
-relationships and subscription configuration are unchanged. Old applications
-and volumes are stopped and retained for rollback; they have not been deleted.
+relationships and subscription configuration are unchanged.
+
+The old Dockerfile applications and their volumes were deleted on 2026-10-24,
+after every replacement was verified. The golden demo databases used by the
+nightly reset remain in `/backups/vula-app/demo-golden/`.
 
 ## Result
 
@@ -16,10 +19,16 @@ and volumes are stopped and retained for rollback; they have not been deleted.
 | Demo Restaurant           | Store       | `https://demo-restaurant.vula-app.co.za`        | `rwhuwrddzuhvzx1x9fmhb9gw` | Store A | 200, 31 products              | Passed |
 | Demo Hardware             | Store       | `https://demo-hardware.vula-app.co.za`          | `immflsogrir2ejloidm41yiy` | Store A | 200, 30 products              | Passed |
 | Demo Pharmacy             | Store       | `https://demo-pharmacy.vula-app.co.za`          | `hqgzqt1x9pqwbl2oqhgcffli` | Store A | 200, 27 products              | Passed |
+| Demo Stationery           | Store       | `https://demo-stationery.vula-app.co.za`        | `gihprbh91svfabckxl2ntpmj` | Store A | 200, 36 products              | Passed |
 | Urban Threads Jhb         | Store       | `https://demo-urban-threads-jhb.vula-app.co.za` | `r7duyq1hlo2otxgpfwv8oig2` | Store A | 200, 30 products              | Passed |
 | Urban Threads Cpt         | Store       | `https://demo-urban-threads-cpt.vula-app.co.za` | `hki4r7n2qyatjxvfjjdurmh0` | Store A | 200, 30 products              | Passed |
 | Urban Threads Dbn         | Store       | `https://demo-urban-threads-dbn.vula-app.co.za` | `0z6pp7i1isxi6zidocd7yaeq` | Store A | 200, 30 products              | Passed |
 | Urban Threads Head Office | Head Office | `https://demo-urban-threads-ho.vula-app.co.za`  | `xjeobzicewspkecs6yijilkj` | HO A    | 200, dashboard + 5 categories | Passed |
+
+`demo-stationery` was not previously in the staging registry. It was added as a
+CP-managed demo first: company `Demo Stationery` (id 10, plan 9, paid through
+2099-12-31, 2 licensed terminals) and store `Papervale Stationers`
+(`demo-stationery`, id 18). Its public URL, login and golden data are unchanged.
 
 Image releases used:
 
@@ -28,7 +37,7 @@ Image releases used:
 - Head Office A: `v2026.10.21-5781c2c`,
   `sha256:d50f979c3c7a9f1dfdd51928cecf9f29ca6fd01f7dbfb594905b5c34ecb6a9d6`
 
-All nine report `deployMode: image`, `deployStatus: deployed`,
+All ten report `deployMode: image`, `deployStatus: deployed`,
 `runtimeHealth: up`, `imageTag: v2026.10.21-5781c2c`.
 
 ## How the blue/green migration was done
@@ -64,32 +73,28 @@ All nine report `deployMode: image`, `deployStatus: deployed`,
 - stores: `/data/apps/vula-app-image/clients/<client>/stores/<slug>/za-pos.db`
 - Head Office: `/data/apps/vula-app-image/clients/urban-threads-demo/head-office/head-office.db`
 
-The script was run immediately after the migration for every demo; all nine
-reset successfully and re-verified login and sample data. `demo-stationery` was
-not part of this CP registry or migration and continues to reset on its
-existing path.
+The script was run immediately after the migration for every demo; all ten
+reset successfully and re-verified login and sample data, including
+`demo-stationery`.
 
 ## Rollback
 
-The old applications are stopped, with their public domains removed and their
-volumes intact. To roll one back:
+The old Dockerfile applications, their volumes and their old host directories
+were deleted on 2026-10-24 after all ten replacements passed. They are no longer
+available as a rollback target.
 
-1. Stop the new app and remove its public domain.
-2. Restore the old app's public domain and start the old app.
-3. Restore that tenant's registry row from the pre-migration backup or set its
-   old `coolify_uuid`, `volume_name`, `deploy_mode='dockerfile'`, cleared image
-   fields and public `base_url`.
+If a replacement demo has to be rolled back now:
 
-The old app UUIDs are:
+1. Use the pre-migration registry backup
+   `vula-cp-staging-pre-demo-migration-20261023.db` for the old registry rows.
+2. Re-seed the demo from its golden database in
+   `/backups/vula-app/demo-golden/`.
+3. If a release is faulty, publish or register a corrected image release and
+   apply it through the Control Plane; do not expect a Dockerfile app to exist.
 
-- `demo-general` `cfpit8t3c3qpx0ldnf8qdzik`
-- `demo-spares` `tyzt97d9cwn467kgog5g9tep`
-- `demo-restaurant` `3ryq7svgewjdm9trxtk3d9jq`
-- `demo-hardware` `lqu4n6fxk0he5b6royou8j5x`
-- `demo-pharmacy` `aux8ftmmtzooxmavwk2a0mjj`
-- `demo-urban-threads-jhb` `q20lwe1nrfxljrjfxn07fnq5`
-- `demo-urban-threads-cpt` `ojcdtrzyhwripfxcwmarffqd`
-- `demo-urban-threads-dbn` `jeqhdcsmaiecvd0r72ecnxet`
-- `demo-ho` `cpnsg0e0lw3ggr07os8bknzg`
-
-Do not delete the old apps or volumes until the owner approves cleanup.
+Historical old app UUIDs (deleted): `cfpit8t3c3qpx0ldnf8qdzik`,
+`tyzt97d9cwn467kgog5g9tep`, `3ryq7svgewjdm9trxtk3d9jq`,
+`lqu4n6fxk0he5b6royou8j5x`, `aux8ftmmtzooxmavwk2a0mjj`,
+`fnz1en1dirrup5we6yfruar1`, `q20lwe1nrfxljrjfxn07fnq5`,
+`ojcdtrzyhwripfxcwmarffqd`, `jeqhdcsmaiecvd0r72ecnxet`,
+`cpnsg0e0lw3ggr07os8bknzg`.

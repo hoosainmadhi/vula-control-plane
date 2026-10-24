@@ -40,7 +40,7 @@ RI=/data/apps/vula-app-image
   reset demo-restaurant        rwhuwrddzuhvzx1x9fmhb9gw clients/demo-restaurant/stores/demo-restaurant/za-pos.db     demo-restaurant.db        "$RI"
   reset demo-hardware          immflsogrir2ejloidm41yiy clients/demo-hardware/stores/demo-hardware/za-pos.db         demo-hardware.db          "$RI"
   reset demo-pharmacy          hqgzqt1x9pqwbl2oqhgcffli clients/demo-pharmacy/stores/demo-pharmacy/za-pos.db         demo-pharmacy.db          "$RI"
-  reset demo-stationery        fnz1en1dirrup5we6yfruar1 clients/demo-stationery/stores/demo-stationery/za-pos.db     demo-stationery.db
+  reset demo-stationery        gihprbh91svfabckxl2ntpmj clients/demo-stationery/stores/demo-stationery/za-pos.db     demo-stationery.db        "$RI"
 
   echo "demo reset complete"
 } >> "$LOG" 2>&1

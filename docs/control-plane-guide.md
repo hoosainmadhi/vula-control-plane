@@ -258,8 +258,8 @@ unassigned (`company_id = NULL`) because the schema preserves quote documents.
 
 **Staging**
 
-- 11 stores, 2 Head Offices, 8 companies
-- 8 image demo stores + 2 Dockerfile rehearsal stores + 1 unprovisioned rehearsal store
+- 12 stores, 2 Head Offices, 9 companies
+- 9 image demo stores + 2 Dockerfile rehearsal stores + 1 unprovisioned rehearsal store
 - 1 image demo Head Office + 1 Dockerfile rehearsal Head Office
 - Catalog: store A stable, Head Office A stable, store B beta
 - `CP_ENVIRONMENT=staging`; `ALLOW_LEGACY_DOCKERFILE_ONBOARDING=true`
@@ -355,6 +355,10 @@ was verified after the consolidation.
 ### 7.1 Deploying CP code
 
 Branch strategy: `dev` → `staging` → `main`.
+
+Tenant application changes (a new POS feature or bug fix) do **not** use this
+path; see [`docs/tenant-app-release-workflow.md`](tenant-app-release-workflow.md)
+for the build-once image release and upgrade workflow.
 
 1. Validate locally: `npm test`, `npm run test:ui`, `npm run typecheck`,
    `npm run build`.

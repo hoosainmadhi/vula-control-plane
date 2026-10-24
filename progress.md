@@ -1,10 +1,11 @@
 # Progress
 
-## 2026-10-23 — all marketing demos migrated to shared image deployments
+## 2026-10-24 — all marketing demos on shared images; old Dockerfile apps deleted
 
-Completed on the permanent staging Control Plane only. Eight demo Stores and
-the Urban Threads Head Office now run the stable shared images; the old
-Dockerfile apps and volumes are stopped and retained for rollback.
+Completed on the permanent staging Control Plane only. Nine demo Stores
+(including Demo Stationery) and the Urban Threads Head Office now run the stable
+shared images. The old Dockerfile apps and volumes were deleted after every
+replacement was verified.
 
 - Pre-migration registry backup:
   `vula-cp-staging-pre-demo-migration-20261023.db`,
@@ -12,21 +13,29 @@ Dockerfile apps and volumes are stopped and retained for rollback.
   integrity ok.
 - Set `VULA_DATA_ROOT=/data/apps/vula-app-image` so every image app has a new
   host tree, separate from the old `/data/apps/vula-app`.
-- Pilot: Demo General Retail. Then the remaining seven Stores and the Head
-  Office. Each was provisioned through the CP release controller on a temporary
-  `-img` URL, bound to a new volume, seeded from its golden demo DB, verified,
-  then switched to its original public URL. The old app was stopped and its
-  domain removed before the new app received the public URL.
-- All nine report `deployMode=image`, `deployStatus=deployed`,
+- Pilot: Demo General Retail. Then the remaining seven Stores, the Head Office
+  and Demo Stationery. Each was provisioned through the CP release controller
+  on a temporary `-img` URL, bound to a new volume, seeded from its golden demo
+  DB, verified, then switched to its original public URL. The old app was
+  stopped and its domain removed before the new app received the public URL.
+- Demo Stationery was not previously in the CP registry. It was added as a
+  CP-managed demo first: company `Demo Stationery` (id 10, plan 9, paid through
+  2099-12-31, 2 licensed terminals) and store `Papervale Stationers`
+  (`demo-stationery`, id 18). Its configuration push, licence and health check
+  now succeed.
+- All ten report `deployMode=image`, `deployStatus=deployed`,
   `runtimeHealth=up`, `imageTag=v2026.10.21-5781c2c`; all public logins return
-  200 and sample data is present (27–31 products per Store; Head Office
+  200 and sample data is present (27–36 products per Store; Head Office
   dashboard and 5 categories).
 - Updated `scripts/vula-demo-reset.sh` for the new UUIDs and host tree and ran
-  it; all nine demos reset and re-verified. The 02:17 cron remains installed.
-- Old apps are stopped with `container_present=false` and no domain; all nine
-  old volumes remain present. No old app or volume was deleted.
-- Full mapping, verification table and rollback instructions:
+  it; all ten demos reset and re-verified. The 02:17 cron remains installed.
+- The ten old Dockerfile applications were deleted in Coolify, their old Docker
+  volumes removed, and their old host directories removed. The golden demo
+  databases in `/backups/vula-app/demo-golden/` remain.
+- Full mapping, verification table and rollback notes:
   [`docs/demo-image-migration.md`](docs/demo-image-migration.md).
+- Tenant app change workflow:
+  [`docs/tenant-app-release-workflow.md`](docs/tenant-app-release-workflow.md).
 - Production CP, Superstores, M4, OptiMed, proxy, DNS and firewall untouched.
 
 ## 2026-10-23 — Head Office shared image verified and registered
