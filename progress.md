@@ -1,5 +1,25 @@
 # Progress
 
+## 2026-10-24 — orphaned Superstores applications deleted
+
+The production CP client had already been removed, but three Coolify
+applications remained: `vula-super-stores-ho`, `za-pos-super-stores-jhb` and
+`za-pos-super-stores-sandton`. They were not present in any CP registry
+(staging, production or M4), so they were orphaned infrastructure rather than
+managed tenants. With owner approval they were deleted in Coolify:
+
+- apps `xm3hvsfmfrzlop9w0dqrnlom`, `rbzxtodkwrxshqws8d7zy4bs`,
+  `aeoxxtpyoowyhon2rvfggxky`;
+- their named volumes (`...-vula-ho-super-stores-ho-sqlite-db`,
+  `...-vula-store-super-stores-1-sqlite-db`,
+  `...-vula-store-super-stores-2-sqlite-db`) were removed with the apps;
+- no containers remain; the three public URLs return 503 because no backend is
+  configured, and the Coolify application IDs return 404.
+
+No CP registry row was changed. The production catalog still has the stable
+Store and Head Office image releases, so recreating a Superstores client through
+the CP will provision image-based apps rather than rebuilding Dockerfiles.
+
 ## 2026-10-24 — all marketing demos on shared images; old Dockerfile apps deleted
 
 Completed on the permanent staging Control Plane only. Nine demo Stores
