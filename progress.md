@@ -1,5 +1,37 @@
 # Progress
 
+## 2026-10-26 — push-to-release: native ARM64 CI and automatic staging rollout
+
+`git push origin dev` now builds once and updates all staging demos without a
+manual release step.
+
+- Replaced the QEMU double-build with a single native build job on
+  GitHub-hosted `ubuntu-24.04-arm`. The Store image built in **48 s**, Head
+  Office in **18 s**, and build → security checks → GHCR push → manifest →
+  GitHub Release took **87 s**.
+- The same verified images are used for the security checks and the publish;
+  there is no second build.
+- Added `POST /api/releases/ci`, authenticated by a scoped `RELEASE_CI_TOKEN`
+  (not an office login). It registers both releases from the CI manifest and
+  applies them to a bounded scope.
+- Added the automatic `staging-demos` call on `dev` pushes and the manual
+  **Promote to Production** workflow for `production-hm-stores`. Production
+  HM Stores remains on `v2026.10.21-5781c2c`; it was not auto-updated.
+- Populated `VULA_ALLOWED_APP_UUIDS` with the exact ten staging demo app UUIDs
+  and the three production HM Stores UUIDs. The first native release
+  (`v2026.10.26-9b068f4`) correctly failed the existing allowlist/identity
+  preflight; after aligning the three registry/app names and adding the
+  allowlist, the same release was applied through the CP endpoint.
+- A subsequent no-op commit `0c100f9` ran the complete pipeline automatically:
+  tests, native build, publish, manifest and staging rollout all succeeded.
+- Final staging release `v2026.10.26-0c100f9`: all nine Stores and the Head
+  Office are image-based, healthy, login and sample data verified, and the
+  02:17 reset passed. The full CI run took **6 m 45 s**, of which the staging
+  rollout was **3 m 23 s**.
+- `tenant-app-release-workflow.md` records the daily push-to-staging flow, the
+  manual production promotion, the two scopes, and the allowlist/identity
+  preflight.
+
 ## 2026-10-24 — release automation and multistore onboarding test
 
 - Added `scripts/release-tenant.mjs` (`npm run release:tenant`). It consumes the

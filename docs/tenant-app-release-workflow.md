@@ -1,182 +1,111 @@
 # Tenant App Change Workflow (za-pos)
 
-This is the workflow for changes to the **tenant application** (the Store POS and
-Head Office code in `za-pos`): new features, bug fixes, schema changes and
-releases. It is separate from Control Plane code changes.
+This is the workflow for Store POS and Head Office changes: features, bug fixes,
+schema changes and releases. Control Plane code changes are separate.
 
-## Short version
-
-1. Make and test the change in `za-pos`; commit it.
-2. Build the Store and/or Head Office image **once** for ARM64 and publish it
-   privately to GHCR. Record the manifest digest and revision.
-3. Register that digest as a release in the Control Plane.
-4. Apply it to a pilot demo, verify, then roll it out to the rest.
-5. Promote the same digest to production after staging acceptance.
-
-No store is rebuilt. Every tenant pulls the same image by digest.
-
-## 1. Change and test the tenant app
-
-- Work on a branch in `za-pos`, not directly on the deployed branch.
-- Run the tenant app gates before building:
-  ```bash
-  npm test
-  npm run test:ui
-  npm run typecheck
-  npm run build
-  ```
-- If the change includes a database schema update, update
-  `release-metadata.json` so the declared Store/Head Office schema and
-  compatibility range match the new code. The Control Plane refuses an upgrade
-  whose schema range does not include the tenant's current database.
-- If the change affects demo data structure, update the golden demo databases
-  used by the nightly reset; otherwise leave them alone.
-
-## 2. Build once and publish
-
-Build on an ARM64 machine (the Coolify host is ARM64). Do **not** build per
-store.
-
-- Store image: the root `Dockerfile` in `za-pos`.
-- Head Office image: `head-office/Dockerfile`.
-- Tag the image with the release version and short commit, for example
-  `v2026.10.24-<short-sha>`.
-- Pass `VERSION`, `GIT_SHA` and `BUILD_DATE` build arguments. The release
-  provenance check requires the image revision label and `GIT_SHA` to equal the
-  commit.
-- Run the image checks:
-  ```bash
-  scripts/check-image-secrets.sh <image>
-  scripts/check-image-security.sh <image>
-  ```
-- Push the image privately to GHCR and record the manifest digest
-  (`sha256:…`) and the full commit revision. The digest is the release identity;
-  never reuse or move it.
-- Publishing needs a GHCR token with write access to the package. A token with
-  only `write:packages` can be denied for a package linked to a private repo;
-  use a token with both `repo` and `write:packages` (or equivalent fine-grained
-  package-write permission).
-
-## 3. Register the release
-
-In the staging Control Plane open **Releases → Publish release**, or
-`POST /api/releases` with:
-
-```json
-{
-  "kind": "store",
-  "tag": "v2026.10.24-<short-sha>",
-  "digest": "sha256:<manifest-digest>",
-  "version": "v2026.10.24-<short-sha>",
-  "revision": "<full-commit-sha>",
-  "channel": "beta",
-  "schemaVersion": 1,
-  "schemaMin": 1,
-  "schemaMax": 1,
-  "notes": "What changed"
-}
-```
-
-Use `kind: "ho"` for a Head Office image and publish the matching release. The
-release is immutable. Use `beta` for staging-only first; promote the same digest
-to `stable` only after acceptance.
-
-## 4. Apply to staging
-
-1. **Releases → Upgrade** on one pilot demo (Demo General Retail is the
-   conventional pilot). Select the new release and confirm.
-2. Verify on the public URL:
-   - `/health` reports the exact new version and revision;
-   - the demo login works;
-   - sample data is present;
-   - the CP fleet shows `deployment: deployed`, runtime healthy.
-3. If it fails, use **Rollback** to return to the previous registered release.
-   Rollback targets are derived from verified history and schema-checked.
-4. Roll out the rest with **New rollout**: dry run first, then wave size 1 or
-   more, stop-on-failure enabled.
-5. Run the demo reset and verify the demos still restore their golden data.
-
-## 5. Promote to production
-
-- Register the same image digest and revision in the production CP catalog.
-- Apply it to one production tenant first, verify `/health`, login and data,
-  then use a wave with stop-on-failure.
-- Do not build a separate production image from a different commit. The same
-  reviewed digest goes to production.
-- Release manager permission is required; the office email must be in
-  `RELEASE_MANAGER_EMAILS`.
-
-## 5a. Automated release script
-
-The Control Plane repository now has `scripts/release-tenant.mjs` (also
-`npm run release:tenant`). It consumes the CI `release-manifest.json`, so the
-digests and schema ranges are not copied by hand.
+## Daily workflow
 
 ```bash
-# Staging: register releases, pilot, verify, dry-run, then wave the demos
-CP_URL=https://staging-cp.vula-app.co.za \
-CP_EMAIL=office@staging.vula-app.co.za \
-CP_PASSWORD=... \
-DEMO_EMAIL=admin@vula-app.co.za DEMO_PASSWORD=... \
-npm run release:tenant -- --manifest release-manifest.json --environment staging
+cd ~/apps/za-pos
+git switch dev
+# change + test
+npm test
+npm run test:ho
+npm run typecheck
+npm run build
+git commit -am "feat: ..."
+git push origin dev
 ```
 
-```bash
-# Production: the same manifest, with an explicit approval matching the tag
-CP_URL=https://vula-cp-mzsza-2026.vula-app.co.za \
-CP_EMAIL=hello@vula-app.co.za \
-CP_PASSWORD=... \
-npm run release:tenant -- --manifest release-manifest.json \
-  --environment production --approve <release-tag>
-```
+That is the routine action. The CI does the rest for staging:
 
-What it does:
+1. tests, Head Office tests, typecheck and builds;
+2. native ARM64 Store and Head Office images built **once** on
+   `ubuntu-24.04-arm` (no QEMU);
+3. secret and security checks on those exact images;
+4. immutable images pushed to GHCR with a generated tag
+   `vYYYY.MM.DD-<shortsha>`;
+5. the release manifest is attached to a GitHub Release;
+6. the Control Plane release endpoint registers the Store and Head Office
+   releases and rolls them out to the staging demos;
+7. stop-on-failure: a failed Store wave stops the rest and the previous release
+   remains available for rollback.
 
-- verifies the signed-in CP reports the expected `environment`;
-- registers the Store and Head Office releases from the manifest, idempotently;
-- applies both to the pilot tenants (`demo-general` and `demo-ho` by default);
-- verifies `/health` version/revision and, when `DEMO_EMAIL`/`DEMO_PASSWORD`
-  are set, the demo login and sample data;
-- runs a dry-run and a real wave over the marketing demos;
-- stops on a failed pilot or wave, leaving the previous release available for
-  rollback.
+The current staging demos and their Head Office end up on the same image digest,
+with the same public URLs and databases.
 
-The default rollout scope is demo tenants only (`demo-*`). Use `--slugs a,b`
-for an explicit list or `--all-image` to include every image tenant. Other
-options: `--wave-size`, `--no-dry-run`, `--skip-rollout`, `--channel`.
+## Production
 
-The script never builds or pushes an image; the CI workflow is the build-once
-step. For a Control Plane code change, use the separate CP branch/deploy flow.
+Production is **not** automatic. After staging is accepted:
 
-## 6. Control Plane changes are separate
+1. Open GitHub Actions → **Promote to Production**.
+2. Enter the staging release tag twice (tag + confirmation).
+3. The workflow downloads that exact manifest from the GitHub Release and calls
+   the production CP with scope `production-hm-stores`.
+4. It never rebuilds the images. The same digests are applied to HM Stores.
+5. Stop-on-failure and the previous release are preserved.
 
-Changes to the Control Plane itself (Clients, Quotes, Plans, Billing, Devices,
-Versions, Deployments, Errors, Settings, the release controller or its UI) do
-**not** need a tenant image. Use the normal branch flow:
+Until that manual workflow is run, production HM Stores remains on its current
+release.
 
-`dev` → `staging` → `main`, deploy the CP applications, then verify `/health`
-and the affected screens. No store or Head Office is rebuilt.
+## The two CP scopes
+
+| Scope                  | Tenants                                                                |
+| ---------------------- | ---------------------------------------------------------------------- |
+| `staging-demos`        | every image-based Store and Head Office whose slug starts `demo-`      |
+| `production-hm-stores` | every image-based Store and Head Office whose slug starts `hm-stores-` |
+
+The CI endpoint is authenticated by a scoped machine token
+(`RELEASE_CI_TOKEN` on the CP, matching `CP_STAGING_RELEASE_TOKEN` /
+`CP_PRODUCTION_RELEASE_TOKEN` in GitHub). It is not an office login and cannot
+touch clients, billing or settings.
+
+## Image allowlist
+
+The Control Plane only changes image applications whose exact Coolify UUID is
+listed in `VULA_ALLOWED_APP_UUIDS`:
+
+- staging currently lists the ten demo apps (nine Stores + Head Office);
+- production currently lists the three HM Stores apps.
+
+When a new image-based tenant is created, add its exact Coolify UUID to the
+appropriate CP environment before it can receive image upgrades. This is the
+one manual configuration step that remains; it is a safety boundary, not a
+per-release task.
+
+## Store identity preflight
+
+Before changing an image, the CP compares the app's `/api/internal/status`
+`storeName` with the registry name. Rename either side deliberately if a demo's
+registry name and its internal name diverge. Three demo registry names were
+aligned to their app names when this workflow was introduced:
+`Everyday Retail`, `Demo Diner`, and `Kloof Auto Spares Jhb`.
+
+## Schema changes
+
+If the database schema changes:
+
+- update `release-metadata.json` with the new schema version and compatibility
+  range;
+- the CP refuses an upgrade that cannot open the tenant's current schema;
+- update the golden demo databases if demo data shape changes;
+- test the release against a tenant before widening it.
+
+## Manual fallback
+
+`scripts/release-tenant.mjs` (`npm run release:tenant`) remains available for a
+manual or recovery release from a downloaded manifest. It registers releases,
+applies pilots, runs a dry run and wave, and verifies health. The normal path is
+the automatic dev push above.
 
 ## Current state
 
-- Marketing demos: ten tenants (nine Stores + Urban Threads Head Office) on
-  Store/HO Release A `v2026.10.21-5781c2c`, all image-based.
-- The old Dockerfile demo apps and volumes were deleted after migration.
-- Legacy rehearsal Stores and Head Office remain Dockerfile; they still use the
-  old path and are explicitly blocked from image changes until a blue/green
-  migration.
-- Release B is beta and staging-only. It is not in the production catalog.
-- The nightly demo reset is independent of release upgrades; it restores the
-  golden databases in `/backups/vula-app/demo-golden/`.
-
-## Rules that prevent surprises
-
-- Build once; never rebuild a store to apply a code change.
-- Never mutate a published digest or re-push a different image under the same
-  release tag.
-- Test the exact digest in staging before production.
-- Keep the previous release registered so rollback remains available.
-- For schema changes, migrate deliberately; the CP fails closed when the
-  release cannot open the tenant's current schema.
-- Control Plane code and tenant images are separate releases; do not couple
-  them unless the image contract actually changes.
+- Staging demos: on `v2026.10.26-0c100f9`; all nine Stores + Head Office healthy,
+  logins and sample data verified, nightly reset verified.
+- Production HM Stores: still on `v2026.10.21-5781c2c`; promotion is waiting for
+  explicit approval.
+- Legacy rehearsal Stores and Head Office remain Dockerfile and are blocked from
+  image changes until a blue/green migration.
+- The native ARM64 CI build takes about **66 seconds** for both images and about
+  **87 seconds** through publish and manifest; the staging rollout of ten tenants
+  takes about **3 minutes 23 seconds**.
