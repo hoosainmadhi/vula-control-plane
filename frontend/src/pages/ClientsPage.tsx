@@ -1160,6 +1160,21 @@ export default function ClientsPage() {
                           {multiStores.length} branches
                         </span>
                       </div>
+                      <div className="space-y-1 border-t border-slate-200 pt-2">
+                        {multiStores.map((store, index) => (
+                          <div
+                            key={`${store.slug}-${index}`}
+                            className="flex items-start justify-between gap-3"
+                          >
+                            <span className="text-slate-500 font-semibold">
+                              {store.name || `Store ${index + 1}`}
+                            </span>
+                            <span className="font-mono text-blue-700 font-bold text-right break-all">
+                              {store.baseUrl || 'URL not set'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     </>
                   ) : (
                     <div className="flex justify-between">
