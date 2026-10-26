@@ -1075,6 +1075,45 @@ describe('release API surface', () => {
     expect(state?.rollbackReason).toMatch(/No shared-image deployment/);
   });
 
+  it('accepts a scoped CI release and registers both image digests', async () => {
+    const app = createApp();
+    const previous = env.releaseCiToken;
+    env.releaseCiToken = 'ci-test-token';
+    const manifest = {
+      release: 'v2026.10.26-abc1234',
+      commit: 'a'.repeat(40),
+      images: { store: { digest: A }, ho: { digest: B } },
+      schema: {
+        store: { schemaVersion: 1, minSchemaVersion: 1, maxSchemaVersion: 1 },
+        ho: { schemaVersion: 1, minSchemaVersion: 1, maxSchemaVersion: 1 },
+      },
+    };
+    try {
+      const accepted = await request(app)
+        .post('/api/releases/ci')
+        .set('x-release-ci-token', 'ci-test-token')
+        .send({ manifest, scope: 'staging-demos' })
+        .expect(200);
+      expect(accepted.body.ok).toBe(true);
+      expect(accepted.body.releases.store).toBeGreaterThan(0);
+      expect(accepted.body.releases.ho).toBeGreaterThan(0);
+
+      await request(app)
+        .post('/api/releases/ci')
+        .set('x-release-ci-token', 'wrong-token')
+        .send({ manifest, scope: 'staging-demos' })
+        .expect(401);
+
+      await request(app)
+        .post('/api/releases/ci')
+        .set('x-release-ci-token', 'ci-test-token')
+        .send({ manifest, scope: 'everything' })
+        .expect(400);
+    } finally {
+      env.releaseCiToken = previous;
+    }
+  });
+
   it('exposes Dockerfile mode and refuses image actions for a legacy tenant', async () => {
     const app = createApp();
     const token = await loginAsOffice(app);

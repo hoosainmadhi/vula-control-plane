@@ -96,6 +96,8 @@ export interface Env {
   allowedAppUuids: string[];
   /** Office users allowed to publish/apply/rollback releases. */
   releaseManagerEmails: string[];
+  /** Scoped machine token for CI-driven staging/production releases. */
+  releaseCiToken: string | null;
   /** Explicit opt-in for the legacy Dockerfile path on non-production onboarding. */
   allowLegacyDockerfileOnboarding: boolean;
   /**
@@ -179,6 +181,7 @@ export const env: Env = {
     .split(',')
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean),
+  releaseCiToken: process.env.RELEASE_CI_TOKEN?.trim() || null,
   allowLegacyDockerfileOnboarding: process.env.ALLOW_LEGACY_DOCKERFILE_ONBOARDING === 'true',
   stagingMode: process.env.VULA_STAGING_MODE === 'true',
   stagingProjectUuid: process.env.VULA_STAGING_PROJECT_UUID?.trim() || null,

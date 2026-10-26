@@ -1,7 +1,9 @@
+import crypto from 'node:crypto';
 import { Router } from 'express';
 import { requireOffice, requireReleaseManager, isReleaseManagerEmail } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HttpError } from '../utils/errors.js';
+import { env } from '../config/env.js';
 import {
   parseIdParam,
   requireInt,
@@ -35,6 +37,165 @@ import {
 } from '../services/releaseOrchestrator.js';
 
 export const releasesRouter = Router();
+
+const ciTokenMatches = (provided: string): boolean => {
+  const expected = env.releaseCiToken;
+  if (!expected) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+
+const CI_SCOPES = new Set(['staging-demos', 'production-hm-stores']);
+
+const ensureCiRelease = (
+  kind: ReleaseKind,
+  manifest: {
+    release: string;
+    commit: string;
+    images: { store?: { digest?: string }; ho?: { digest?: string } };
+    schema?: Record<
+      string,
+      { schemaVersion?: number; minSchemaVersion?: number; maxSchemaVersion?: number }
+    >;
+  },
+  channel: ReleaseChannel,
+) => {
+  const digest = kind === 'store' ? manifest.images?.store?.digest : manifest.images?.ho?.digest;
+  if (!digest || !/^sha256:[a-f0-9]{64}$/.test(digest)) {
+    throw new HttpError(400, `manifest.images.${kind}.digest must be a sha256 digest`);
+  }
+  const schema = manifest.schema?.[kind] ?? {};
+  const existing = listImageReleases().find(
+    (release) =>
+      release.kind === kind && (release.tag === manifest.release || release.digest === digest),
+  );
+  if (existing) {
+    if (existing.digest !== digest) {
+      throw new HttpError(
+        409,
+        `Release tag ${manifest.release} already exists with a different digest`,
+      );
+    }
+    return existing;
+  }
+  return createImageRelease({
+    kind,
+    tag: manifest.release,
+    digest,
+    version: manifest.release,
+    revision: manifest.commit,
+    channel,
+    schemaVersion: schema.schemaVersion,
+    schemaMin: schema.minSchemaVersion,
+    schemaMax: schema.maxSchemaVersion,
+    notes: `CI release ${manifest.release}`,
+  });
+};
+
+/**
+ * CI-driven release: register both image digests from the build manifest and
+ * roll them out to a bounded scope. Authenticated by RELEASE_CI_TOKEN, never an
+ * office session. The token cannot reach any tenant outside the named scope.
+ */
+releasesRouter.post(
+  '/ci',
+  asyncHandler(async (req, res) => {
+    if (!env.releaseCiToken) {
+      throw new HttpError(404, 'Release CI endpoint is not configured');
+    }
+    if (!ciTokenMatches(req.get('x-release-ci-token') ?? '')) {
+      throw new HttpError(401, 'Unauthorized');
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const scope = typeof body.scope === 'string' ? body.scope : '';
+    if (!CI_SCOPES.has(scope)) {
+      throw new HttpError(400, 'scope must be staging-demos or production-hm-stores');
+    }
+    const manifest = body.manifest as Parameters<typeof ensureCiRelease>[1] | undefined;
+    if (
+      !manifest ||
+      typeof manifest.release !== 'string' ||
+      !manifest.release ||
+      typeof manifest.commit !== 'string' ||
+      !/^[a-f0-9]{40}$/.test(manifest.commit)
+    ) {
+      throw new HttpError(400, 'manifest.release and a full manifest.commit are required');
+    }
+    const channel: ReleaseChannel =
+      body.channel === 'stable' || body.channel === 'canary' || body.channel === 'beta'
+        ? body.channel
+        : scope === 'staging-demos'
+          ? 'beta'
+          : 'stable';
+    const waveSize =
+      body.waveSize === undefined ? 1 : requireInt(body, 'waveSize', { min: 1, max: 50 });
+
+    const storeRelease = ensureCiRelease('store', manifest, channel);
+    const hoRelease = ensureCiRelease('ho', manifest, channel);
+
+    const stores = listTenantReleaseStates('store');
+    const panels = listTenantReleaseStates('panel');
+    const inScope = (slug: string, deployMode: string): boolean =>
+      deployMode === 'image' &&
+      (scope === 'staging-demos' ? slug.startsWith('demo-') : slug.startsWith('hm-stores-'));
+
+    const batches: Array<{
+      kind: ReleaseKind;
+      batch: unknown;
+      items: unknown;
+    }> = [];
+    for (const [kind, release] of [
+      ['store', storeRelease],
+      ['ho', hoRelease],
+    ] as const) {
+      const targets =
+        kind === 'store'
+          ? stores.filter((state) => inScope(state.slug, state.deployMode))
+          : panels.filter((state) => inScope(state.slug, state.deployMode));
+      if (targets.length === 0) continue;
+      const result = await startReleaseBatch({
+        releaseId: release.id,
+        actor: 'ci:release',
+        tenantIds: targets.map((state) => state.id),
+        waveSize,
+        dryRun: false,
+        stopOnFailure: true,
+      });
+      batches.push({ kind, batch: result.batch, items: result.items });
+    }
+
+    recordAuditLog('ci:release', 'release_ci_run', 'release', storeRelease.id, {
+      after: {
+        tag: manifest.release,
+        commit: manifest.commit,
+        scope,
+        channel,
+        storeReleaseId: storeRelease.id,
+        hoReleaseId: hoRelease.id,
+        batches: batches.map((entry) => ({
+          kind: entry.kind,
+          status: (entry.batch as { status?: string }).status,
+        })),
+      },
+      reason: `CI release ${manifest.release} → ${scope}`,
+    });
+
+    const failed = batches.some((entry) => {
+      const batch = entry.batch as { status?: string; failed?: number };
+      return batch.status === 'failed' || Number(batch.failed ?? 0) > 0;
+    });
+    res.status(failed ? 502 : 200).json({
+      ok: !failed,
+      scope,
+      channel,
+      releases: { store: storeRelease.id, ho: hoRelease.id },
+      batches,
+    });
+  }),
+);
+
 releasesRouter.use(requireOffice);
 
 releasesRouter.get(
