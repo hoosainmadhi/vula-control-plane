@@ -1,5 +1,22 @@
 # Progress
 
+## 2026-10-24 — release automation and multistore onboarding test
+
+- Added `scripts/release-tenant.mjs` (`npm run release:tenant`). It consumes the
+  CI `release-manifest.json`, registers the Store and Head Office releases,
+  applies them to the pilots, verifies health/login/sample data, and runs
+  dry-run and real waves. Production requires `--approve <tag>`. The default
+  rollout scope is marketing demos only; `--slugs` or `--all-image` widen it.
+- Tested the script against the current staging Release A: both pilots verified,
+  the dry run and both waves completed (all tenants already current), and the
+  non-demo clients were not selected.
+- Exercised the new-client image workflow end to end on staging with a
+  disposable 2-store + Head Office client, `Workflow Demo` (company 11):
+  job 11 complete, all steps complete, both stores and the Head Office are
+  image deployments on Release A with runtime health up. The client was created
+  before the owner asked to create multistores personally; it is left in place
+  for inspection and can be removed on request.
+
 ## 2026-10-24 — orphaned Superstores applications deleted
 
 The production CP client had already been removed, but three Coolify

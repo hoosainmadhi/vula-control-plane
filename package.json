@@ -17,6 +17,7 @@
     "stub": "tsx scripts/dev-store-stub.ts",
     "probe": "tsx scripts/coolify-probe.ts",
     "smoke": "bash scripts/smoke-test.sh",
+    "release:tenant": "node scripts/release-tenant.mjs",
     "test:ui": "jest --config frontend/jest.config.cjs",
     "test:all": "npm test && npm run test:ui"
   },

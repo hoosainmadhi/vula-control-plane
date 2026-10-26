@@ -106,6 +106,48 @@ to `stable` only after acceptance.
 - Release manager permission is required; the office email must be in
   `RELEASE_MANAGER_EMAILS`.
 
+## 5a. Automated release script
+
+The Control Plane repository now has `scripts/release-tenant.mjs` (also
+`npm run release:tenant`). It consumes the CI `release-manifest.json`, so the
+digests and schema ranges are not copied by hand.
+
+```bash
+# Staging: register releases, pilot, verify, dry-run, then wave the demos
+CP_URL=https://staging-cp.vula-app.co.za \
+CP_EMAIL=office@staging.vula-app.co.za \
+CP_PASSWORD=... \
+DEMO_EMAIL=admin@vula-app.co.za DEMO_PASSWORD=... \
+npm run release:tenant -- --manifest release-manifest.json --environment staging
+```
+
+```bash
+# Production: the same manifest, with an explicit approval matching the tag
+CP_URL=https://vula-cp-mzsza-2026.vula-app.co.za \
+CP_EMAIL=hello@vula-app.co.za \
+CP_PASSWORD=... \
+npm run release:tenant -- --manifest release-manifest.json \
+  --environment production --approve <release-tag>
+```
+
+What it does:
+
+- verifies the signed-in CP reports the expected `environment`;
+- registers the Store and Head Office releases from the manifest, idempotently;
+- applies both to the pilot tenants (`demo-general` and `demo-ho` by default);
+- verifies `/health` version/revision and, when `DEMO_EMAIL`/`DEMO_PASSWORD`
+  are set, the demo login and sample data;
+- runs a dry-run and a real wave over the marketing demos;
+- stops on a failed pilot or wave, leaving the previous release available for
+  rollback.
+
+The default rollout scope is demo tenants only (`demo-*`). Use `--slugs a,b`
+for an explicit list or `--all-image` to include every image tenant. Other
+options: `--wave-size`, `--no-dry-run`, `--skip-rollout`, `--channel`.
+
+The script never builds or pushes an image; the CI workflow is the build-once
+step. For a Control Plane code change, use the separate CP branch/deploy flow.
+
 ## 6. Control Plane changes are separate
 
 Changes to the Control Plane itself (Clients, Quotes, Plans, Billing, Devices,
