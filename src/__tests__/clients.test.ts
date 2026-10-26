@@ -530,6 +530,49 @@ describe('onboarding payload validation (§19)', () => {
     expect(res.body.error).toMatch(/adminEmail/i);
   });
 
+  it('derives the store slug and URL from the Coolify label when base URL is blank', async () => {
+    await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send(
+        wizard({
+          slug: 'payload-derived',
+          stores: [
+            {
+              name: 'HM Jhb',
+              deploymentName: 'hm-test-jhb',
+              terminalCount: 2,
+            },
+          ],
+        }),
+      )
+      .expect(201);
+
+    const store = listStores().find((s) => s.deployment_name === 'hm-test-jhb');
+    expect(store?.slug).toBe('hm-test-jhb');
+    expect(store?.base_url).toBe('https://hm-test-jhb.vula-app.co.za');
+  });
+
+  it('refuses a Coolify label that is a URL instead of a short label', async () => {
+    const res = await request(app)
+      .post('/api/clients')
+      .set(auth())
+      .send(
+        wizard({
+          slug: 'payload-url-label',
+          stores: [
+            {
+              name: 'Bad Label',
+              deploymentName: 'https://hm-stores-jhb.vula-app.co.za',
+              terminalCount: 2,
+            },
+          ],
+        }),
+      );
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/deploymentName/i);
+  });
+
   it('refuses a nested Head Office URL with no scheme on a multi-store onboarding', async () => {
     const res = await request(app)
       .post('/api/clients')

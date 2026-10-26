@@ -209,13 +209,18 @@ export default function ClientsPage() {
         };
         payload.stores = multiStores.map((s, i) => {
           const licensed = s.terminalCount || 1;
+          const label = s.deploymentName.trim();
           return {
             name: s.name || `${clientName} Branch ${i + 1}`,
-            slug: s.slug || `${clientSlug}-${i + 1}`,
-            // The short branch code (`jhb`), so two Johannesburg stores in
-            // different client accounts cannot produce the same Coolify name.
-            ...(s.deploymentName.trim() ? { deploymentName: s.deploymentName.trim() } : {}),
-            baseUrl: s.baseUrl || `https://${clientSlug}-${i + 1}.vula-app.co.za`,
+            slug: s.slug || label || `${clientSlug}-${i + 1}`,
+            // The short branch code (`hm-stores-jhb`), so two Johannesburg
+            // stores in different client accounts cannot produce the same
+            // Coolify name.
+            ...(label ? { deploymentName: label } : {}),
+            // Leave the URL to the server when blank: it derives the public
+            // URL from the label, or the client/index fallback when no label
+            // is supplied.
+            ...(s.baseUrl.trim() ? { baseUrl: s.baseUrl.trim() } : {}),
             terminalCount: licensed,
             licensedTerminalCount: licensed,
             // The outlet's login is emailed here and bootstrapped from it —
@@ -1014,8 +1019,9 @@ export default function ClientsPage() {
 
                       {/* Explicit column labels (§33) */}
                       <div className="grid grid-cols-12 gap-2 text-[11px] font-bold uppercase tracking-wider text-slate-500 px-1 pb-1">
-                        <div className="col-span-5">Store Name</div>
-                        <div className="col-span-4">Store Base URL</div>
+                        <div className="col-span-4">Store Name</div>
+                        <div className="col-span-2">Coolify label</div>
+                        <div className="col-span-3">Store Base URL</div>
                         <div className="col-span-3 text-right pr-2">Lic. terminals</div>
                       </div>
 
@@ -1038,12 +1044,21 @@ export default function ClientsPage() {
                             />
                             <input
                               type="text"
-                              placeholder="za-pos name (client-jhb)"
-                              title="Full Coolify label after za-pos-, e.g. super-stores-jhb. Leave blank to use the client slug and store name."
+                              placeholder="hm-stores-jhb"
+                              title="Short Coolify label after za-pos-, e.g. hm-stores-jhb. The public URL defaults to https://<label>.vula-app.co.za."
                               value={ms.deploymentName}
                               onChange={(e) => {
                                 const next = [...multiStores];
-                                next[idx].deploymentName = e.target.value.toLowerCase();
+                                const raw = e.target.value.toLowerCase().trim();
+                                const oldAuto = next[idx].deploymentName
+                                  ? `https://${next[idx].deploymentName}.vula-app.co.za`
+                                  : '';
+                                next[idx].deploymentName = raw;
+                                if (!next[idx].baseUrl || next[idx].baseUrl === oldAuto) {
+                                  next[idx].baseUrl = /^[a-z0-9][a-z0-9-]*$/.test(raw)
+                                    ? `https://${raw}.vula-app.co.za`
+                                    : '';
+                                }
                                 setMultiStores(next);
                               }}
                               className="col-span-2 rounded border border-slate-300 p-2 text-xs font-mono"
@@ -1087,6 +1102,13 @@ export default function ClientsPage() {
                                 </button>
                               )}
                             </div>
+                            {ms.deploymentName &&
+                              !/^[a-z0-9][a-z0-9-]*$/.test(ms.deploymentName) && (
+                                <p className="col-span-12 text-[10px] font-semibold text-rose-600">
+                                  Use a short label like hm-stores-jhb here; the full URL belongs in
+                                  Store Base URL.
+                                </p>
+                              )}
                           </div>
                         ))}
                       </div>
@@ -1170,7 +1192,10 @@ export default function ClientsPage() {
                               {store.name || `Store ${index + 1}`}
                             </span>
                             <span className="font-mono text-blue-700 font-bold text-right break-all">
-                              {store.baseUrl || 'URL not set'}
+                              {store.baseUrl ||
+                                (store.deploymentName
+                                  ? `https://${store.deploymentName}.vula-app.co.za`
+                                  : `https://${clientSlug}-${index + 1}.vula-app.co.za`)}
                             </span>
                           </div>
                         ))}

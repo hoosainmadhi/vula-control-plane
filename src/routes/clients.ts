@@ -179,6 +179,27 @@ interface NestedStore {
   adminEmail?: string;
 }
 
+const DEPLOYMENT_LABEL_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * The short Coolify label is not a URL. Rejecting a pasted URL here avoids the
+ * silent `client-1` fallback that otherwise leaves the public URL wrong.
+ */
+const deploymentLabel = (
+  value: string | null | undefined,
+  fallback: string | undefined,
+  surface: string,
+): string | undefined => {
+  const label = value ?? fallback;
+  if (!label) return undefined;
+  if (!DEPLOYMENT_LABEL_RE.test(label)) {
+    throw new ValidationError(
+      `${surface} deploymentName must be a short lowercase label like hm-stores-jhb, not a URL. Put the public URL in baseUrl.`,
+    );
+  }
+  return label;
+};
+
 const validateNestedStore = async (
   entry: unknown,
   fallback: {
@@ -218,10 +239,20 @@ const validateNestedStore = async (
         ? terminalCount
         : requireInt(e, 'licensedTerminalCount', { min: 0, max: 5000 });
   const name = e.name === undefined ? fallback.name : requireString(e, 'name');
+  const deploymentName = deploymentLabel(
+    optionalString(e, 'deploymentName', 60),
+    fallback.deploymentName,
+    'Store',
+  );
   const slug =
-    e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
-  const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
-  const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
+    e.slug === undefined || e.slug === null || e.slug === ''
+      ? (deploymentName ?? fallback.slug)
+      : requireSlug(e);
+  const baseUrl = suppliedUrl
+    ? requireBaseUrl(e)
+    : deploymentName
+      ? `https://${deploymentName}.vula-app.co.za`
+      : fallback.baseUrl;
   const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
 
   if (suppliedUrl) {
@@ -272,10 +303,20 @@ const validateNestedHeadOffice = async (
   const e = (entry ?? {}) as Record<string, unknown>;
   const suppliedUrl = e.baseUrl !== undefined && e.baseUrl !== null && e.baseUrl !== '';
   const name = e.name === undefined ? fallback.name : requireString(e, 'name');
+  const deploymentName = deploymentLabel(
+    optionalString(e, 'deploymentName', 60),
+    fallback.deploymentName,
+    'Head Office',
+  );
   const slug =
-    e.slug === undefined || e.slug === null || e.slug === '' ? fallback.slug : requireSlug(e);
-  const baseUrl = suppliedUrl ? requireBaseUrl(e) : fallback.baseUrl;
-  const deploymentName = optionalString(e, 'deploymentName', 60) ?? fallback.deploymentName;
+    e.slug === undefined || e.slug === null || e.slug === ''
+      ? (deploymentName ?? fallback.slug)
+      : requireSlug(e);
+  const baseUrl = suppliedUrl
+    ? requireBaseUrl(e)
+    : deploymentName
+      ? `https://${deploymentName}.vula-app.co.za`
+      : fallback.baseUrl;
   const adminEmail = optionalEmail(e, 'adminEmail') ?? fallback.adminEmail;
 
   if (suppliedUrl) {
