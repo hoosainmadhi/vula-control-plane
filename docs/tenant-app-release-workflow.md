@@ -102,8 +102,9 @@ the automatic dev push above.
 
 - Staging demos: on `v2026.10.26-0c100f9`; all nine Stores + Head Office healthy,
   logins and sample data verified, nightly reset verified.
-- Production HM Stores: still on `v2026.10.21-5781c2c`; promotion is waiting for
-  explicit approval.
+- Production HM Stores: on `v2026.10.26-0c100f9`; the manual **Promote to
+  Production** workflow succeeded (88 s) and applied the same digests to Cape
+  Town, Johannesburg and the Head Office. Promotion remains manual.
 - Legacy rehearsal Stores and Head Office remain Dockerfile and are blocked from
   image changes until a blue/green migration.
 - The native ARM64 CI build takes about **66 seconds** for both images and about

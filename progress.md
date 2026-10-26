@@ -1,5 +1,22 @@
 # Progress
 
+## 2026-10-26 — production HM Stores promoted to the tested release
+
+The manual **Promote to Production** workflow was run for the exact staging
+release `v2026.10.26-0c100f9`.
+
+- The first dispatch failed before deployment: `gh release download` needs a
+  repository context and the promote workflow had no checkout. Fixed by passing
+  `--repo "$GITHUB_REPOSITORY"`.
+- The rerun downloaded the manifest attached to the GitHub Release and called
+  the production CP with scope `production-hm-stores`.
+- HM Stores Cape Town, Johannesburg and the Head Office are now on the same
+  digests as staging (`sha256:852faa8e…` Store, `sha256:3cdf1697…` HO), with
+  `deployStatus=deployed`, `runtimeHealth=up` and `/health` reporting
+  `v2026.10.26-0c100f9`.
+- Promotion duration: **88 seconds**. No image was rebuilt; the production CP
+  applied the published digests. The previous Release A remains available.
+
 ## 2026-10-26 — push-to-release: native ARM64 CI and automatic staging rollout
 
 `git push origin dev` now builds once and updates all staging demos without a
