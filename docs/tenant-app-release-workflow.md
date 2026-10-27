@@ -148,6 +148,10 @@ the automatic dev push above.
 - Production HM Stores: on `v2026.10.26-0c100f9`; the manual **Promote to
   Production** workflow succeeded (88 s) and applied the same digests to Cape
   Town, Johannesburg and the Head Office. Promotion remains manual.
+- The production CP **Production promotion** panel is live and reads the staging
+  candidate. It currently shows 0 applications needing an update. The button is
+  disabled until the one-time `GITHUB_PROMOTION_TOKEN` is set; no rollout has
+  been started from the panel.
 - Legacy rehearsal Stores and Head Office remain Dockerfile and are blocked from
   image changes until a blue/green migration.
 - The native ARM64 CI build takes about **66 seconds** for both images and about

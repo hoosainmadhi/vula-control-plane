@@ -27,6 +27,11 @@
   (classic PAT `repo`, or fine-grained Actions: write + Contents: read). Until
   then the panel shows `github_dispatch_not_configured` and refuses to start;
   the manual GitHub Actions fallback still works.
+- Deployed both CPs at the final commit. Verified against the live fleet:
+  staging returns `v2026.10.26-0c100f9` with its real last-release time, and the
+  production panel shows the same candidate, 2/2 Stores + 1/1 Head Office
+  healthy, 0 updates required and no active promotion. No production rollout
+  was started.
 
 ## 2026-10-26 — production HM Stores promoted to the tested release
 
