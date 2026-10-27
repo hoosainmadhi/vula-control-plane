@@ -226,6 +226,12 @@ export const testedCandidateForStaging = (): PromotionCandidate => {
       storeRelease.revision && hoRelease.revision && storeRelease.revision !== hoRelease.revision
         ? null
         : (storeRelease.revision ?? hoRelease.revision ?? null);
+    const verifiedAt =
+      [...stores, ...panels]
+        .map((state) => state.lastReleaseAt)
+        .filter((value): value is string => Boolean(value))
+        .sort()
+        .pop() ?? new Date().toISOString();
 
     return {
       tag,
@@ -239,7 +245,7 @@ export const testedCandidateForStaging = (): PromotionCandidate => {
       staging: {
         stores: stores.length,
         panels: panels.length,
-        verifiedAt: new Date().toISOString(),
+        verifiedAt,
       },
     };
   }
@@ -815,13 +821,12 @@ export const promotionPreview = async (input: {
   if (!env.stagingCpUrl) missing.push('STAGING_CP_URL');
   if (!env.stagingReleaseReadToken) missing.push('STAGING_RELEASE_READ_TOKEN');
   const enabled = missing.length === 0;
+  const tokenHint = !env.githubPromotionToken
+    ? ' — the GitHub token needs a classic PAT with repo scope, or fine-grained Actions: write + Contents: read'
+    : '';
   const disabledReason = enabled
     ? null
-    : `promotion_not_configured: ${missing.join(', ')} must be set on the production Control Plane${
-        !env.githubPromotionToken
-          ? ' (GITHUB_PROMOTION_TOKEN needs a classic PAT with repo scope, or fine-grained Actions: write + Contents: read)'
-          : ''
-      }`;
+    : `promotion_not_configured: ${missing.join(', ')} must be set on the production Control Plane${tokenHint}`;
 
   const active = await reconcilePromotion();
   const blockers = [...current.blockers];
