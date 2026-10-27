@@ -374,6 +374,31 @@ describe('production promotion preview', () => {
     expect(preview.enabled).toBe(false);
     expect(preview.canPromote).toBe(false);
   });
+
+  it('still lists the current production fleet when the candidate source is down', async () => {
+    configurePromotion();
+    const olderStore = createImageRelease({
+      kind: 'store',
+      tag: 'v-old',
+      digest: A,
+      version: 'v-old',
+      channel: 'stable',
+      schemaVersion: 1,
+      schemaMin: 1,
+      schemaMax: 1,
+    });
+    makeStore({ slug: 'hm-stores-jhb', digest: A, lastReleaseId: olderStore.id });
+    fetchMock.mockImplementation(async () => jsonResponse(401, { error: 'Unauthorized' }));
+
+    const preview = await promotionPreview({ releaseManager: true });
+    expect(preview.candidate).toBeNull();
+    expect(preview.candidateError).toBe('Unauthorized');
+    expect(preview.targets.stores).toHaveLength(1);
+    expect(preview.current.stores.tag).toBe('v-old');
+    expect(preview.current.stores.healthy).toBe(1);
+    expect(preview.blockers.join(' ')).toMatch(/Unauthorized/);
+    expect(preview.canPromote).toBe(false);
+  });
 });
 
 describe('production promotion start', () => {

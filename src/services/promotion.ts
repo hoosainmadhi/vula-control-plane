@@ -328,24 +328,29 @@ const currentSummary = (
   };
 };
 
-const buildTarget = (state: TenantReleaseState, candidate: CandidateImage): PromotionTarget => {
+const buildTarget = (
+  state: TenantReleaseState,
+  candidate: CandidateImage | null,
+): PromotionTarget => {
   const paused = state.status === 'paused';
-  const needsUpdate = state.imageDigest !== candidate.digest;
-  const candidateSchema = {
-    schema_min: candidate.schemaMin,
-    schema_max: candidate.schemaMax,
-  };
+  const needsUpdate = candidate ? state.imageDigest !== candidate.digest : false;
+  const candidateSchema = candidate
+    ? {
+        schema_min: candidate.schemaMin,
+        schema_max: candidate.schemaMax,
+      }
+    : null;
   let blocker: string | null = null;
-  if (!paused && needsUpdate) {
-    if (state.deployMode === 'dockerfile') {
-      blocker =
-        'legacy_dockerfile: this tenant needs a blue/green migration before shared-image releases';
-    } else if (state.deployMode === 'unprovisioned') {
-      blocker = 'not_provisioned: no shared-image application is recorded for this tenant';
-    } else if (state.schemaVersion === null || state.schemaVersion === undefined) {
+  if (!paused && state.deployMode === 'dockerfile') {
+    blocker =
+      'legacy_dockerfile: this tenant needs a blue/green migration before shared-image releases';
+  } else if (!paused && state.deployMode === 'unprovisioned') {
+    blocker = 'not_provisioned: no shared-image application is recorded for this tenant';
+  } else if (candidate && !paused && needsUpdate) {
+    if (state.schemaVersion === null || state.schemaVersion === undefined) {
       blocker =
         'schema_unreported: the deployment has not reported its database schema; refusing an image change';
-    } else if (!releaseSupportsSchema(candidateSchema, state.schemaVersion)) {
+    } else if (!releaseSupportsSchema(candidateSchema!, state.schemaVersion)) {
       blocker = `schema_incompatible: image supports schema ${candidate.schemaMin}..${candidate.schemaMax}, deployment is at ${state.schemaVersion}`;
     } else if (['queued', 'deploying', 'verifying'].includes(state.releaseState)) {
       blocker = `deployment_in_progress: release state is ${state.releaseState}`;
@@ -382,21 +387,12 @@ const buildTarget = (state: TenantReleaseState, candidate: CandidateImage): Prom
 };
 
 const targetViews = (candidate: PromotionCandidate | null) => {
-  if (!candidate) {
-    return {
-      stores: [] as PromotionTarget[],
-      panels: [] as PromotionTarget[],
-      updatesRequired: 0,
-      blockers: [] as string[],
-      warnings: [] as string[],
-    };
-  }
   const stores = listTenantReleaseStates('store')
     .filter(isPromotionTarget)
-    .map((state) => buildTarget(state, candidate.store));
+    .map((state) => buildTarget(state, candidate?.store ?? null));
   const panels = listTenantReleaseStates('panel')
     .filter(isPromotionTarget)
-    .map((state) => buildTarget(state, candidate.ho));
+    .map((state) => buildTarget(state, candidate?.ho ?? null));
   const all = [...stores, ...panels];
   return {
     stores,
