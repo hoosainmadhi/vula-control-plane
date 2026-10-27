@@ -1,5 +1,23 @@
 # Progress
 
+## 2026-10-27 — production classifications and a quieter Releases header
+
+- HM Stores Cape Town and Johannesburg were classified `development` in the
+  production registry. Corrected to `production` through the store API; no
+  `NODE_ENV`, container or database was touched. The production safety checks
+  that depend on `environment === 'production'` now apply to them.
+- Head Office panels have no environment column by design. The fleet table now
+  shows **Production CP** (or the CP's own environment) instead of `—`, with a
+  title explaining that panels inherit the Control Plane environment.
+- Added a regression test: a dry-run rollout filtered to
+  `environment = production` includes only production Stores.
+- **New rollout** and **Publish release** moved into an **Advanced actions**
+  menu. Refresh and the promotion panel remain the primary controls; backend
+  release-manager authorization is unchanged.
+- Verification: backend **571/571**, frontend **33/33**, typecheck and build
+  clean. Browser pass confirmed Production labels and the menu contents. Both
+  CPs are on `258fcf0`. No production rollout was started.
+
 ## 2026-10-26 — one-click production promotion and CP-managed applications
 
 - The production **Releases** page now has a **Production promotion** panel:

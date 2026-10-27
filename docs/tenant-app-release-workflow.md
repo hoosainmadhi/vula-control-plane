@@ -116,6 +116,20 @@ The current static lists remain:
 - production: the three HM Stores apps (their managed rows are created if they
   are ever re-provisioned by the CP).
 
+## Environment classification
+
+A Store row carries its own `environment` (`production`, `staging`, `demo` or
+`development`). It is registry metadata, not `NODE_ENV`: correcting it changes
+which environment-filtered rollouts and production provisioning safeguards apply,
+and never restarts or recreates the tenant. Head Office panels have no
+environment column; they inherit the Control Plane's environment, so the fleet
+table labels them **Production CP** or **Staging CP** rather than `—`.
+
+The HM Stores rows were corrected from `development` to `production` on
+2026-10-27. If another production tenant is created, set its environment at
+creation (or through the store edit API); do not leave it at the development
+default.
+
 ## Store identity preflight
 
 Before changing an image, the CP compares the app's `/api/internal/status`
