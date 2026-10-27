@@ -14,7 +14,7 @@ container and exposes `/api/internal/*` guarded by a per-store
 `CONTROL_PLANE_TOKEN` (tenant-side workstream; contract authored here in
 CONTEXT.md "Internal API contract").
 
-## Phase: one-click production promotion + CP-managed apps (2026-10-26) — complete (dispatch needs a GitHub token)
+## Phase: one-click production promotion + CP-managed apps (2026-10-26) — complete
 
 - [x] **Promotion panel** — staging-tested candidate, current Store/HO versions and health,
       HM Stores targets, updates required, blockers, review + typed-tag confirmation, live
@@ -25,10 +25,11 @@ CONTEXT.md "Internal API contract").
 - [x] **Managed app registry** — register after Coolify identity/project/domain/`/data`
       verification; the guard accepts the static allowlist or a matching managed row and
       re-checks the live name/project. No restart per new customer.
-- [x] **Tests** — backend 569/569 (12 promotion tests + guard/provisioning cases), frontend
+- [x] **Tests** — backend 570/570 (14 promotion tests + guard/provisioning cases), frontend
       33/33, typecheck and build clean.
-- [ ] **One-time** — set `GITHUB_PROMOTION_TOKEN` on the production CP. The panel is
-      read-only until then; the manual workflow remains available.
+- [x] **One-time** — `GITHUB_PROMOTION_TOKEN` configured on the production CP (classic PAT,
+      `repo`); verified against the private repo, the active workflow and the release
+      manifest. No production rollout started.
 
 ## Phase: WhatsApp add-on on Plans, Quotes and New Client (2026-10-20) — complete, uncommitted
 

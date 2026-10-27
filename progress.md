@@ -32,6 +32,11 @@
   production panel shows the same candidate, 2/2 Stores + 1/1 Head Office
   healthy, 0 updates required and no active promotion. No production rollout
   was started.
+- `GITHUB_PROMOTION_TOKEN` is now configured on the production CP (classic PAT
+  with `repo`). Read-only verification passed: the token reads the private repo,
+  sees the active `Promote to Production` workflow and downloads the release
+  manifest. The panel is enabled; the Promote button remains disabled only
+  because every target already runs the candidate.
 
 ## 2026-10-26 — production HM Stores promoted to the tested release
 
