@@ -940,6 +940,23 @@ describe('release waves', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('filters a rollout to one environment', async () => {
+    const prod = seedStore({ slug: 'wave-prod' });
+    getRegistryDb()
+      .prepare("UPDATE stores SET environment = 'production' WHERE id = ?")
+      .run(prod.id);
+    seedStore({ slug: 'wave-dev' });
+    const rel = release({ tag: 'wave-env', digest: B });
+    const result = await startReleaseBatch({
+      releaseId: rel.id,
+      actor: 'office@test.local',
+      environment: 'production',
+      dryRun: true,
+    });
+    expect(result.batch.total).toBe(1);
+    expect(result.items.map((item) => item.tenant_id)).toEqual([prod.id]);
+  });
+
   it('stops subsequent waves after a failed pilot wave', async () => {
     const a = seedStore({ slug: 'wave-fail-a' });
     const b = seedStore({ slug: 'wave-fail-b' });

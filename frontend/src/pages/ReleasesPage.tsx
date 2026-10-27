@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
+  ChevronDown,
   ChevronRight,
   History,
   Play,
   Plus,
   RefreshCw,
   RotateCcw,
+  Settings2,
   ShieldAlert,
   Rocket,
 } from 'lucide-react';
@@ -90,6 +92,7 @@ export default function ReleasesPage() {
   const [tab, setTab] = useState<Tab>('fleet');
   const [search, setSearch] = useState('');
   const [kindFilter, setKindFilter] = useState<'all' | 'store' | 'panel'>('all');
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
   const [actionTarget, setActionTarget] = useState<ActionTarget | null>(null);
   const [rolloutOpen, setRolloutOpen] = useState(false);
@@ -143,6 +146,15 @@ export default function ReleasesPage() {
     const id = window.setInterval(() => void load(), 5000);
     return () => window.clearInterval(id);
   }, [busy, load]);
+
+  useEffect(() => {
+    if (!advancedOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAdvancedOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [advancedOpen]);
 
   const releaseById = useMemo(() => {
     const map = new Map<number, ImageRelease>();
@@ -259,20 +271,65 @@ export default function ReleasesPage() {
         >
           <RefreshCw className="mr-1 inline h-3.5 w-3.5" /> Refresh
         </button>
-        <button
-          onClick={() => setRolloutOpen(true)}
-          disabled={!canManage || releases.length === 0}
-          className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <Play className="mr-1 inline h-3.5 w-3.5" /> New rollout
-        </button>
-        <button
-          onClick={() => setPublishOpen(true)}
-          disabled={!canManage}
-          className="rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <Plus className="mr-1 inline h-3.5 w-3.5" /> Publish release
-        </button>
+        <div className="relative">
+          <button
+            onClick={() => setAdvancedOpen((open) => !open)}
+            aria-haspopup="menu"
+            aria-expanded={advancedOpen}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+          >
+            <Settings2 className="h-3.5 w-3.5" /> Advanced actions
+            <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+          </button>
+          {advancedOpen && (
+            <>
+              <div
+                className="fixed inset-0 z-10"
+                aria-hidden="true"
+                onClick={() => setAdvancedOpen(false)}
+              />
+              <div
+                role="menu"
+                className="absolute right-0 z-20 mt-1 w-72 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg"
+              >
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setAdvancedOpen(false);
+                    setRolloutOpen(true);
+                  }}
+                  disabled={!canManage || releases.length === 0}
+                  className="flex w-full items-start gap-2.5 px-3.5 py-2.5 text-left hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Play className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                  <span>
+                    <span className="block text-xs font-bold text-slate-700">New rollout</span>
+                    <span className="block text-[11px] text-slate-500">
+                      Plan a controlled wave against selected tenants.
+                    </span>
+                  </span>
+                </button>
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setAdvancedOpen(false);
+                    setPublishOpen(true);
+                  }}
+                  disabled={!canManage}
+                  className="flex w-full items-start gap-2.5 border-t border-slate-100 px-3.5 py-2.5 text-left hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Plus className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+                  <span>
+                    <span className="block text-xs font-bold text-slate-700">Publish release</span>
+                    <span className="block text-[11px] text-slate-500">
+                      Register an immutable image release manually.
+                    </span>
+                  </span>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {!canManage && (
@@ -372,6 +429,14 @@ export default function ReleasesPage() {
                             colors={ENVIRONMENT_COLORS}
                             label={ENVIRONMENT_LABELS[tenant.environment]}
                           />
+                        ) : tenant.tenantType === 'panel' && capabilities ? (
+                          <span title="Head Offices inherit the Control Plane environment">
+                            <StatusBadge
+                              status={capabilities.environment}
+                              colors={ENVIRONMENT_COLORS}
+                              label={`${ENVIRONMENT_LABELS[capabilities.environment]} CP`}
+                            />
+                          </span>
                         ) : (
                           '—'
                         )}
