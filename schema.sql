@@ -520,6 +520,53 @@ CREATE TABLE IF NOT EXISTS deployment_locks (
   PRIMARY KEY (tenant_type, tenant_id)
 );
 
+-- Coolify applications the CP created and verified. The UUID allowlist remains
+-- the boundary for imported/pre-existing apps; rows here are the boundary for
+-- apps the CP provisioned itself.
+CREATE TABLE IF NOT EXISTS managed_apps (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind          TEXT NOT NULL CHECK (kind IN ('store', 'ho')),
+  coolify_uuid  TEXT NOT NULL UNIQUE,
+  name          TEXT NOT NULL,
+  project_uuid  TEXT,
+  server_uuid   TEXT,
+  domain        TEXT NOT NULL,
+  volume_name   TEXT,
+  host_path     TEXT,
+  source        TEXT NOT NULL DEFAULT 'provisioned' CHECK (source IN ('provisioned')),
+  is_active     INTEGER NOT NULL DEFAULT 1,
+  verified_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- One row per operator-approved production promotion. The partial unique index
+-- is the duplicate/concurrency guard.
+CREATE TABLE IF NOT EXISTS release_promotions (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  tag             TEXT NOT NULL,
+  commit_sha      TEXT,
+  store_digest    TEXT NOT NULL,
+  ho_digest       TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'dispatching'
+    CHECK (status IN ('dispatching', 'running', 'complete', 'failed')),
+  requested_by    TEXT NOT NULL,
+  reason          TEXT,
+  store_batch_id  INTEGER REFERENCES release_batches(id) ON DELETE SET NULL,
+  ho_batch_id     INTEGER REFERENCES release_batches(id) ON DELETE SET NULL,
+  github_run_id   INTEGER,
+  github_run_url  TEXT,
+  github_status   TEXT,
+  github_conclusion TEXT,
+  error           TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  started_at      TEXT,
+  completed_at    TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_release_promotions_one_running
+  ON release_promotions(status) WHERE status IN ('dispatching', 'running');
+
 CREATE INDEX IF NOT EXISTS idx_image_releases_kind_channel
   ON image_releases(kind, channel, published_at);
 CREATE INDEX IF NOT EXISTS idx_release_batches_release ON release_batches(release_id);

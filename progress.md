@@ -1,5 +1,33 @@
 # Progress
 
+## 2026-10-26 — one-click production promotion and CP-managed applications
+
+- The production **Releases** page now has a **Production promotion** panel:
+  the staging-tested candidate, current Store and Head Office tags and runtime
+  health, HM Stores targets, updates required, blockers/warnings, a review +
+  typed-tag confirmation, live per-tenant batch progress and the GitHub run link.
+- Backend: `GET /api/releases/promotion` (office view) and
+  `POST /api/releases/promotion` (release manager, production only, exact tag
+  confirmation). It reuses `startReleaseBatch`; it does not duplicate the
+  deployment engine. The staging CP exposes `GET /api/releases/tested-candidate`
+  to a read token. The production backend verifies the GitHub release manifest
+  still carries the staging-tested digests, dispatches the existing
+  `promote-production.yml` with a server-held token, and refuses a second
+  promotion through a partial unique index. A manual CI call for a different tag
+  is refused while a promotion is in flight.
+- `managed_apps`: a newly provisioned Store/Head Office is registered only after
+  Coolify reports the same UUID, name, Docker Image kind, project, domain and a
+  persistent `/data` storage. `assertApplicationAllowed` accepts either the
+  static UUID allowlist or a matching managed row, and still re-checks the live
+  name/project. Imported applications are never trusted automatically. No CP
+  restart is needed for a new customer.
+- Tests: backend **569/569** (12 new promotion tests plus provisioning and guard
+  cases), frontend **33/33**, typecheck and production build clean.
+- One-time setup: `GITHUB_PROMOTION_TOKEN` must be set on the production CP
+  (classic PAT `repo`, or fine-grained Actions: write + Contents: read). Until
+  then the panel shows `github_dispatch_not_configured` and refuses to start;
+  the manual GitHub Actions fallback still works.
+
 ## 2026-10-26 — production HM Stores promoted to the tested release
 
 The manual **Promote to Production** workflow was run for the exact staging

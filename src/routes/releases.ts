@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { requireOffice, requireReleaseManager, isReleaseManagerEmail } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { HttpError } from '../utils/errors.js';
-import { env } from '../config/env.js';
+import { controlPlaneEnvironment, env } from '../config/env.js';
 import {
   parseIdParam,
   requireInt,
@@ -11,8 +11,14 @@ import {
   optionalString,
   optionalBool,
 } from '../utils/validate.js';
-import { recordAuditLog } from '../config/registryDb.js';
 import {
+  recordAuditLog,
+  getActiveReleasePromotion,
+  getReleasePromotion,
+  updateReleasePromotion,
+} from '../config/registryDb.js';
+import {
+  DIGEST_RE,
   createImageRelease,
   getImageRelease,
   listImageReleases,
@@ -27,6 +33,14 @@ import {
   type ReleaseChannel,
   type ReleaseKind,
 } from '../services/releaseCatalog.js';
+import {
+  linkPromotionBatch,
+  promotionForCi,
+  promotionPreview,
+  settlePromotionFromBatches,
+  startPromotion,
+  testedCandidateForStaging,
+} from '../services/promotion.js';
 import {
   applyReleaseToTenant,
   getBatch,
@@ -132,67 +146,129 @@ releasesRouter.post(
     const waveSize =
       body.waveSize === undefined ? 1 : requireInt(body, 'waveSize', { min: 1, max: 50 });
 
-    const storeRelease = ensureCiRelease('store', manifest, channel);
-    const hoRelease = ensureCiRelease('ho', manifest, channel);
-
-    const stores = listTenantReleaseStates('store');
-    const panels = listTenantReleaseStates('panel');
-    const inScope = (slug: string, deployMode: string): boolean =>
-      deployMode === 'image' &&
-      (scope === 'staging-demos' ? slug.startsWith('demo-') : slug.startsWith('hm-stores-'));
-
-    const batches: Array<{
-      kind: ReleaseKind;
-      batch: unknown;
-      items: unknown;
-    }> = [];
-    for (const [kind, release] of [
-      ['store', storeRelease],
-      ['ho', hoRelease],
-    ] as const) {
-      const targets =
-        kind === 'store'
-          ? stores.filter((state) => inScope(state.slug, state.deployMode))
-          : panels.filter((state) => inScope(state.slug, state.deployMode));
-      if (targets.length === 0) continue;
-      const result = await startReleaseBatch({
-        releaseId: release.id,
-        actor: 'ci:release',
-        tenantIds: targets.map((state) => state.id),
-        waveSize,
-        dryRun: false,
-        stopOnFailure: true,
-      });
-      batches.push({ kind, batch: result.batch, items: result.items });
+    const storeDigest = manifest.images?.store?.digest ?? '';
+    const hoDigest = manifest.images?.ho?.digest ?? '';
+    if (!DIGEST_RE.test(storeDigest) || !DIGEST_RE.test(hoDigest)) {
+      throw new HttpError(400, 'manifest.images must carry both sha256 digests');
     }
 
-    recordAuditLog('ci:release', 'release_ci_run', 'release', storeRelease.id, {
-      after: {
-        tag: manifest.release,
-        commit: manifest.commit,
+    // A production promotion is bound to the digests the operator approved
+    // before any tenant is touched. A manual CI call with no promotion row is
+    // still allowed, but never while a different approved promotion is in
+    // flight: that would put two releases on the same fleet.
+    let promotion = null as ReturnType<typeof promotionForCi>;
+    if (scope === 'production-hm-stores') {
+      const active = getActiveReleasePromotion();
+      if (active && active.tag !== manifest.release) {
+        throw new HttpError(
+          409,
+          `promotion_in_progress: ${active.tag} is already being promoted to production; refusing a different release`,
+          'promotion_in_progress',
+        );
+      }
+      promotion = promotionForCi(manifest.release, storeDigest, hoDigest);
+    }
+
+    try {
+      const storeRelease = ensureCiRelease('store', manifest, channel);
+      const hoRelease = ensureCiRelease('ho', manifest, channel);
+
+      const stores = listTenantReleaseStates('store');
+      const panels = listTenantReleaseStates('panel');
+      const inScope = (slug: string, deployMode: string): boolean =>
+        deployMode === 'image' &&
+        (scope === 'staging-demos' ? slug.startsWith('demo-') : slug.startsWith('hm-stores-'));
+
+      const batches: Array<{
+        kind: ReleaseKind;
+        batch: unknown;
+        items: unknown;
+      }> = [];
+      for (const [kind, release] of [
+        ['store', storeRelease],
+        ['ho', hoRelease],
+      ] as const) {
+        const targets =
+          kind === 'store'
+            ? stores.filter((state) => inScope(state.slug, state.deployMode))
+            : panels.filter((state) => inScope(state.slug, state.deployMode));
+        if (targets.length === 0) continue;
+        const result = await startReleaseBatch({
+          releaseId: release.id,
+          actor: 'ci:release',
+          tenantIds: targets.map((state) => state.id),
+          waveSize,
+          dryRun: false,
+          stopOnFailure: true,
+          onBatchCreated: (batch) => linkPromotionBatch(promotion, kind, batch.id),
+        });
+        batches.push({ kind, batch: result.batch, items: result.items });
+      }
+
+      recordAuditLog('ci:release', 'release_ci_run', 'release', storeRelease.id, {
+        after: {
+          tag: manifest.release,
+          commit: manifest.commit,
+          scope,
+          channel,
+          storeReleaseId: storeRelease.id,
+          hoReleaseId: hoRelease.id,
+          promotionId: promotion?.id ?? null,
+          batches: batches.map((entry) => ({
+            kind: entry.kind,
+            status: (entry.batch as { status?: string }).status,
+          })),
+        },
+        reason: `CI release ${manifest.release} → ${scope}`,
+      });
+
+      if (promotion) settlePromotionFromBatches(promotion.id);
+
+      const failed = batches.some((entry) => {
+        const batch = entry.batch as { status?: string; failed?: number };
+        return batch.status === 'failed' || Number(batch.failed ?? 0) > 0;
+      });
+      res.status(failed ? 502 : 200).json({
+        ok: !failed,
         scope,
         channel,
-        storeReleaseId: storeRelease.id,
-        hoReleaseId: hoRelease.id,
-        batches: batches.map((entry) => ({
-          kind: entry.kind,
-          status: (entry.batch as { status?: string }).status,
-        })),
-      },
-      reason: `CI release ${manifest.release} → ${scope}`,
-    });
+        releases: { store: storeRelease.id, ho: hoRelease.id },
+        batches,
+      });
+    } catch (err) {
+      if (promotion) {
+        const current = getReleasePromotion(promotion.id);
+        if (current && (current.status === 'dispatching' || current.status === 'running')) {
+          updateReleasePromotion(promotion.id, {
+            status: 'failed',
+            completedAt: new Date().toISOString(),
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      throw err;
+    }
+  }),
+);
 
-    const failed = batches.some((entry) => {
-      const batch = entry.batch as { status?: string; failed?: number };
-      return batch.status === 'failed' || Number(batch.failed ?? 0) > 0;
-    });
-    res.status(failed ? 502 : 200).json({
-      ok: !failed,
-      scope,
-      channel,
-      releases: { store: storeRelease.id, ho: hoRelease.id },
-      batches,
-    });
+/**
+ * Read-only candidate for a production Control Plane. Authenticated with a
+ * read token, not an office session, and deliberately narrow: it exposes only
+ * the newest fully deployed staging tag and its two image digests.
+ */
+releasesRouter.get(
+  '/tested-candidate',
+  asyncHandler(async (_req, res) => {
+    if (!env.releaseReadToken) {
+      throw new HttpError(404, 'Release read endpoint is not configured');
+    }
+    const provided = _req.get('x-release-read-token') ?? '';
+    const a = Buffer.from(provided);
+    const b = Buffer.from(env.releaseReadToken);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      throw new HttpError(401, 'Unauthorized');
+    }
+    res.json(testedCandidateForStaging());
   }),
 );
 
@@ -205,7 +281,51 @@ releasesRouter.get(
       email: req.auth!.email,
       releaseManager: isReleaseManagerEmail(req.auth!.email),
       configured: true,
+      environment: controlPlaneEnvironment(),
+      promotionConfigured: Boolean(
+        env.githubPromotionToken && env.stagingCpUrl && env.stagingReleaseReadToken,
+      ),
     });
+  }),
+);
+
+/**
+ * Production-only promotion view. Everyone with an office session can read it;
+ * only a release manager can start one. The actor's role is reflected in
+ * `canPromote` so the button and the server enforce the same rule.
+ */
+releasesRouter.get(
+  '/promotion',
+  asyncHandler(async (req, res) => {
+    res.json(await promotionPreview({ releaseManager: isReleaseManagerEmail(req.auth!.email) }));
+  }),
+);
+
+releasesRouter.post(
+  '/promotion',
+  requireReleaseManager,
+  asyncHandler(async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const tag = optionalString(body, 'tag', 128) ?? '';
+    const confirmTag = optionalString(body, 'confirmTag', 128) ?? '';
+    const promotion = await startPromotion({
+      tag,
+      confirmTag,
+      actor: req.auth!.email,
+      reason: optionalString(body, 'reason', 500),
+      releaseManager: isReleaseManagerEmail(req.auth!.email),
+    });
+    recordAuditLog(req.auth!.email, 'release_promoted', 'release', null, {
+      after: {
+        promotionId: promotion.id,
+        tag: promotion.tag,
+        storeDigest: promotion.storeDigest,
+        hoDigest: promotion.hoDigest,
+        githubRunUrl: promotion.githubRunUrl,
+      },
+      reason: `Promote ${promotion.tag} to production`,
+    });
+    res.status(202).json({ promotion });
   }),
 );
 

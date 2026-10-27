@@ -940,6 +940,12 @@ export interface StartBatchInput {
   stopOnFailure?: boolean;
   healthTimeoutMs?: number;
   healthIntervalMs?: number;
+  /**
+   * Called once the batch and its items exist, before the first wave runs, so
+   * a caller (the CI promotion callback) can link the batch to an operator
+   * record and let the UI show live per-tenant progress.
+   */
+  onBatchCreated?: (batch: ReleaseBatch) => void;
 }
 
 export interface BatchResult {
@@ -1023,6 +1029,7 @@ export const startReleaseBatch = async (input: StartBatchInput): Promise<BatchRe
   }
 
   updateReleaseBatch(batch.id, { status: 'running', started_at: new Date().toISOString() });
+  input.onBatchCreated?.(batch);
   let succeeded = 0;
   let failed = 0;
   let skippedCount = 0;

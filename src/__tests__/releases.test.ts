@@ -4,6 +4,7 @@ import { createApp } from '../app.js';
 import {
   createCompany,
   createStore,
+  getManagedApplication,
   getRegistryDb,
   getStoreById,
   resetRegistryDb,
@@ -187,7 +188,13 @@ beforeEach(() => {
         }
         const body = JSON.parse(String(init?.body ?? '{}')) as {
           docker_registry_image_name?: string;
+          name?: string;
+          domains?: string;
         };
+        // Coolify reports back what was requested; deriving it makes the mock
+        // exercise the identity verification instead of a fixed test name.
+        if (body.name) createdAppName = body.name;
+        if (body.domains) createdAppFqdn = body.domains;
         const ref = String(body.docker_registry_image_name ?? '');
         const parsed = /^(.*)@sha256:([a-f0-9]{64})$/.exec(ref);
         if (parsed) {
@@ -427,6 +434,32 @@ describe('per-tenant release application', () => {
     expect(updated.schema_version).toBe(1);
     expect(updated.deploy_status).toBe('deployed');
     expect(updated.deploy_mode).toBe('image');
+    const managed = getManagedApplication('store', updated.coolify_uuid!);
+    expect(managed?.name).toBe('za-pos-new-store');
+    expect(managed?.domain).toBe('new-store.example');
+    expect(managed?.is_active).toBe(1);
+  });
+
+  it('does not register a newly created application whose /data storage is missing', async () => {
+    const store = seedStore({ slug: 'no-storage-new', coolifyUuid: null, schema: null });
+    getRegistryDb()
+      .prepare(
+        'UPDATE stores SET image_digest = NULL, image_tag = NULL, last_release_id = NULL WHERE id = ?',
+      )
+      .run(store.id);
+    const rel = release({ tag: 'v-no-storage', digest: C });
+    missingStorage = true;
+    const result = await applyReleaseToTenant('store', store.id, rel.id, {
+      actor: 'office@test.local',
+      action: 'provision',
+      healthTimeoutMs: 100,
+      healthIntervalMs: 5,
+    });
+    expect(result.status).toBe('failed');
+    expect(result.error).toMatch(/application_storage_missing/);
+    const updated = getStoreById(store.id)!;
+    expect(updated.coolify_uuid).toMatch(/^new-/);
+    expect(getManagedApplication('store', updated.coolify_uuid!)).toBeNull();
   });
 
   it('pins staging creation to the approved destination and verifies the created app', async () => {

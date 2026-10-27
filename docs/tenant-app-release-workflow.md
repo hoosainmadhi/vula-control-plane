@@ -36,17 +36,31 @@ with the same public URLs and databases.
 
 ## Production
 
-Production is **not** automatic. After staging is accepted:
+Production is **not** automatic. On the production Control Plane open
+**Releases** and use the **Production promotion** panel:
 
-1. Open GitHub Actions → **Promote to Production**.
-2. Enter the staging release tag twice (tag + confirmation).
-3. The workflow downloads that exact manifest from the GitHub Release and calls
-   the production CP with scope `production-hm-stores`.
-4. It never rebuilds the images. The same digests are applied to HM Stores.
-5. Stop-on-failure and the previous release are preserved.
+1. The panel shows the newest release that every staging demo runs, the current
+   production Store and Head Office versions, runtime health, the HM Stores
+   targets and how many need an update.
+2. **Promote to production** opens a review of every target. The operator types
+   the candidate tag to confirm; there are no digests, tags or manifest paths to
+   copy by hand.
+3. The backend checks the release-manager role, the staging readiness, the
+   target schemas, the single-flight lock, and that the GitHub Release manifest
+   still carries the exact store and HO digests staging tested. It then dispatches
+   the existing `promote-production.yml` workflow with its server-held GitHub
+   token. The browser never receives a GitHub credential.
+4. The workflow downloads that manifest and calls the production CP with scope
+   `production-hm-stores`. The same CP release engine applies the digests with
+   stop-first, schema checks and stop-on-failure.
+5. The panel follows the batch live (per-tenant status and errors) and links the
+   GitHub run. A second promotion is refused until the first finishes.
 
-Until that manual workflow is run, production HM Stores remains on its current
-release.
+GitHub Actions → **Promote to Production** remains available as a manual
+fallback; it uses the same CI endpoint and scope. A manual CI call for a
+_different_ tag is refused while an approved promotion is in flight.
+
+Until a promotion is run, production HM Stores remains on its current release.
 
 ## The two CP scopes
 
@@ -60,18 +74,47 @@ The CI endpoint is authenticated by a scoped machine token
 `CP_PRODUCTION_RELEASE_TOKEN` in GitHub). It is not an office login and cannot
 touch clients, billing or settings.
 
-## Image allowlist
+### Promotion configuration
 
-The Control Plane only changes image applications whose exact Coolify UUID is
-listed in `VULA_ALLOWED_APP_UUIDS`:
+Production CP:
 
-- staging currently lists the ten demo apps (nine Stores + Head Office);
-- production currently lists the three HM Stores apps.
+| Variable                     | Purpose                                                                                              |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `STAGING_CP_URL`             | staging CP queried for the tested candidate                                                          |
+| `STAGING_RELEASE_READ_TOKEN` | read token sent to staging                                                                           |
+| `GITHUB_PROMOTION_TOKEN`     | server-side dispatch/manifest token (classic `repo` or fine-grained Actions: write + Contents: read) |
+| `GITHUB_REPOSITORY`          | default `hoosainmadhi/vula-app`                                                                      |
+| `GITHUB_PROMOTION_WORKFLOW`  | default `promote-production.yml`                                                                     |
+| `GITHUB_PROMOTION_REF`       | default `main`                                                                                       |
+| `PROMOTION_TIMEOUT_MINUTES`  | default `15`; frees a lock no workflow callback reaches                                              |
 
-When a new image-based tenant is created, add its exact Coolify UUID to the
-appropriate CP environment before it can receive image upgrades. This is the
-one manual configuration step that remains; it is a safety boundary, not a
-per-release task.
+Staging CP: `RELEASE_READ_TOKEN` with the same value as
+`STAGING_RELEASE_READ_TOKEN`. Without the GitHub token the panel shows
+`github_dispatch_not_configured` and refuses to start; the manual GitHub Actions
+fallback still works.
+
+## Application trust boundary
+
+The Control Plane may only change an image application when one of these is true:
+
+- its exact Coolify UUID is listed in `VULA_ALLOWED_APP_UUIDS` (pre-existing or
+  imported tenants); or
+- it is a **CP-managed application**: a row in `managed_apps` written only after
+  the CP created the app and read back its UUID, name, project, domain and
+  persistent `/data` storage from Coolify.
+
+New image-based Stores and Head Offices are registered automatically in that
+second path during provisioning, so onboarding no longer requires editing
+`VULA_ALLOWED_APP_UUIDS` or restarting the Control Plane. A managed row is still
+checked against the live app name and project before every image change, so a
+renamed or moved application is refused. Applications created outside the CP
+are never trusted automatically; they still need the explicit UUID allowlist.
+
+The current static lists remain:
+
+- staging: the ten demo apps (nine Stores + Head Office);
+- production: the three HM Stores apps (their managed rows are created if they
+  are ever re-provisioned by the CP).
 
 ## Store identity preflight
 

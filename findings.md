@@ -1,5 +1,27 @@
 # Findings
 
+## 2026-10-26 — promotion and managed-app gotchas
+
+- A SQLite **partial unique index** reports its violation as
+  `UNIQUE constraint failed: release_promotions.status`, not by the index name
+  (`idx_release_promotions_one_running`). The insert guard matches both strings;
+  matching only the index name silently turned a duplicate click into a 500.
+- The CI release endpoint returns raw batch item rows (`tenant_id`), unlike the
+  operator rollout route that maps them to camelCase (`tenantId`). Tests and
+  clients consuming `/api/releases/ci` must use the database spelling.
+- `deployImageFromSpec` persists the Coolify UUID before storage exists, so a
+  create that fails the storage check leaves an unregistered app. That is
+  deliberate: registration is the trust boundary and only follows a read-back
+  of the name, kind, project, domain and persistent `/data` volume. A retry
+  still finds the UUID and never creates a duplicate.
+- When Coolify refuses a host-path volume and the CP falls back to a named
+  volume, the managed row records `host_path = NULL`; the host path was an
+  intention, not a fact.
+- GitHub does not let the CP dispatch a workflow without a repository token.
+  There is no ambient credential on the host, so `GITHUB_PROMOTION_TOKEN` is a
+  documented one-time setup value; the manual **Promote to Production** workflow
+  remains the fallback until it is set.
+
 ## 2026-10-23 — HO image first post-bind startup was transiently unhealthy
 
 During the Head Office blue/green migration, the first deploy after binding the

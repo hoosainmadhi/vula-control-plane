@@ -8,7 +8,12 @@ import {
   imageTagFor,
   type ImageRelease,
 } from './releaseCatalog.js';
-import { assertCreatedApplicationScope, assertStagingCreationScope } from './applicationGuard.js';
+import {
+  assertCreatedApplicationScope,
+  assertProvisionedApplication,
+  assertStagingCreationScope,
+} from './applicationGuard.js';
+import { registerManagedApplication } from '../config/registryDb.js';
 
 /**
  * Coolify v1 REST API client for automated store & head-office provisioning.
@@ -562,12 +567,15 @@ const deployImageFromSpec = async (spec: ImageDeploymentSpec): Promise<ImageDepl
   spec.onCreated?.({ coolifyUuid, volumeName, hostPath });
 
   // Persist the UUID first (so a retry cannot create a duplicate), then prove
-  // that Coolify created the expected name/domain/kind in the staging project.
+  // that Coolify created what was asked for. In staging the approved
+  // project/name/domain pattern is enforced; everywhere the identity is read
+  // back before the app is registered as CP-managed.
+  const createdApplication = await getApplication(coolifyUuid);
   if (env.stagingMode) {
     assertCreatedApplicationScope({
       expectedName,
       domain: cleanDomain,
-      application: await getApplication(coolifyUuid),
+      application: createdApplication,
     });
   }
 
@@ -581,6 +589,7 @@ const deployImageFromSpec = async (spec: ImageDeploymentSpec): Promise<ImageDepl
     data: values,
   });
 
+  let boundHostPath: string | null = hostPath;
   try {
     await request(config, 'POST', `${API_VERSION_PATH}/applications/${coolifyUuid}/storages`, {
       type: 'persistent',
@@ -590,6 +599,8 @@ const deployImageFromSpec = async (spec: ImageDeploymentSpec): Promise<ImageDepl
     });
   } catch (err) {
     if (!(err instanceof CoolifyError)) throw err;
+    // The named volume is what exists; the host path is only an intention.
+    boundHostPath = null;
     logger.warn(
       `Coolify refused a host-path volume for ${spec.slug} — named volume ${volumeName} created; ` +
         `run scripts/vula-bind-storage.sh ${coolifyUuid} ${volumeName} ${hostPath} on the host`,
@@ -600,6 +611,29 @@ const deployImageFromSpec = async (spec: ImageDeploymentSpec): Promise<ImageDepl
       mount_path: '/data',
     });
   }
+
+  // Registration is the future-modification boundary: only after the app's
+  // identity and its /data volume have been read back from Coolify. A failed
+  // check leaves the app unregistered, so a release can never touch it.
+  assertProvisionedApplication({
+    kind: spec.kind,
+    uuid: coolifyUuid,
+    expectedName,
+    domain: cleanDomain,
+    projectUuid: config.projectUuid,
+    application: createdApplication,
+    storages: await getApplicationStorages(coolifyUuid),
+  });
+  registerManagedApplication({
+    kind: spec.kind,
+    coolifyUuid,
+    name: expectedName,
+    projectUuid: config.projectUuid,
+    serverUuid: config.serverUuid,
+    domain: cleanDomain,
+    volumeName,
+    hostPath: boundHostPath,
+  });
 
   logger.info(
     `Created shared-image ${spec.kind} ${coolifyUuid} for ${spec.slug} ` +

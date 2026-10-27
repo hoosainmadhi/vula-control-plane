@@ -829,6 +829,107 @@ export interface ReleaseCapabilities {
   email: string;
   releaseManager: boolean;
   configured: boolean;
+  environment: 'production' | 'staging' | 'development';
+  promotionConfigured: boolean;
+}
+
+export interface PromotionCandidateImage {
+  digest: string;
+  schemaVersion: number;
+  schemaMin: number;
+  schemaMax: number;
+  channel: string;
+  releaseId: number;
+  tag: string;
+  publishedAt: string;
+}
+
+export interface PromotionCandidate {
+  tag: string;
+  commit: string | null;
+  publishedAt: string | null;
+  store: PromotionCandidateImage;
+  ho: PromotionCandidateImage;
+  staging: { stores: number; panels: number; verifiedAt: string };
+}
+
+export interface PromotionCurrent {
+  tag: string | null;
+  digest: string | null;
+  healthy: number;
+  total: number;
+  updated: number;
+}
+
+export interface PromotionTarget {
+  tenantType: 'store' | 'panel';
+  id: number;
+  name: string;
+  slug: string;
+  baseUrl: string;
+  deployMode: 'image' | 'dockerfile' | 'unprovisioned';
+  currentTag: string | null;
+  currentDigest: string | null;
+  schemaVersion: number | null;
+  runtimeHealth: 'up' | 'down' | 'unknown';
+  releaseState: ReleaseRuntimeState;
+  paused: boolean;
+  needsUpdate: boolean;
+  blocker: string | null;
+  warning: string | null;
+}
+
+export interface PromotionBatchView {
+  kind: ReleaseKind;
+  id: number;
+  status: string;
+  total: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  error: string | null;
+  items: Array<{
+    tenantType: string;
+    tenantId: number;
+    name: string;
+    status: string;
+    error: string | null;
+  }>;
+}
+
+export interface PromotionView {
+  id: number;
+  tag: string;
+  commit: string | null;
+  status: 'dispatching' | 'running' | 'complete' | 'failed';
+  requestedBy: string;
+  reason: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  error: string | null;
+  storeDigest: string;
+  hoDigest: string;
+  githubRunUrl: string | null;
+  githubStatus: string | null;
+  githubConclusion: string | null;
+  batches: PromotionBatchView[];
+}
+
+export interface PromotionPreview {
+  environment: 'production' | 'staging' | 'development';
+  scope: string;
+  enabled: boolean;
+  disabledReason: string | null;
+  candidate: PromotionCandidate | null;
+  candidateError: string | null;
+  current: { stores: PromotionCurrent; panels: PromotionCurrent };
+  targets: { stores: PromotionTarget[]; panels: PromotionTarget[] };
+  updatesRequired: number;
+  blockers: string[];
+  warnings: string[];
+  canPromote: boolean;
+  promotion: PromotionView | null;
 }
 
 export interface ReleaseBatchSummary {

@@ -98,6 +98,22 @@ export interface Env {
   releaseManagerEmails: string[];
   /** Scoped machine token for CI-driven staging/production releases. */
   releaseCiToken: string | null;
+  /** Read-only token this staging CP accepts for its tested-candidate endpoint. */
+  releaseReadToken: string | null;
+  /** Staging CP queried by a production CP for the latest tested release. */
+  stagingCpUrl: string | null;
+  stagingReleaseReadToken: string | null;
+  /**
+   * GitHub Actions credentials used by a production CP to trigger the existing
+   * promote-production workflow. The token stays server-side; the browser never
+   * sees it and operators never paste tags, digests or paths.
+   */
+  githubPromotionToken: string | null;
+  githubRepository: string;
+  githubPromotionWorkflow: string;
+  githubPromotionRef: string;
+  /** A promotion that has not reported within this window is marked failed. */
+  promotionTimeoutMinutes: number;
   /** Explicit opt-in for the legacy Dockerfile path on non-production onboarding. */
   allowLegacyDockerfileOnboarding: boolean;
   /**
@@ -182,6 +198,15 @@ export const env: Env = {
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean),
   releaseCiToken: process.env.RELEASE_CI_TOKEN?.trim() || null,
+  releaseReadToken: process.env.RELEASE_READ_TOKEN?.trim() || null,
+  stagingCpUrl: process.env.STAGING_CP_URL?.trim().replace(/\/+$/, '') || null,
+  stagingReleaseReadToken: process.env.STAGING_RELEASE_READ_TOKEN?.trim() || null,
+  githubPromotionToken: process.env.GITHUB_PROMOTION_TOKEN?.trim() || null,
+  githubRepository: process.env.GITHUB_REPOSITORY?.trim() || 'hoosainmadhi/vula-app',
+  githubPromotionWorkflow:
+    process.env.GITHUB_PROMOTION_WORKFLOW?.trim() || 'promote-production.yml',
+  githubPromotionRef: process.env.GITHUB_PROMOTION_REF?.trim() || 'main',
+  promotionTimeoutMinutes: Number(process.env.PROMOTION_TIMEOUT_MINUTES || 15),
   allowLegacyDockerfileOnboarding: process.env.ALLOW_LEGACY_DOCKERFILE_ONBOARDING === 'true',
   stagingMode: process.env.VULA_STAGING_MODE === 'true',
   stagingProjectUuid: process.env.VULA_STAGING_PROJECT_UUID?.trim() || null,

@@ -1,4 +1,5 @@
 import { env } from '../config/env.js';
+import { getManagedApplication } from '../config/registryDb.js';
 import { HttpError } from '../utils/errors.js';
 
 export type ApplicationKind = 'store' | 'ho';
@@ -9,6 +10,11 @@ export interface ApplicationIdentity {
   fqdn?: string | null;
   build_pack?: string | null;
   project_uuid?: string | null;
+}
+
+export interface ApplicationStorageIdentity {
+  type: 'persistent' | 'file';
+  mount_path: string;
 }
 
 interface StagingCreationScope {
@@ -163,27 +169,121 @@ export const assertCreatedApplicationScope = (input: {
 };
 
 /**
- * The UUID allowlist is the subsequent-modification boundary. In staging it is
- * mandatory even when NODE_ENV is not production, and the application must also
- * match the approved staging name/domain pattern.
+ * Verify an application the Control Plane just created, before it is registered
+ * as CP-managed. The UUID was persisted first (so a retry cannot create a
+ * duplicate); this reads the app back and proves name, kind, project, domain
+ * and the `/data` persistent storage match what was requested. A mismatch is
+ * not registered, so it can never be modified by a later release.
+ */
+export const assertProvisionedApplication = (input: {
+  kind: ApplicationKind;
+  uuid: string;
+  expectedName: string;
+  domain: string;
+  projectUuid: string | null;
+  application: ApplicationIdentity;
+  storages: ApplicationStorageIdentity[];
+}): void => {
+  const { application } = input;
+  if (application.uuid && application.uuid !== input.uuid) {
+    throw new HttpError(
+      409,
+      `application_uuid_mismatch: Coolify returned ${application.uuid}, expected ${input.uuid}`,
+      'application_uuid_mismatch',
+    );
+  }
+  if (application.name !== input.expectedName) {
+    throw new HttpError(
+      409,
+      `application_name_mismatch: Coolify created "${application.name ?? '(no name)'}", expected "${input.expectedName}"`,
+      'application_name_mismatch',
+    );
+  }
+  if (application.build_pack !== 'dockerimage') {
+    throw new HttpError(
+      409,
+      `application_kind_mismatch: ${input.uuid} is a ${application.build_pack ?? 'unknown'} app, not a Docker Image app`,
+      'application_kind_mismatch',
+    );
+  }
+  if (
+    input.projectUuid &&
+    application.project_uuid &&
+    application.project_uuid !== input.projectUuid
+  ) {
+    throw new HttpError(
+      409,
+      `application_project_mismatch: Coolify placed ${input.uuid} in project ${application.project_uuid}, expected ${input.projectUuid}`,
+      'application_project_mismatch',
+    );
+  }
+  const hosts = fqdnHosts(application.fqdn);
+  if (!hosts.includes(normaliseHost(input.domain))) {
+    throw new HttpError(
+      409,
+      `application_domain_mismatch: Coolify reports ${application.fqdn ?? '(no domain)'}, expected ${input.domain}`,
+      'application_domain_mismatch',
+    );
+  }
+  const hasDataVolume = input.storages.some(
+    (storage) => storage.type === 'persistent' && storage.mount_path === '/data',
+  );
+  if (!hasDataVolume) {
+    throw new HttpError(
+      409,
+      `application_storage_missing: ${input.uuid} has no persistent /data storage; refusing to register it`,
+      'application_storage_missing',
+    );
+  }
+};
+
+/**
+ * The subsequent-modification boundary. An application is trusted when its UUID
+ * is on the explicit allowlist (pre-existing/imported tenants) or when it is a
+ * row this Control Plane registered after verifying what it provisioned. The
+ * managed row must still match the live app name and project, so a recycled or
+ * renamed application is refused. In staging the approved name/domain pattern
+ * still applies to both sources.
  */
 export const assertApplicationAllowed = (
   kind: ApplicationKind,
   application: ApplicationIdentity,
 ): void => {
-  if ((env.isProduction || env.stagingMode) && env.allowedAppUuids.length === 0) {
+  const allowlisted = env.allowedAppUuids.includes(application.uuid);
+  const managed = allowlisted ? null : getManagedApplication(kind, application.uuid);
+  if ((env.isProduction || env.stagingMode) && env.allowedAppUuids.length === 0 && !managed) {
     throw new HttpError(
       409,
-      'application_allowlist_missing: VULA_ALLOWED_APP_UUIDS is not configured; refusing to modify an existing Coolify application',
+      'application_allowlist_missing: VULA_ALLOWED_APP_UUIDS is not configured and no CP-managed application matches; refusing to modify an existing Coolify application',
       'application_allowlist_missing',
     );
   }
-  if (env.allowedAppUuids.length && !env.allowedAppUuids.includes(application.uuid)) {
+  if (!allowlisted && !managed && env.allowedAppUuids.length > 0) {
     throw new HttpError(
       409,
-      `application_not_allowlisted: Coolify application ${application.uuid} is not in VULA_ALLOWED_APP_UUIDS; refusing to modify it`,
+      `application_not_allowlisted: Coolify application ${application.uuid} is not in VULA_ALLOWED_APP_UUIDS and is not CP-managed; refusing to modify it`,
       'application_not_allowlisted',
     );
+  }
+  if (managed) {
+    if (managed.name !== application.name) {
+      throw new HttpError(
+        409,
+        `application_identity_mismatch: Coolify application ${application.uuid} is "${application.name ?? '(no name)'}", registered as "${managed.name}"; refusing to modify it`,
+        'application_identity_mismatch',
+      );
+    }
+    if (
+      managed.project_uuid &&
+      application.project_uuid &&
+      managed.project_uuid !== application.project_uuid
+    ) {
+      throw new HttpError(
+        409,
+        `application_project_mismatch: Coolify application ${application.uuid} moved to project ${application.project_uuid}, registered in ${managed.project_uuid}; refusing to modify it`,
+        'application_project_mismatch',
+      );
+    }
   }
   const prefix = kind === 'store' ? 'za-pos-' : 'vula-';
   if (!application.name || !application.name.startsWith(prefix)) {

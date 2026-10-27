@@ -42,6 +42,12 @@ beforeEach(() => {
         createBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
         return jsonResponse(201, { uuid: 'new-store-app' });
       }
+      if (s.endsWith('/storages') && method === 'GET') {
+        return jsonResponse(200, {
+          persistent_storages: [{ mount_path: '/data', name: 'vol' }],
+          file_storages: [],
+        });
+      }
       if (s.includes('/envs/bulk') || s.includes('/storages'))
         return jsonResponse(201, { ok: true });
       if (s.includes('/deployments/')) return jsonResponse(200, { status: 'finished' });

@@ -530,6 +530,65 @@ const DEPLOYMENT_LOCKS_DDL = `
     PRIMARY KEY (tenant_type, tenant_id)
   )`;
 
+/**
+ * Coolify applications this Control Plane created and verified. The UUID
+ * allowlist (VULA_ALLOWED_APP_UUIDS) remains the boundary for pre-existing or
+ * imported apps; a row here is the boundary for apps the CP provisioned
+ * itself. Registration happens only after the created app's UUID, name,
+ * project, domain and /data storage have been read back from Coolify, so an
+ * arbitrary app cannot be trusted by editing configuration.
+ */
+const MANAGED_APPS_DDL = `
+  CREATE TABLE IF NOT EXISTS managed_apps (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind          TEXT NOT NULL CHECK (kind IN ('store', 'ho')),
+    coolify_uuid  TEXT NOT NULL UNIQUE,
+    name          TEXT NOT NULL,
+    project_uuid  TEXT,
+    server_uuid   TEXT,
+    domain        TEXT NOT NULL,
+    volume_name   TEXT,
+    host_path     TEXT,
+    source        TEXT NOT NULL DEFAULT 'provisioned' CHECK (source IN ('provisioned')),
+    is_active     INTEGER NOT NULL DEFAULT 1,
+    verified_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+  )`;
+
+/**
+ * One row per operator-approved production promotion. The partial unique index
+ * is the duplicate/concurrency guard: at most one promotion may be in flight,
+ * and a second click (or a second operator) is refused by the database rather
+ * than by a check-then-insert race.
+ */
+const RELEASE_PROMOTIONS_DDL = `
+  CREATE TABLE IF NOT EXISTS release_promotions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    tag             TEXT NOT NULL,
+    commit_sha      TEXT,
+    store_digest    TEXT NOT NULL,
+    ho_digest       TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'dispatching'
+      CHECK (status IN ('dispatching', 'running', 'complete', 'failed')),
+    requested_by    TEXT NOT NULL,
+    reason          TEXT,
+    store_batch_id  INTEGER REFERENCES release_batches(id) ON DELETE SET NULL,
+    ho_batch_id     INTEGER REFERENCES release_batches(id) ON DELETE SET NULL,
+    github_run_id   INTEGER,
+    github_run_url  TEXT,
+    github_status   TEXT,
+    github_conclusion TEXT,
+    error           TEXT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    started_at      TEXT,
+    completed_at    TEXT
+  )`;
+
+const RELEASE_PROMOTIONS_RUNNING_INDEX_DDL = `
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_release_promotions_one_running
+    ON release_promotions(status) WHERE status IN ('dispatching', 'running')`;
+
 const AUDIT_LOGS_DDL = `
   CREATE TABLE IF NOT EXISTS audit_logs (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -921,6 +980,9 @@ export const getRegistryDb = (): Database.Database => {
   db.exec(RELEASE_BATCH_ITEMS_DDL);
   db.exec(RELEASE_DEPLOYMENTS_DDL);
   db.exec(DEPLOYMENT_LOCKS_DDL);
+  db.exec(MANAGED_APPS_DDL);
+  db.exec(RELEASE_PROMOTIONS_DDL);
+  db.exec(RELEASE_PROMOTIONS_RUNNING_INDEX_DDL);
   db.exec('CREATE INDEX IF NOT EXISTS idx_invoices_company ON invoices(company_id)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_quotes_status ON quotes(status)');
@@ -4406,3 +4468,236 @@ export const listErrorEvents = (fingerprint: string): ErrorEventRecord[] =>
   getRegistryDb()
     .prepare('SELECT * FROM error_events WHERE fingerprint = ? ORDER BY last_seen DESC, id DESC')
     .all(fingerprint) as ErrorEventRecord[];
+
+// --- Managed applications ---------------------------------------------------
+
+export type ManagedApplicationKind = 'store' | 'ho';
+
+export interface ManagedApplication {
+  id: number;
+  kind: ManagedApplicationKind;
+  coolify_uuid: string;
+  name: string;
+  project_uuid: string | null;
+  server_uuid: string | null;
+  domain: string;
+  volume_name: string | null;
+  host_path: string | null;
+  source: 'provisioned';
+  is_active: number;
+  verified_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Record an application the CP created and read back from Coolify. Idempotent:
+ * a retry that re-verifies the same UUID updates the observed identity rather
+ * than adding a second trust row.
+ */
+export const registerManagedApplication = (input: {
+  kind: ManagedApplicationKind;
+  coolifyUuid: string;
+  name: string;
+  projectUuid?: string | null;
+  serverUuid?: string | null;
+  domain: string;
+  volumeName?: string | null;
+  hostPath?: string | null;
+}): ManagedApplication => {
+  const db = getRegistryDb();
+  db.prepare(
+    `INSERT INTO managed_apps
+       (kind, coolify_uuid, name, project_uuid, server_uuid, domain, volume_name, host_path)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(coolify_uuid) DO UPDATE SET
+       kind = excluded.kind,
+       name = excluded.name,
+       project_uuid = excluded.project_uuid,
+       server_uuid = excluded.server_uuid,
+       domain = excluded.domain,
+       volume_name = excluded.volume_name,
+       host_path = excluded.host_path,
+       is_active = 1,
+       verified_at = datetime('now'),
+       updated_at = datetime('now')`,
+  ).run(
+    input.kind,
+    input.coolifyUuid,
+    input.name,
+    input.projectUuid ?? null,
+    input.serverUuid ?? null,
+    input.domain,
+    input.volumeName ?? null,
+    input.hostPath ?? null,
+  );
+  return getManagedApplication(input.kind, input.coolifyUuid)!;
+};
+
+export const getManagedApplication = (
+  kind: ManagedApplicationKind,
+  coolifyUuid: string,
+): ManagedApplication | null =>
+  (getRegistryDb()
+    .prepare('SELECT * FROM managed_apps WHERE kind = ? AND coolify_uuid = ? AND is_active = 1')
+    .get(kind, coolifyUuid) as ManagedApplication | undefined) ?? null;
+
+export const listManagedApplications = (): ManagedApplication[] =>
+  getRegistryDb()
+    .prepare('SELECT * FROM managed_apps ORDER BY created_at DESC, id DESC')
+    .all() as ManagedApplication[];
+
+export const deactivateManagedApplication = (coolifyUuid: string): void => {
+  getRegistryDb()
+    .prepare(
+      "UPDATE managed_apps SET is_active = 0, updated_at = datetime('now') WHERE coolify_uuid = ?",
+    )
+    .run(coolifyUuid);
+};
+
+// --- Production promotions --------------------------------------------------
+
+export type PromotionStatus = 'dispatching' | 'running' | 'complete' | 'failed';
+
+export interface ReleasePromotion {
+  id: number;
+  tag: string;
+  commit_sha: string | null;
+  store_digest: string;
+  ho_digest: string;
+  status: PromotionStatus;
+  requested_by: string;
+  reason: string | null;
+  store_batch_id: number | null;
+  ho_batch_id: number | null;
+  github_run_id: number | null;
+  github_run_url: string | null;
+  github_status: string | null;
+  github_conclusion: string | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export const expireStalePromotions = (minutes: number): number =>
+  getRegistryDb()
+    .prepare(
+      `UPDATE release_promotions
+          SET status = 'failed',
+              error = COALESCE(error, 'promotion_timed_out: no release callback within the timeout'),
+              completed_at = datetime('now')
+        WHERE status IN ('dispatching', 'running')
+          AND created_at <= datetime('now', ?)`,
+    )
+    .run(`-${minutes} minutes`).changes;
+
+/**
+ * Insert the single in-flight promotion. The partial unique index makes the
+ * duplicate check atomic; a concurrent second request gets `null` rather than
+ * creating a second dispatch.
+ */
+export const createReleasePromotion = (input: {
+  tag: string;
+  commitSha: string | null;
+  storeDigest: string;
+  hoDigest: string;
+  requestedBy: string;
+  reason?: string | null;
+}): ReleasePromotion | null => {
+  const db = getRegistryDb();
+  try {
+    const info = db
+      .prepare(
+        `INSERT INTO release_promotions
+           (tag, commit_sha, store_digest, ho_digest, requested_by, reason)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.tag,
+        input.commitSha,
+        input.storeDigest,
+        input.hoDigest,
+        input.requestedBy,
+        input.reason ?? null,
+      );
+    return getReleasePromotion(Number(info.lastInsertRowid));
+  } catch (err) {
+    // SQLite names the constrained column for a partial unique index rather
+    // than the index itself; both spellings mean "one is already in flight".
+    const message = String(err);
+    if (
+      message.includes('idx_release_promotions_one_running') ||
+      message.includes('UNIQUE constraint failed: release_promotions.status')
+    ) {
+      return null;
+    }
+    throw err;
+  }
+};
+
+export const getReleasePromotion = (id: number): ReleasePromotion | null =>
+  (getRegistryDb().prepare('SELECT * FROM release_promotions WHERE id = ?').get(id) as
+    ReleasePromotion | undefined) ?? null;
+
+export const getActiveReleasePromotion = (): ReleasePromotion | null =>
+  (getRegistryDb()
+    .prepare(
+      "SELECT * FROM release_promotions WHERE status IN ('dispatching', 'running') ORDER BY id DESC LIMIT 1",
+    )
+    .get() as ReleasePromotion | undefined) ?? null;
+
+export const getLatestReleasePromotion = (): ReleasePromotion | null =>
+  (getRegistryDb().prepare('SELECT * FROM release_promotions ORDER BY id DESC LIMIT 1').get() as
+    ReleasePromotion | undefined) ?? null;
+
+export const getActiveReleasePromotionByTag = (tag: string): ReleasePromotion | null =>
+  (getRegistryDb()
+    .prepare(
+      "SELECT * FROM release_promotions WHERE tag = ? AND status IN ('dispatching', 'running') ORDER BY id DESC LIMIT 1",
+    )
+    .get(tag) as ReleasePromotion | undefined) ?? null;
+
+export const updateReleasePromotion = (
+  id: number,
+  patch: {
+    status?: PromotionStatus;
+    storeBatchId?: number | null;
+    hoBatchId?: number | null;
+    githubRunId?: number | null;
+    githubRunUrl?: string | null;
+    githubStatus?: string | null;
+    githubConclusion?: string | null;
+    error?: string | null;
+    startedAt?: string | null;
+    completedAt?: string | null;
+  },
+): ReleasePromotion | null => {
+  const sets: string[] = [];
+  const args: unknown[] = [];
+  const map: Record<string, string> = {
+    status: 'status',
+    storeBatchId: 'store_batch_id',
+    hoBatchId: 'ho_batch_id',
+    githubRunId: 'github_run_id',
+    githubRunUrl: 'github_run_url',
+    githubStatus: 'github_status',
+    githubConclusion: 'github_conclusion',
+    error: 'error',
+    startedAt: 'started_at',
+    completedAt: 'completed_at',
+  };
+  for (const [key, column] of Object.entries(map)) {
+    const value = (patch as Record<string, unknown>)[key];
+    if (value !== undefined) {
+      sets.push(`${column} = ?`);
+      args.push(value);
+    }
+  }
+  if (!sets.length) return getReleasePromotion(id);
+  args.push(id);
+  getRegistryDb()
+    .prepare(`UPDATE release_promotions SET ${sets.join(', ')} WHERE id = ?`)
+    .run(...args);
+  return getReleasePromotion(id);
+};

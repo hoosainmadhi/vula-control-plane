@@ -13,12 +13,14 @@ import {
 import { api, ApiError } from '../api';
 import ErrorBox from '../components/ErrorBox';
 import Modal from '../components/Modal';
+import PromotionPanel from '../components/PromotionPanel';
 import Spinner from '../components/Spinner';
 import StatusBadge from '../components/StatusBadge';
 import { ActionButton, NoticeBanner, SummaryTile } from '../components/storeUi';
 import { ENVIRONMENT_COLORS, ENVIRONMENT_LABELS, fmtAgo, fmtTime } from '../lib/storeVocab';
 import type {
   ImageRelease,
+  PromotionPreview,
   ReleaseBatchDetail,
   ReleaseBatchSummary,
   ReleaseCapabilities,
@@ -81,6 +83,7 @@ export default function ReleasesPage() {
   const [releases, setReleases] = useState<ImageRelease[]>([]);
   const [batches, setBatches] = useState<ReleaseBatchSummary[]>([]);
   const [capabilities, setCapabilities] = useState<ReleaseCapabilities | null>(null);
+  const [promotion, setPromotion] = useState<PromotionPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [notice, setNotice] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
@@ -102,16 +105,18 @@ export default function ReleasesPage() {
   const load = useCallback(async () => {
     setLoadError('');
     try {
-      const [nextFleet, nextReleases, nextBatches, caps] = await Promise.all([
+      const [nextFleet, nextReleases, nextBatches, caps, nextPromotion] = await Promise.all([
         api<ReleaseFleet>('/releases/fleet'),
         api<ImageRelease[]>('/releases'),
         api<ReleaseBatchSummary[]>('/releases/batches'),
         api<ReleaseCapabilities>('/releases/capabilities'),
+        api<PromotionPreview>('/releases/promotion'),
       ]);
       setFleet(nextFleet);
       setReleases(nextReleases);
       setBatches(nextBatches);
       setCapabilities(caps);
+      setPromotion(nextPromotion);
     } catch (err) {
       setLoadError(err instanceof ApiError ? err.message : 'Could not load release data');
     } finally {
@@ -127,9 +132,11 @@ export default function ReleasesPage() {
     const tenants = [...fleet.stores, ...fleet.panels];
     return (
       tenants.some((t) => ['queued', 'deploying', 'verifying'].includes(t.releaseState)) ||
-      batches.some((b) => b.status === 'running')
+      batches.some((b) => b.status === 'running') ||
+      promotion?.promotion?.status === 'dispatching' ||
+      promotion?.promotion?.status === 'running'
     );
-  }, [fleet, batches]);
+  }, [fleet, batches, promotion]);
 
   useEffect(() => {
     if (!busy) return;
@@ -220,6 +227,15 @@ export default function ReleasesPage() {
   return (
     <div className="space-y-5">
       <NoticeBanner notice={notice} onDismiss={() => setNotice(null)} />
+
+      {promotion?.environment === 'production' && (
+        <PromotionPanel
+          preview={promotion}
+          canManage={canManage}
+          onChanged={() => void load()}
+          notify={notify}
+        />
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1">
