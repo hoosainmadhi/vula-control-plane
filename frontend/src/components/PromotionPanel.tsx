@@ -298,8 +298,6 @@ export default function PromotionPanel({
         </div>
       )}
 
-      {disabledReason && <p className="mt-2 text-[11px] text-slate-500">{disabledReason}</p>}
-
       {open && (
         <Modal
           title="Review production promotion"

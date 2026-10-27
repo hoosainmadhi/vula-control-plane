@@ -817,7 +817,11 @@ export const promotionPreview = async (input: {
   const enabled = missing.length === 0;
   const disabledReason = enabled
     ? null
-    : `promotion_not_configured: ${missing.join(', ')} must be set on the production Control Plane`;
+    : `promotion_not_configured: ${missing.join(', ')} must be set on the production Control Plane${
+        !env.githubPromotionToken
+          ? ' (GITHUB_PROMOTION_TOKEN needs a classic PAT with repo scope, or fine-grained Actions: write + Contents: read)'
+          : ''
+      }`;
 
   const active = await reconcilePromotion();
   const blockers = [...current.blockers];
