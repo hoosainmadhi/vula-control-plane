@@ -1,5 +1,21 @@
 # Progress
 
+## 2026-10-27 — Releases page accepted
+
+- Head Office now shows **Production** like the two stores. Panels have no
+  environment field; they inherit the Control Plane's environment, and the
+  tooltip still says so. The visual label is standardised as requested.
+- Upgrade and Rollback are disabled while a release operation is in progress
+  (`queued`/`deploying`/`verifying`), and Upgrade is also disabled when no
+  active release exists for that tenant kind. Rollback remains driven by the
+  server's `rollbackEligible` / `rollbackReason`; the backend continues to
+  re-check the lock, schema, identity and `/data` storage on every apply.
+- Production verification: all three tenants show **Production**;
+  `rollbackEligible=true` with target 1 (Stores) / 2 (Head Office), state
+  `healthy`; the false cases are covered by the release and rollback tests.
+- Both CPs on `ed33ee9`. No production rollout was started. Releases work is
+  complete; the next focus is Clients and onboarding.
+
 ## 2026-10-27 — production classifications and a quieter Releases header
 
 - HM Stores Cape Town and Johannesburg were classified `development` in the

@@ -123,12 +123,23 @@ A Store row carries its own `environment` (`production`, `staging`, `demo` or
 which environment-filtered rollouts and production provisioning safeguards apply,
 and never restarts or recreates the tenant. Head Office panels have no
 environment column; they inherit the Control Plane's environment, so the fleet
-table labels them **Production CP** or **Staging CP** rather than `—`.
+table shows the CP's own label (**Production** or **Staging**) with a tooltip
+explaining the inheritance.
 
 The HM Stores rows were corrected from `development` to `production` on
 2026-10-27. If another production tenant is created, set its environment at
 creation (or through the store edit API); do not leave it at the development
 default.
+
+## Tenant actions
+
+The table's actions are gated by server-owned state. **Rollback** is enabled only
+when `rollbackEligible` is true and shows `rollbackReason` when it is not.
+**Upgrade** is disabled for legacy Dockerfile/unprovisioned tenants, while a
+release operation is in flight, and when no active release exists for that kind.
+The backend still re-checks the deployment lock, schema compatibility, tenant
+identity and `/data` storage on every apply — the disabled button is a courtesy,
+not the safety boundary.
 
 ## Store identity preflight
 
