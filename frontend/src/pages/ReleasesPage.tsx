@@ -403,6 +403,12 @@ export default function ReleasesPage() {
                   const desired = tenant.desiredReleaseId
                     ? releaseById.get(tenant.desiredReleaseId)
                     : null;
+                  const busy = ['queued', 'deploying', 'verifying'].includes(tenant.releaseState);
+                  const activeReleaseCount = releases.filter(
+                    (release) =>
+                      release.isActive &&
+                      release.kind === (tenant.tenantType === 'store' ? 'store' : 'ho'),
+                  ).length;
                   return (
                     <tr
                       key={`${tenant.tenantType}-${tenant.id}`}
@@ -434,7 +440,7 @@ export default function ReleasesPage() {
                             <StatusBadge
                               status={capabilities.environment}
                               colors={ENVIRONMENT_COLORS}
-                              label={`${ENVIRONMENT_LABELS[capabilities.environment]} CP`}
+                              label={ENVIRONMENT_LABELS[capabilities.environment]}
                             />
                           </span>
                         ) : (
@@ -504,38 +510,52 @@ export default function ReleasesPage() {
                           <ActionButton
                             icon={Rocket}
                             label="Upgrade"
-                            disabled={!canManage || tenant.deployMode !== 'image'}
+                            disabled={
+                              !canManage ||
+                              tenant.deployMode !== 'image' ||
+                              busy ||
+                              activeReleaseCount === 0
+                            }
                             title={
-                              !canManage
-                                ? 'Release-manager permission required'
-                                : tenant.deployMode === 'dockerfile'
-                                  ? 'Legacy Dockerfile deployment — shared-image releases require a blue/green migration'
-                                  : tenant.deployMode === 'unprovisioned'
-                                    ? 'No Coolify application yet'
-                                    : 'Apply a release'
+                              busy
+                                ? `Release operation in progress (${tenant.releaseState})`
+                                : !canManage
+                                  ? 'Release-manager permission required'
+                                  : tenant.deployMode === 'dockerfile'
+                                    ? 'Legacy Dockerfile deployment — shared-image releases require a blue/green migration'
+                                    : tenant.deployMode === 'unprovisioned'
+                                      ? 'No Coolify application yet'
+                                      : activeReleaseCount === 0
+                                        ? 'No active release is registered for this kind'
+                                        : 'Apply a release'
                             }
                             className="border-brand-200 text-brand-700 hover:bg-brand-50 disabled:opacity-40"
                             onClick={() =>
                               canManage &&
                               tenant.deployMode === 'image' &&
+                              !busy &&
+                              activeReleaseCount > 0 &&
                               setActionTarget({ tenant, action: 'upgrade' })
                             }
                           />
                           <ActionButton
                             icon={RotateCcw}
                             label="Rollback"
-                            disabled={!canManage || !tenant.rollbackEligible}
+                            disabled={!canManage || !tenant.rollbackEligible || busy}
                             title={
-                              !canManage
-                                ? 'Release-manager permission required'
-                                : tenant.rollbackEligible
-                                  ? `Roll back to release ${tenant.rollbackReleaseId}`
-                                  : (tenant.rollbackReason ?? 'No valid rollback target')
+                              busy
+                                ? `Release operation in progress (${tenant.releaseState})`
+                                : !canManage
+                                  ? 'Release-manager permission required'
+                                  : tenant.rollbackEligible
+                                    ? `Roll back to release ${tenant.rollbackReleaseId}`
+                                    : (tenant.rollbackReason ?? 'No valid rollback target')
                             }
                             className="border-amber-200 text-amber-700 hover:bg-amber-50"
                             onClick={() =>
                               canManage &&
                               tenant.rollbackEligible &&
+                              !busy &&
                               setActionTarget({ tenant, action: 'rollback' })
                             }
                           />
